@@ -1,0 +1,118 @@
+From 8eb7c973c36a423d3c1d9fa65d31b9db4db1c83b Mon Sep 17 00:00:00 2001
+From: Juan Yu <jyu@cloudera.com>
+Date: Wed, 27 Aug 2014 16:29:40 -0700
+Subject: [PATCH 141/596] MR1: CLOUDERA-BUILD. Fix build failure due to
+ upstream change (code cleanup, remove deprecated
+ methods, etc.) List of upstream JIRAs that causes
+ MR1 build failure.   Hadoop-10386	Log proxy
+ hostname in various exceptions being thrown in a HA
+ setup   Hadoop-10448	Support pluggable mechanism
+ to specify proxy user settings   HDFS-6168
+ Remove deprecated methods in DistributedFileSystem
+
+(cherry picked from commit 5d61ab0323ef495929a6f3483cfa61ed19e6951e)
+---
+ .../mapred/ConfiguredFailoverProxyProvider.java    |    7 ++++---
+ .../security/token/TestDelegationTokenRenewal.java |   16 ++++++++--------
+ .../TestMapredGroupMappingServiceRefresh.java      |    5 +++--
+ 3 files changed, 15 insertions(+), 13 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ConfiguredFailoverProxyProvider.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ConfiguredFailoverProxyProvider.java
+index a008762..c463214 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ConfiguredFailoverProxyProvider.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ConfiguredFailoverProxyProvider.java
+@@ -30,6 +30,7 @@
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
+ import org.apache.hadoop.io.retry.FailoverProxyProvider;
++import org.apache.hadoop.io.retry.FailoverProxyProvider.ProxyInfo;
+ import org.apache.hadoop.ipc.RPC;
+ import org.apache.hadoop.security.UserGroupInformation;
+ 
+@@ -113,8 +114,8 @@ public ConfiguredFailoverProxyProvider(Configuration conf, String jtAddress,
+    */
+   @SuppressWarnings("unchecked")
+   @Override
+-  public synchronized T getProxy() {
+-    AddressRpcProxyPair current = proxies.get(currentProxyIndex);
++  public synchronized ProxyInfo<T> getProxy() {
++    AddressRpcProxyPair<T> current = proxies.get(currentProxyIndex);
+     if (current.jtHaDaemon == null) {
+       try {
+         current.jtHaDaemon = JobTrackerProxies.createNonHAProxy(conf,
+@@ -124,7 +125,7 @@ public synchronized T getProxy() {
+         throw new RuntimeException(e);
+       }
+     }
+-    return (T)current.jtHaDaemon;
++    return new ProxyInfo<T>(current.jtHaDaemon, current.address.toString());
+   }
+ 
+   @Override
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/token/TestDelegationTokenRenewal.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/token/TestDelegationTokenRenewal.java
+index 5c73ee5..d75d273 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/token/TestDelegationTokenRenewal.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/token/TestDelegationTokenRenewal.java
+@@ -196,10 +196,10 @@ public MyFS() {}
+     public void close() {}
+     @Override
+     public void initialize(URI uri, Configuration conf) throws IOException {}
+-    
+-    @Override 
+-    public MyToken getDelegationToken(Text renewer) throws IOException {
+-      MyToken result = createTokens(renewer);
++
++    @Override
++    public MyToken getDelegationToken(String renewer) throws IOException {
++      MyToken result = createTokens(new Text(renewer));
+       LOG.info("Called MYDFS.getdelegationtoken " + result);
+       return result;
+     }
+@@ -281,9 +281,9 @@ public void testDTRenewal () throws Exception {
+     
+     // get the delegation tokens
+     MyToken token1, token2, token3;
+-    token1 = dfs.getDelegationToken(new Text("user1"));
+-    token2 = dfs.getDelegationToken(new Text("user2"));
+-    token3 = dfs.getDelegationToken(new Text("user3"));
++    token1 = dfs.getDelegationToken("user1");
++    token2 = dfs.getDelegationToken("user2");
++    token3 = dfs.getDelegationToken("user3");
+ 
+     //to cause this one to be set for renew in 2 secs
+     Renewer.tokenToRenewIn2Sec = token1;
+@@ -330,7 +330,7 @@ public void testDTRenewal () throws Exception {
+     // time is up.
+     // Wait for 3 secs , and make sure no renews were called
+     ts = new Credentials();
+-    MyToken token4 = dfs.getDelegationToken(new Text("user4"));
++    MyToken token4 = dfs.getDelegationToken("user4");
+     
+     //to cause this one to be set for renew in 2 secs
+     Renewer.tokenToRenewIn2Sec = token4; 
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/security/TestMapredGroupMappingServiceRefresh.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/security/TestMapredGroupMappingServiceRefresh.java
+index b8f0abe..3f23a41 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/security/TestMapredGroupMappingServiceRefresh.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/security/TestMapredGroupMappingServiceRefresh.java
+@@ -46,6 +46,7 @@
+ import org.apache.hadoop.mapred.tools.MRAdmin;
+ import org.apache.hadoop.security.authorize.AuthorizationException;
+ import org.apache.hadoop.security.authorize.ProxyUsers;
++import org.apache.hadoop.security.authorize.DefaultImpersonationProvider;
+ import org.junit.After;
+ import org.junit.Before;
+ import org.junit.Test;
+@@ -174,8 +175,8 @@ public void testRefreshSuperUserGroupsConfiguration() throws Exception {
+     final String [] GROUP_NAMES2 = new String [] {"gr3" , "gr4"};
+ 
+     //keys in conf
+-    String userKeyGroups = ProxyUsers.getProxySuperuserGroupConfKey(SUPER_USER);
+-    String userKeyHosts = ProxyUsers.getProxySuperuserIpConfKey (SUPER_USER);
++    String userKeyGroups = DefaultImpersonationProvider.getProxySuperuserGroupConfKey(SUPER_USER);
++    String userKeyHosts = DefaultImpersonationProvider.getProxySuperuserIpConfKey (SUPER_USER);
+ 
+     config.set(userKeyGroups, "gr3,gr4,gr5"); // superuser can proxy for this group
+     config.set(userKeyHosts,"127.0.0.1");
+-- 
+1.7.9.5
+

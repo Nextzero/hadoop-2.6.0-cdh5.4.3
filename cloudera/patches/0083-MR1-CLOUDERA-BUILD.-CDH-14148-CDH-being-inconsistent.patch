@@ -1,0 +1,152 @@
+From 173daddebddfe5d6e9f17faf5e920269f14e51e6 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Wed, 18 Sep 2013 10:54:33 -0700
+Subject: [PATCH 083/596] MR1: CLOUDERA-BUILD. CDH-14148 (CDH being
+ inconsistently compiled with 1.6 or 1.7 JDK target
+ version)
+
+(cherry picked from commit db6dc282fdc2f519a46cb67f73c7740f297c1c2b)
+(cherry picked from commit f09009730b64ad4e5d8c2ae0cd6b2d56f087308f)
+(cherry picked from commit 505bce61a20cb95a9ad7516663eeb926be284fd4)
+---
+ hadoop-mapreduce1-project/build.xml                |    8 +++++++-
+ .../src/contrib/build-contrib.xml                  |   21 +++++++++++++++++---
+ hadoop-mapreduce1-project/src/contrib/build.xml    |    2 ++
+ .../src/contrib/eclipse-plugin/build.xml           |    3 +++
+ .../src/contrib/fuse-dfs/build.xml                 |    6 +++++-
+ 5 files changed, 35 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index 4358d05..44fe6cf 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -609,8 +609,10 @@
+   <target name="compile-contrib" depends="compile-core,tools-jar">
+      <subant target="compile">
+         <property name="version" value="${version}"/>
++        <property name="javac.version" value="${javac.version}"/>
++        <property name="targetJavaVersion" value="${targetJavaVersion}"/>
+         <fileset file="${contrib.dir}/build.xml"/>
+-     </subant>  	
++     </subant>
+   </target>
+   
+   <target name="compile" depends="compile-core, compile-contrib, compile-ant-tasks, compile-tools" description="Compile core, contrib">
+@@ -982,6 +984,8 @@
+   <target name="test-contrib" depends="compile, compile-core-test" description="Run contrib unit tests">
+     <subant target="test">
+        <property name="version" value="${version}"/>
++       <property name="javac.version" value="${javac.version}"/>
++       <property name="targetJavaVersion" value="${targetJavaVersion}"/>
+        <property name="clover.jar" value="${clover.jar}"/>
+        <fileset file="${contrib.dir}/build.xml"/>
+     </subant> 
+@@ -1361,6 +1365,8 @@
+       distribution directory so contribs know where to install to.-->
+       <property name="version" value="${version}"/>
+       <property name="dist.dir" value="${dist.dir}"/>
++      <property name="javac.version" value="${javac.version}"/>
++       <property name="targetJavaVersion" value="${targetJavaVersion}"/>
+       <fileset file="${contrib.dir}/build.xml"/>
+     </subant>  	
+ 
+diff --git a/hadoop-mapreduce1-project/src/contrib/build-contrib.xml b/hadoop-mapreduce1-project/src/contrib/build-contrib.xml
+index 68bd9d5..45b7864 100644
+--- a/hadoop-mapreduce1-project/src/contrib/build-contrib.xml
++++ b/hadoop-mapreduce1-project/src/contrib/build-contrib.xml
+@@ -190,6 +190,9 @@
+      includes="**/*.java"
+      destdir="${build.classes}"
+      debug="${javac.debug}"
++     optimize="${javac.optimize}"
++     target="${targetJavaVersion}"
++     source="${javac.version}"
+      deprecation="${javac.deprecation}">
+      <classpath refid="contrib-classpath"/>
+     </javac>
+@@ -206,7 +209,11 @@
+      srcdir="${src.examples}"
+      includes="**/*.java"
+      destdir="${build.examples}"
+-     debug="${javac.debug}">
++     debug="${javac.debug}"
++     optimize="${javac.optimize}"
++     target="${targetJavaVersion}"
++     source="${javac.version}"
++     deprecation="${javac.deprecation}">
+      <classpath refid="contrib-classpath"/>
+     </javac>
+   </target>
+@@ -223,7 +230,11 @@
+      includes="**/*.java"
+      excludes="system/**/*.java"
+      destdir="${build.test}"
+-     debug="${javac.debug}">
++     debug="${javac.debug}"
++     optimize="${javac.optimize}"
++     target="${targetJavaVersion}"
++     source="${javac.version}"
++     deprecation="${javac.deprecation}">
+     <classpath refid="test.classpath"/>
+     </javac>
+   </target>
+@@ -239,7 +250,11 @@
+        srcdir="${src.test.system}"
+        includes="**/*.java"
+        destdir="${build.system.classes}"
+-       debug="${javac.debug}">
++       debug="${javac.debug}"
++       optimize="${javac.optimize}"
++       target="${targetJavaVersion}"
++       source="${javac.version}"
++       deprecation="${javac.deprecation}">
+       <classpath refid="test.system.classpath"/>
+     </javac>
+   </target>
+diff --git a/hadoop-mapreduce1-project/src/contrib/build.xml b/hadoop-mapreduce1-project/src/contrib/build.xml
+index 0a8a600..c480e94 100644
+--- a/hadoop-mapreduce1-project/src/contrib/build.xml
++++ b/hadoop-mapreduce1-project/src/contrib/build.xml
+@@ -28,6 +28,8 @@
+   <!-- ====================================================== -->
+   <target name="compile">
+     <subant target="compile">
++      <property name="javac.version" value="${javac.version}"/>
++      <property name="targetJavaVersion" value="${targetJavaVersion}"/>
+       <fileset dir="." includes="*/build.xml" excludes="mrunit/build.xml"/>
+     </subant>
+   </target>
+diff --git a/hadoop-mapreduce1-project/src/contrib/eclipse-plugin/build.xml b/hadoop-mapreduce1-project/src/contrib/eclipse-plugin/build.xml
+index f04a74a..df3f02a 100644
+--- a/hadoop-mapreduce1-project/src/contrib/eclipse-plugin/build.xml
++++ b/hadoop-mapreduce1-project/src/contrib/eclipse-plugin/build.xml
+@@ -58,6 +58,9 @@
+      includes="**/*.java"
+      destdir="${build.classes}"
+      debug="${javac.debug}"
++     optimize="${javac.optimize}"
++     target="${targetJavaVersion}"
++     source="${javac.version}"
+      deprecation="${javac.deprecation}">
+      <classpath refid="classpath"/>
+     </javac>
+diff --git a/hadoop-mapreduce1-project/src/contrib/fuse-dfs/build.xml b/hadoop-mapreduce1-project/src/contrib/fuse-dfs/build.xml
+index fc489ae..0aa46d3 100644
+--- a/hadoop-mapreduce1-project/src/contrib/fuse-dfs/build.xml
++++ b/hadoop-mapreduce1-project/src/contrib/fuse-dfs/build.xml
+@@ -117,7 +117,11 @@
+ 	   srcdir="${src.test}"
+ 	   includes="**/*.java"
+ 	   destdir="${build.test}"
+-	   debug="${javac.debug}">
++	   debug="${javac.debug}"
++           optimize="${javac.optimize}"
++           target="${targetJavaVersion}"
++           source="${javac.version}"
++           deprecation="${javac.deprecation}">
+       <classpath refid="test.classpath"/>
+     </javac>
+   </target>
+-- 
+1.7.9.5
+

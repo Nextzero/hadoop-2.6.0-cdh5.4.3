@@ -1,0 +1,37 @@
+From 62477811ab63c6b0126fe417806ce8e0595dc0a9 Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Wed, 17 Jul 2013 16:02:31 -0700
+Subject: [PATCH 078/596] MR1: HADOOP-8329. Build fails with Java 7.
+ Contributed by Eli Collins
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1340270 13f79535-47bb-0310-9956-ffa450edef68
+
+Author: Sandy Ryza
+Ref: CDH-13087
+(cherry picked from commit 8d521f8e2344b0bf6ba9e0642eca0bf89b5943f2)
+(cherry picked from commit 02ab3a8455fa5402848fc64a1821bc0ea93c3c6e)
+(cherry picked from commit ecd5a4454315217084601e0bb38af4d73318540d)
+---
+ .../org/apache/hadoop/mapred/gridmix/Gridmix.java  |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/contrib/gridmix/src/java/org/apache/hadoop/mapred/gridmix/Gridmix.java b/hadoop-mapreduce1-project/src/contrib/gridmix/src/java/org/apache/hadoop/mapred/gridmix/Gridmix.java
+index a7b9d32..32e182b 100644
+--- a/hadoop-mapreduce1-project/src/contrib/gridmix/src/java/org/apache/hadoop/mapred/gridmix/Gridmix.java
++++ b/hadoop-mapreduce1-project/src/contrib/gridmix/src/java/org/apache/hadoop/mapred/gridmix/Gridmix.java
+@@ -393,10 +393,10 @@ public static void main(String[] argv) throws Exception {
+     }
+   }
+ 
+-  private <T> String getEnumValues(Enum<? extends T>[] e) {
++  private String getEnumValues(Enum<?>[] e) {
+     StringBuilder sb = new StringBuilder();
+     String sep = "";
+-    for (Enum<? extends T> v : e) {
++    for (Enum<?> v : e) {
+       sb.append(sep);
+       sb.append(v.name());
+       sep = "|";
+-- 
+1.7.9.5
+

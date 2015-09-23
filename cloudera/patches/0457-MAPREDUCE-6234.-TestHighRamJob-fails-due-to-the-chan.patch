@@ -1,0 +1,53 @@
+From 706b1b0cdfd119df575afb576f40a369fde158e2 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Tue, 17 Feb 2015 14:38:00 -0800
+Subject: [PATCH 457/596] MAPREDUCE-6234. TestHighRamJob fails due to the
+ change in MAPREDUCE-5785. (Masatake Iwasaki via
+ kasha)
+
+(cherry picked from commit 409113d8f97fcfdb96cb028dbb6a20c9a1df81b0)
+---
+ .../hadoop/mapred/gridmix/TestHighRamJob.java      |   11 +++++------
+ 1 file changed, 5 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-tools/hadoop-gridmix/src/test/java/org/apache/hadoop/mapred/gridmix/TestHighRamJob.java b/hadoop-tools/hadoop-gridmix/src/test/java/org/apache/hadoop/mapred/gridmix/TestHighRamJob.java
+index 9cc84ea..179c941 100644
+--- a/hadoop-tools/hadoop-gridmix/src/test/java/org/apache/hadoop/mapred/gridmix/TestHighRamJob.java
++++ b/hadoop-tools/hadoop-gridmix/src/test/java/org/apache/hadoop/mapred/gridmix/TestHighRamJob.java
+@@ -28,6 +28,7 @@
+ import org.apache.hadoop.mapreduce.Job;
+ import org.apache.hadoop.mapreduce.MRConfig;
+ import org.apache.hadoop.mapreduce.MRJobConfig;
++import org.apache.hadoop.mapreduce.TaskType;
+ import org.apache.hadoop.mapreduce.server.jobtracker.JTConfig;
+ import org.apache.hadoop.security.UserGroupInformation;
+ import org.apache.hadoop.tools.rumen.JobStory;
+@@ -92,15 +93,13 @@ private static void testHighRamConfig(long jobMapMB, long jobReduceMB,
+     
+     GridmixJob job = new DummyGridmixJob(simulatedJobConf, story);
+     Job simulatedJob = job.getJob();
+-    Configuration simulatedConf = simulatedJob.getConfiguration();
++    JobConf simulatedConf = (JobConf)simulatedJob.getConfiguration();
+     
+     // check if the high ram properties are not set
+     assertEquals(expectedMapMB, 
+-                 simulatedConf.getLong(MRJobConfig.MAP_MEMORY_MB,
+-                                       MRJobConfig.DEFAULT_MAP_MEMORY_MB));
++                 simulatedConf.getMemoryRequired(TaskType.MAP));
+     assertEquals(expectedReduceMB, 
+-                 simulatedConf.getLong(MRJobConfig.REDUCE_MEMORY_MB, 
+-                                       MRJobConfig.DEFAULT_MAP_MEMORY_MB));
++                 simulatedConf.getMemoryRequired(TaskType.REDUCE));
+   }
+   
+   /**
+@@ -192,4 +191,4 @@ public void testHighRamFeatureEmulation() throws IOException {
+     assertNotNull(failed);
+     assertTrue("Exception expected for exceeding reduce memory limit!", failed);
+   }
+-}
+\ No newline at end of file
++}
+-- 
+1.7.9.5
+

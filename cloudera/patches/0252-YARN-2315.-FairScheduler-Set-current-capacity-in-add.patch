@@ -1,0 +1,132 @@
+From bd910866d5eea38fc1719e27ff0ad18e4c6acabd Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Wed, 19 Nov 2014 20:15:40 -0800
+Subject: [PATCH 252/596] YARN-2315. FairScheduler: Set current capacity in
+ addition to capacity. (Zhihai Xu via kasha)
+
+(cherry picked from commit a9a0cc3679432774154a07d3157ffa0a43e0bf01)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+
+(cherry picked from commit 93ffe9f2c6b5517b33483ca2746778f039db8eaa)
+---
+ .../resourcemanager/scheduler/fair/FSQueue.java    |   22 ++++---
+ .../scheduler/fair/TestFairScheduler.java          |   61 ++++++++++++++++++++
+ 2 files changed, 76 insertions(+), 7 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSQueue.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSQueue.java
+index e1050da..349464e 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSQueue.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSQueue.java
+@@ -123,13 +123,21 @@ public Priority getPriority() {
+   public QueueInfo getQueueInfo(boolean includeChildQueues, boolean recursive) {
+     QueueInfo queueInfo = recordFactory.newRecordInstance(QueueInfo.class);
+     queueInfo.setQueueName(getQueueName());
+-    // TODO: we might change these queue metrics around a little bit
+-    // to match the semantics of the fair scheduler.
+-    queueInfo.setCapacity((float) getFairShare().getMemory() /
+-        scheduler.getClusterResource().getMemory());
+-    queueInfo.setCapacity((float) getResourceUsage().getMemory() /
+-        scheduler.getClusterResource().getMemory());
+-    
++
++    if (scheduler.getClusterResource().getMemory() == 0) {
++      queueInfo.setCapacity(0.0f);
++    } else {
++      queueInfo.setCapacity((float) getFairShare().getMemory() /
++          scheduler.getClusterResource().getMemory());
++    }
++
++    if (getFairShare().getMemory() == 0) {
++      queueInfo.setCurrentCapacity(0.0f);
++    } else {
++      queueInfo.setCurrentCapacity((float) getResourceUsage().getMemory() /
++          getFairShare().getMemory());
++    }
++
+     ArrayList<QueueInfo> childQueueInfos = new ArrayList<QueueInfo>();
+     if (includeChildQueues) {
+       Collection<FSQueue> childQueues = getChildQueues();
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java
+index ca0e954..bbbae5a 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java
+@@ -61,6 +61,7 @@
+ import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
+ import org.apache.hadoop.yarn.api.records.NodeId;
+ import org.apache.hadoop.yarn.api.records.Priority;
++import org.apache.hadoop.yarn.api.records.QueueInfo;
+ import org.apache.hadoop.yarn.api.records.Resource;
+ import org.apache.hadoop.yarn.api.records.ResourceRequest;
+ import org.apache.hadoop.yarn.api.records.impl.pb.ApplicationSubmissionContextPBImpl;
+@@ -506,6 +507,66 @@ public void testFairShareWithNoneZeroWeightNoneZeroMinRes()
+   }
+ 
+   @Test
++  public void testQueueInfo() throws IOException {
++    conf.set(FairSchedulerConfiguration.ALLOCATION_FILE, ALLOC_FILE);
++
++    PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
++    out.println("<?xml version=\"1.0\"?>");
++    out.println("<allocations>");
++    out.println("<queue name=\"queueA\">");
++    out.println("<weight>.25</weight>");
++    out.println("</queue>");
++    out.println("<queue name=\"queueB\">");
++    out.println("<weight>.75</weight>");
++    out.println("</queue>");
++    out.println("</allocations>");
++    out.close();
++
++    scheduler.init(conf);
++    scheduler.start();
++    scheduler.reinitialize(conf, resourceManager.getRMContext());
++
++    // Add one big node (only care about aggregate capacity)
++    RMNode node1 =
++        MockNodes.newNodeInfo(1, Resources.createResource(8 * 1024, 8), 1,
++            "127.0.0.1");
++    NodeAddedSchedulerEvent nodeEvent1 = new NodeAddedSchedulerEvent(node1);
++    scheduler.handle(nodeEvent1);
++
++    // Queue A wants 1 * 1024.
++    createSchedulingRequest(1 * 1024, "queueA", "user1");
++    // Queue B wants 6 * 1024
++    createSchedulingRequest(6 * 1024, "queueB", "user1");
++
++    scheduler.update();
++
++    // Capacity should be the same as weight of Queue,
++    // because the sum of all active Queues' weight are 1.
++    // Before NodeUpdate Event, CurrentCapacity should be 0
++    QueueInfo queueInfo = scheduler.getQueueInfo("queueA", false, false);
++    Assert.assertEquals(0.25f, queueInfo.getCapacity(), 0.0f);
++    Assert.assertEquals(0.0f, queueInfo.getCurrentCapacity(), 0.0f);
++    queueInfo = scheduler.getQueueInfo("queueB", false, false);
++    Assert.assertEquals(0.75f, queueInfo.getCapacity(), 0.0f);
++    Assert.assertEquals(0.0f, queueInfo.getCurrentCapacity(), 0.0f);
++
++    // Each NodeUpdate Event will only assign one container.
++    // To assign two containers, call handle NodeUpdate Event twice.
++    NodeUpdateSchedulerEvent nodeEvent2 = new NodeUpdateSchedulerEvent(node1);
++    scheduler.handle(nodeEvent2);
++    scheduler.handle(nodeEvent2);
++
++    // After NodeUpdate Event, CurrentCapacity for queueA should be 1/2=0.5
++    // and CurrentCapacity for queueB should be 6/6=1.
++    queueInfo = scheduler.getQueueInfo("queueA", false, false);
++    Assert.assertEquals(0.25f, queueInfo.getCapacity(), 0.0f);
++    Assert.assertEquals(0.5f, queueInfo.getCurrentCapacity(), 0.0f);
++    queueInfo = scheduler.getQueueInfo("queueB", false, false);
++    Assert.assertEquals(0.75f, queueInfo.getCapacity(), 0.0f);
++    Assert.assertEquals(1.0f, queueInfo.getCurrentCapacity(), 0.0f);
++  }
++
++  @Test
+   public void testSimpleHierarchicalFairShareCalculation() throws IOException {
+     scheduler.init(conf);
+     scheduler.start();
+-- 
+1.7.9.5
+

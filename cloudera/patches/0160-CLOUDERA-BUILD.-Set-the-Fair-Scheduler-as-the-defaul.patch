@@ -1,0 +1,44 @@
+From 23ce4babb4f728fdff7c99fcf2f2a218f076371e Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Fri, 21 Jun 2013 16:35:24 -0700
+Subject: [PATCH 160/596] CLOUDERA-BUILD. Set the Fair Scheduler as the
+ default scheduler.
+
+(cherry picked from commit 2608afcdbb6efa3bbf496c2b70a7e2ccde4dd0ba)
+(cherry picked from commit 30f7dad019e7de2b974360de97a9e841ea5663cc)
+(cherry picked from commit e55941cca0971855b19a0d42c0ec510d4d464027)
+(cherry picked from commit 52a7975be9fb297af1794a3900f18f45437f9095)
+---
+ .../apache/hadoop/yarn/conf/YarnConfiguration.java |    2 +-
+ .../src/main/resources/yarn-default.xml            |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
+index 83cbfc5..6b991e7 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
+@@ -331,7 +331,7 @@ private static void addDeprecatedKeys() {
+     RM_PREFIX + "scheduler.class";
+  
+   public static final String DEFAULT_RM_SCHEDULER = 
+-      "org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler";
++      "org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler";
+ 
+   /** RM set next Heartbeat interval for NM */
+   public static final String RM_NM_HEARTBEAT_INTERVAL_MS =
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/resources/yarn-default.xml b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/resources/yarn-default.xml
+index 9d37196..d47ddca 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/resources/yarn-default.xml
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/resources/yarn-default.xml
+@@ -224,7 +224,7 @@
+   <property>
+     <description>The class to use as the resource scheduler.</description>
+     <name>yarn.resourcemanager.scheduler.class</name>
+-    <value>org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.CapacityScheduler</value>
++    <value>org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FairScheduler</value>
+   </property>
+ 
+   <property>
+-- 
+1.7.9.5
+

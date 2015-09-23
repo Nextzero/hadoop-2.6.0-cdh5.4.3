@@ -1,0 +1,32 @@
+From 6749e9b949a1d5abc6e58d72c16c31828926785b Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Mon, 20 May 2013 11:37:58 -0700
+Subject: [PATCH 071/596] MR1: MAPREDUCE-5148. Fix MAPREDUCE-4970 to ensure
+ task-log4j.properties is available for previous
+ installs by putting it in hadoop-core.jar.
+ Contributed by Arun C. Murthy. (cherry picked from
+ commit 28105b96b5c4bba5aead1aee53e8130b0198db5d)
+
+(cherry picked from commit 9ea9a2849bb71609fb70f68456869da16dab1ddc)
+(cherry picked from commit 47f71c8b12368579dbe7570b4de560c0045ef753)
+(cherry picked from commit 68e2aaaf61360f8fc4d9c3e8f0c7e5d2b078081c)
+---
+ hadoop-mapreduce1-project/build.xml |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index dacd6a7..4db5d11 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -650,7 +650,7 @@
+       <tarfileset dir="bin" mode="755"/>
+     </tar>
+     <property name="jar.properties.list"
+-      value="commons-logging.properties, log4j.properties, hadoop-metrics.properties"/>
++      value="commons-logging.properties, log4j.properties, hadoop-metrics.properties, task-log4j.properties"/>
+     <jar jarfile="${build.dir}/${core.final.name}.jar"
+          basedir="${build.classes}">
+       <manifest>
+-- 
+1.7.9.5
+

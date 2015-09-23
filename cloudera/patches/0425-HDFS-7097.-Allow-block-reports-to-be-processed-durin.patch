@@ -1,0 +1,293 @@
+From 1d3adf54cad483619f26ef253024a6e1147ccc60 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Tue, 25 Nov 2014 15:37:11 -0800
+Subject: [PATCH 425/596] HDFS-7097. Allow block reports to be processed
+ during checkpointing on standby name node. (kihwal
+ via wang)
+
+(cherry picked from commit f43a20c529ac3f104add95b222de6580757b3763)
+(cherry picked from commit 915176c4e769f510f835f1ad182bc62586a01e0b)
+---
+ .../hadoop/hdfs/server/namenode/FSImageFormat.java |    5 ++-
+ .../hadoop/hdfs/server/namenode/FSNamesystem.java  |   39 ++++++++++++++++++++
+ .../hdfs/server/namenode/ha/EditLogTailer.java     |   12 +++++-
+ .../server/namenode/ha/StandbyCheckpointer.java    |   12 ++++--
+ .../server/namenode/ha/TestStandbyCheckpoints.java |   21 ++++++++++-
+ 5 files changed, 81 insertions(+), 8 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSImageFormat.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSImageFormat.java
+index 3c58ed9..bac4790 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSImageFormat.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSImageFormat.java
+@@ -1186,9 +1186,11 @@ static String renameReservedPathsOnUpgrade(String path,
+   @Deprecated
+   static class Saver {
+     private static final int LAYOUT_VERSION = -51;
++    public static final int CHECK_CANCEL_INTERVAL = 4096;
+     private final SaveNamespaceContext context;
+     /** Set to true once an image has been written */
+     private boolean saved = false;
++    private long checkCancelCounter = 0;
+ 
+     /** The MD5 checksum of the file that was written */
+     private MD5Hash savedDigest;
+@@ -1325,7 +1327,6 @@ private int saveChildren(ReadOnlyList<INode> children,
+       // Write normal children INode.
+       out.writeInt(children.size());
+       int dirNum = 0;
+-      int i = 0;
+       for(INode child : children) {
+         // print all children first
+         // TODO: for HDFS-5428, we cannot change the format/content of fsimage
+@@ -1338,7 +1339,7 @@ private int saveChildren(ReadOnlyList<INode> children,
+             && child.asFile().isUnderConstruction()) {
+           this.snapshotUCMap.put(child.getId(), child.asFile());
+         }
+-        if (i++ % 50 == 0) {
++        if (checkCancelCounter++ % CHECK_CANCEL_INTERVAL == 0) {
+           context.checkCancelled();
+         }
+       }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index bd2904e..c1abe23 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -523,6 +523,15 @@ private void logAuditEvent(boolean succeeded,
+   /** Lock to protect FSNamesystem. */
+   private final FSNamesystemLock fsLock;
+ 
++  /** 
++   * Checkpoint lock to protect FSNamesystem modification on standby NNs.
++   * Unlike fsLock, it does not affect block updates. On active NNs, this lock
++   * does not provide proper protection, because there are operations that
++   * modify both block and name system state.  Even on standby, fsLock is 
++   * used when block state changes need to be blocked.
++   */
++  private final ReentrantLock cpLock;
++
+   /**
+    * Used when this NN is in standby state to read from the shared edit log.
+    */
+@@ -799,6 +808,8 @@ static FSNamesystem loadFromDisk(Configuration conf) throws IOException {
+     LOG.info("fsLock is fair:" + fair);
+     fsLock = new FSNamesystemLock(fair);
+     cond = fsLock.writeLock().newCondition();
++    cpLock = new ReentrantLock();
++
+     this.fsImage = fsImage;
+     try {
+       resourceRecheckInterval = conf.getLong(
+@@ -1606,6 +1617,22 @@ public int getWriteHoldCount() {
+     return this.fsLock.getWriteHoldCount();
+   }
+ 
++  /** Lock the checkpoint lock */
++  public void cpLock() {
++    this.cpLock.lock();
++  }
++
++  /** Lock the checkpoint lock interrupibly */
++  public void cpLockInterruptibly() throws InterruptedException {
++    this.cpLock.lockInterruptibly();
++  }
++
++  /** Unlock the checkpoint lock */
++  public void cpUnlock() {
++    this.cpLock.unlock();
++  }
++    
++
+   NamespaceInfo getNamespaceInfo() {
+     readLock();
+     try {
+@@ -5540,6 +5567,8 @@ void saveNamespace() throws AccessControlException, IOException {
+       return; // Return previous response
+     }
+     boolean success = false;
++
++    cpLock();  // Block if a checkpointing is in progress on standby.
+     readLock();
+     try {
+       checkOperation(OperationCategory.UNCHECKED);
+@@ -5552,6 +5581,7 @@ void saveNamespace() throws AccessControlException, IOException {
+       success = true;
+     } finally {
+       readUnlock();
++      cpUnlock();
+       RetryCache.setState(cacheEntry, success);
+     }
+     LOG.info("New namespace image has been created");
+@@ -5567,6 +5597,7 @@ boolean restoreFailedStorage(String arg) throws AccessControlException,
+       StandbyException {
+     checkSuperuserPrivilege();
+     checkOperation(OperationCategory.UNCHECKED);
++    cpLock();  // Block if a checkpointing is in progress on standby.
+     writeLock();
+     try {
+       checkOperation(OperationCategory.UNCHECKED);
+@@ -5581,6 +5612,7 @@ boolean restoreFailedStorage(String arg) throws AccessControlException,
+       return val;
+     } finally {
+       writeUnlock();
++      cpUnlock();
+     }
+   }
+ 
+@@ -5591,12 +5623,14 @@ Date getStartTime() {
+   void finalizeUpgrade() throws IOException {
+     checkSuperuserPrivilege();
+     checkOperation(OperationCategory.UNCHECKED);
++    cpLock();  // Block if a checkpointing is in progress on standby.
+     writeLock();
+     try {
+       checkOperation(OperationCategory.UNCHECKED);
+       getFSImage().finalizeUpgrade(this.isHaEnabled() && inActiveState());
+     } finally {
+       writeUnlock();
++      cpUnlock();
+     }
+   }
+ 
+@@ -8015,6 +8049,11 @@ public ReentrantLock getLongReadLockForTests() {
+   }
+ 
+   @VisibleForTesting
++  public ReentrantLock getCpLockForTests() {
++    return cpLock;
++  }
++
++  @VisibleForTesting
+   public SafeModeInfo getSafeModeInfoForTests() {
+     return safeMode;
+   }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/EditLogTailer.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/EditLogTailer.java
+index a16af37..3d72645 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/EditLogTailer.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/EditLogTailer.java
+@@ -183,6 +183,8 @@ public void catchupDuringFailover() throws IOException {
+       @Override
+       public Void run() throws Exception {
+         try {
++          // It is already under the full name system lock and the checkpointer
++          // thread is already stopped. No need to acqure any other lock.
+           doTailEdits();
+         } catch (InterruptedException e) {
+           throw new IOException(e);
+@@ -321,7 +323,15 @@ private void doWork() {
+           if (!shouldRun) {
+             break;
+           }
+-          doTailEdits();
++          // Prevent reading of name system while being modified. The full
++          // name system lock will be acquired to further block even the block
++          // state updates.
++          namesystem.cpLockInterruptibly();
++          try {
++            doTailEdits();
++          } finally {
++            namesystem.cpUnlock();
++          }
+         } catch (EditLogInputException elie) {
+           LOG.warn("Error while reading edits from disk. Will try again.", elie);
+         } catch (InterruptedException ie) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/StandbyCheckpointer.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/StandbyCheckpointer.java
+index c7a0d62..1e40368 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/StandbyCheckpointer.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/StandbyCheckpointer.java
+@@ -153,7 +153,10 @@ private void doCheckpoint() throws InterruptedException, IOException {
+     final long txid;
+     final NameNodeFile imageType;
+     
+-    namesystem.longReadLockInterruptibly();
++    // Acquire cpLock to make sure no one is modifying the name system.
++    // It does not need the full namesystem write lock, since the only thing
++    // that modifies namesystem on standby node is edit log replaying.
++    namesystem.cpLockInterruptibly();
+     try {
+       assert namesystem.getEditLog().isOpenForRead() :
+         "Standby Checkpointer should only attempt a checkpoint when " +
+@@ -190,7 +193,7 @@ private void doCheckpoint() throws InterruptedException, IOException {
+         img.saveLegacyOIVImage(namesystem, outputDir, canceler);
+       }
+     } finally {
+-      namesystem.longReadUnlock();
++      namesystem.cpUnlock();
+     }
+     
+     // Upload the saved checkpoint back to the active
+@@ -226,8 +229,11 @@ public Void call() throws IOException {
+    * minute or so.
+    */
+   public void cancelAndPreventCheckpoints(String msg) throws ServiceFailedException {
+-    thread.preventCheckpointsFor(PREVENT_AFTER_CANCEL_MS);
+     synchronized (cancelLock) {
++      // The checkpointer thread takes this lock and checks if checkpointing is
++      // postponed. 
++      thread.preventCheckpointsFor(PREVENT_AFTER_CANCEL_MS);
++
+       // Before beginning a checkpoint, the checkpointer thread
+       // takes this lock, and creates a canceler object.
+       // If the canceler is non-null, then a checkpoint is in
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestStandbyCheckpoints.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestStandbyCheckpoints.java
+index b00f916..2f9b945 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestStandbyCheckpoints.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestStandbyCheckpoints.java
+@@ -26,6 +26,7 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.FSDataOutputStream;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
+ import org.apache.hadoop.hdfs.DFSTestUtil;
+@@ -91,7 +92,7 @@ public void setupCluster() throws Exception {
+ 
+         cluster = new MiniDFSCluster.Builder(conf)
+             .nnTopology(topology)
+-            .numDataNodes(0)
++            .numDataNodes(1)
+             .build();
+         cluster.waitActive();
+ 
+@@ -359,6 +360,13 @@ public void testStandbyExceptionThrownDuringCheckpoint() throws Exception {
+     } catch (StandbyException se) {
+       GenericTestUtils.assertExceptionContains("is not supported", se);
+     }
++
++    // Make sure new incremental block reports are processed during
++    // checkpointing on the SBN.
++    assertEquals(0, cluster.getNamesystem(1).getPendingDataNodeMessageCount());
++    doCreate();
++    Thread.sleep(1000);
++    assertTrue(cluster.getNamesystem(1).getPendingDataNodeMessageCount() > 0);
+     
+     // Make sure that the checkpoint is still going on, implying that the client
+     // RPC to the SBN happened during the checkpoint.
+@@ -410,7 +418,7 @@ public void run() {
+     
+     assertFalse(nn1.getNamesystem().getFsLockForTests().hasQueuedThreads());
+     assertFalse(nn1.getNamesystem().getFsLockForTests().isWriteLocked());
+-    assertTrue(nn1.getNamesystem().getLongReadLockForTests().hasQueuedThreads());
++    assertTrue(nn1.getNamesystem().getCpLockForTests().hasQueuedThreads());
+     
+     // Get /jmx of the standby NN web UI, which will cause the FSNS read lock to
+     // be taken.
+@@ -437,6 +445,15 @@ private void doEdits(int start, int stop) throws IOException {
+       fs.mkdirs(p);
+     }
+   }
++
++  private void doCreate() throws IOException {
++    Path p = new Path("/testFile");
++    fs.delete(p, false);
++    FSDataOutputStream out = fs.create(p, (short)1);
++    out.write(42);
++    out.close();
++  }
++  
+   
+   /**
+    * A codec which just slows down the saving of the image significantly
+-- 
+1.7.9.5
+

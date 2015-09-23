@@ -1,0 +1,30 @@
+From 3ff9c1cf1a767cd0e6616f31a45f84a3466bb008 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Mon, 23 Sep 2013 16:28:29 -0700
+Subject: [PATCH 170/596] CLOUDERA-BUILD. Targeting Java 6 by default
+ (CDH-14356)
+
+(cherry picked from commit e905cc51c83325f069aa5722894a940de06c3ec7)
+(cherry picked from commit f2885d9272139372e56781603c2eee91bf8df78c)
+(cherry picked from commit 2c5a4330ffb9347d13c8a2de6e9f1af26dfdd80a)
+(cherry picked from commit 269aaab2d54841f1a7b4fcfbf7fce51bf7657c93)
+---
+ pom.xml |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/pom.xml b/pom.xml
+index 3fa349c..204c39f 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -105,7 +105,7 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
+     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+ 
+     <javaVersion>1.7</javaVersion>
+-    <targetJavaVersion>1.7</targetJavaVersion>
++    <targetJavaVersion>1.6</targetJavaVersion>
+   </properties>
+ 
+   <modules>
+-- 
+1.7.9.5
+

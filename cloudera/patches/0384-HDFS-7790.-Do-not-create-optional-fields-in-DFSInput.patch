@@ -1,0 +1,91 @@
+From 0bd109a048a5f35302d9d5c26a3fa6985618dcf0 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Thu, 12 Feb 2015 11:12:26 -0800
+Subject: [PATCH 384/596] HDFS-7790. Do not create optional fields in
+ DFSInputStream unless they are needed (cmccabe)
+
+(cherry picked from commit 871cb56152e6039ff56c6fabfcd45451029471c3)
+(cherry picked from commit a9a361c54999273cac9f0759861447cf6fe15099)
+---
+ .../org/apache/hadoop/hdfs/DFSInputStream.java     |   22 ++++++++++++++------
+ 1 file changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+index 6662cbe..57d1167 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+@@ -108,8 +108,15 @@
+    * The value type can be either ByteBufferPool or ClientMmap, depending on
+    * whether we this is a memory-mapped buffer or not.
+    */
+-  private final IdentityHashStore<ByteBuffer, Object>
++  private IdentityHashStore<ByteBuffer, Object> extendedReadBuffers;
++
++  private synchronized IdentityHashStore<ByteBuffer, Object>
++        getExtendedReadBuffers() {
++    if (extendedReadBuffers == null) {
+       extendedReadBuffers = new IdentityHashStore<ByteBuffer, Object>(0);
++    }
++    return extendedReadBuffers;
++  }
+ 
+   public static class ReadStatistics {
+     public ReadStatistics() {
+@@ -217,7 +224,7 @@ void clear() {
+   private final ConcurrentHashMap<DatanodeInfo, DatanodeInfo> deadNodes =
+              new ConcurrentHashMap<DatanodeInfo, DatanodeInfo>();
+ 
+-  private final byte[] oneByteBuf = new byte[1]; // used for 'int read()'
++  private byte[] oneByteBuf; // used for 'int read()'
+ 
+   void addToDeadNodes(DatanodeInfo dnInfo) {
+     deadNodes.put(dnInfo, dnInfo);
+@@ -627,7 +634,7 @@ public synchronized void close() throws IOException {
+     }
+     dfsClient.checkOpen();
+ 
+-    if (!extendedReadBuffers.isEmpty()) {
++    if ((extendedReadBuffers != null) && (!extendedReadBuffers.isEmpty())) {
+       final StringBuilder builder = new StringBuilder();
+       extendedReadBuffers.visitAll(new IdentityHashStore.Visitor<ByteBuffer, Object>() {
+         private String prefix = "";
+@@ -648,6 +655,9 @@ public void accept(ByteBuffer k, Object v) {
+ 
+   @Override
+   public synchronized int read() throws IOException {
++    if (oneByteBuf == null) {
++      oneByteBuf = new byte[1];
++    }
+     int ret = read( oneByteBuf, 0, 1 );
+     return ( ret <= 0 ) ? -1 : (oneByteBuf[0] & 0xff);
+   }
+@@ -1627,7 +1637,7 @@ public synchronized ByteBuffer read(ByteBufferPool bufferPool,
+     }
+     buffer = ByteBufferUtil.fallbackRead(this, bufferPool, maxLength);
+     if (buffer != null) {
+-      extendedReadBuffers.put(buffer, bufferPool);
++      getExtendedReadBuffers().put(buffer, bufferPool);
+     }
+     return buffer;
+   }
+@@ -1706,7 +1716,7 @@ private synchronized ByteBuffer tryReadZeroCopy(int maxLength,
+       buffer = clientMmap.getMappedByteBuffer().asReadOnlyBuffer();
+       buffer.position((int)blockPos);
+       buffer.limit((int)(blockPos + length));
+-      extendedReadBuffers.put(buffer, clientMmap);
++      getExtendedReadBuffers().put(buffer, clientMmap);
+       synchronized (infoLock) {
+         readStatistics.addZeroCopyBytes(length);
+       }
+@@ -1727,7 +1737,7 @@ private synchronized ByteBuffer tryReadZeroCopy(int maxLength,
+   @Override
+   public synchronized void releaseBuffer(ByteBuffer buffer) {
+     if (buffer == EMPTY_BUFFER) return;
+-    Object val = extendedReadBuffers.remove(buffer);
++    Object val = getExtendedReadBuffers().remove(buffer);
+     if (val == null) {
+       throw new IllegalArgumentException("tried to release a buffer " +
+           "that was not created by this stream, " + buffer);
+-- 
+1.7.9.5
+

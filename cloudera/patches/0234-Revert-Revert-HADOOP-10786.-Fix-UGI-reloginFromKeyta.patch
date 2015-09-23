@@ -1,0 +1,212 @@
+From 05992c1a07e51f176d4c39e09b11564dd2e78f55 Mon Sep 17 00:00:00 2001
+From: Stephen Chu <schu@cloudera.com>
+Date: Wed, 28 Jan 2015 12:22:20 -0800
+Subject: [PATCH 234/596] Revert "Revert "HADOOP-10786. Fix
+ UGI#reloginFromKeytab on Java 8. Contributed by
+ Stephen Chu.""
+
+This reverts commit e1608c28d51b849cb562b0b9a7fd93a509b5e237.
+---
+ hadoop-common-project/hadoop-common/CHANGES.txt    |    2 +
+ .../hadoop/security/UserGroupInformation.java      |   38 ++++++--
+ .../hadoop/security/TestUGILoginFromKeytab.java    |   91 ++++++++++++++++++++
+ 3 files changed, 126 insertions(+), 5 deletions(-)
+ create mode 100644 hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestUGILoginFromKeytab.java
+
+diff --git a/hadoop-common-project/hadoop-common/CHANGES.txt b/hadoop-common-project/hadoop-common/CHANGES.txt
+index a205c2a..230a403 100644
+--- a/hadoop-common-project/hadoop-common/CHANGES.txt
++++ b/hadoop-common-project/hadoop-common/CHANGES.txt
+@@ -313,6 +313,8 @@ Release 2.6.0 - 2014-11-18
+ 
+     HADOOP-11247. Fix a couple javac warnings in NFS. (Brandon Li via wheat9)
+ 
++    HADOOP-10786. Fix UGI#reloginFromKeytab on Java 8. (Stephen Chu via wheat9)
++
+   BUG FIXES
+ 
+     HADOOP-11182. GraphiteSink emits wrong timestamps (Sascha Coenen via raviprak)
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/UserGroupInformation.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/UserGroupInformation.java
+index 2bfea75..b8e849c 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/UserGroupInformation.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/UserGroupInformation.java
+@@ -86,9 +86,21 @@
+    * Percentage of the ticket window to use before we renew ticket.
+    */
+   private static final float TICKET_RENEW_WINDOW = 0.80f;
++  private static boolean shouldRenewImmediatelyForTests = false;
+   static final String HADOOP_USER_NAME = "HADOOP_USER_NAME";
+   static final String HADOOP_PROXY_USER = "HADOOP_PROXY_USER";
+-  
++
++  /**
++   * For the purposes of unit tests, we want to test login
++   * from keytab and don't want to wait until the renew
++   * window (controlled by TICKET_RENEW_WINDOW).
++   * @param immediate true if we should login without waiting for ticket window
++   */
++  @VisibleForTesting
++  static void setShouldRenewImmediatelyForTests(boolean immediate) {
++    shouldRenewImmediatelyForTests = immediate;
++  }
++
+   /** 
+    * UgiMetrics maintains UGI activity statistics
+    * and publishes them through the metrics interfaces.
+@@ -586,6 +598,20 @@ private void setLogin(LoginContext login) {
+     user.setLogin(login);
+   }
+ 
++  private static Class<?> KEY_TAB_CLASS = KerberosKey.class;
++  static {
++    try {
++      // We use KEY_TAB_CLASS to determine if the UGI is logged in from
++      // keytab. In JDK6 and JDK7, if useKeyTab and storeKey are specified
++      // in the Krb5LoginModule, then some number of KerberosKey objects
++      // are added to the Subject's private credentials. However, in JDK8,
++      // a KeyTab object is added instead. More details in HADOOP-10786.
++      KEY_TAB_CLASS = Class.forName("javax.security.auth.kerberos.KeyTab");
++    } catch (ClassNotFoundException cnfe) {
++      // Ignore. javax.security.auth.kerberos.KeyTab does not exist in JDK6.
++    }
++  }
++
+   /**
+    * Create a UserGroupInformation for the given subject.
+    * This does not change the subject or acquire new credentials.
+@@ -594,7 +620,7 @@ private void setLogin(LoginContext login) {
+   UserGroupInformation(Subject subject) {
+     this.subject = subject;
+     this.user = subject.getPrincipals(User.class).iterator().next();
+-    this.isKeytab = !subject.getPrivateCredentials(KerberosKey.class).isEmpty();
++    this.isKeytab = !subject.getPrivateCredentials(KEY_TAB_CLASS).isEmpty();
+     this.isKrbTkt = !subject.getPrivateCredentials(KerberosTicket.class).isEmpty();
+   }
+   
+@@ -950,7 +976,8 @@ public synchronized void checkTGTAndReloginFromKeytab() throws IOException {
+         || !isKeytab)
+       return;
+     KerberosTicket tgt = getTGT();
+-    if (tgt != null && Time.now() < getRefreshTime(tgt)) {
++    if (tgt != null && !shouldRenewImmediatelyForTests &&
++        Time.now() < getRefreshTime(tgt)) {
+       return;
+     }
+     reloginFromKeytab();
+@@ -975,13 +1002,14 @@ public synchronized void reloginFromKeytab()
+       return;
+     
+     long now = Time.now();
+-    if (!hasSufficientTimeElapsed(now)) {
++    if (!shouldRenewImmediatelyForTests && !hasSufficientTimeElapsed(now)) {
+       return;
+     }
+ 
+     KerberosTicket tgt = getTGT();
+     //Return if TGT is valid and is not going to expire soon.
+-    if (tgt != null && now < getRefreshTime(tgt)) {
++    if (tgt != null && !shouldRenewImmediatelyForTests &&
++        now < getRefreshTime(tgt)) {
+       return;
+     }
+     
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestUGILoginFromKeytab.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestUGILoginFromKeytab.java
+new file mode 100644
+index 0000000..61fbf89
+--- /dev/null
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestUGILoginFromKeytab.java
+@@ -0,0 +1,91 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.security;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
++import org.apache.hadoop.minikdc.MiniKdc;
++import org.junit.After;
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Rule;
++import org.junit.Test;
++import org.junit.rules.TemporaryFolder;
++
++import java.io.File;
++
++/**
++ * Verify UGI login from keytab. Check that the UGI is
++ * configured to use keytab to catch regressions like
++ * HADOOP-10786.
++ */
++public class TestUGILoginFromKeytab {
++
++  private MiniKdc kdc;
++  private File workDir;
++
++  @Rule
++  public final TemporaryFolder folder = new TemporaryFolder();
++
++  @Before
++  public void startMiniKdc() throws Exception {
++    // This setting below is required. If not enabled, UGI will abort
++    // any attempt to loginUserFromKeytab.
++    Configuration conf = new Configuration();
++    conf.set(CommonConfigurationKeys.HADOOP_SECURITY_AUTHENTICATION,
++        "kerberos");
++    UserGroupInformation.setConfiguration(conf);
++    workDir = folder.getRoot();
++    kdc = new MiniKdc(MiniKdc.createConf(), workDir);
++    kdc.start();
++  }
++
++  @After
++  public void stopMiniKdc() {
++    if (kdc != null) {
++      kdc.stop();
++    }
++  }
++
++  /**
++   * Login from keytab using the MiniKDC and verify the UGI can successfully
++   * relogin from keytab as well. This will catch regressions like HADOOP-10786.
++   */
++  @Test
++  public void testUGILoginFromKeytab() throws Exception {
++    UserGroupInformation.setShouldRenewImmediatelyForTests(true);
++    String principal = "foo";
++    File keytab = new File(workDir, "foo.keytab");
++    kdc.createPrincipal(keytab, principal);
++
++    UserGroupInformation.loginUserFromKeytab(principal, keytab.getPath());
++    UserGroupInformation ugi = UserGroupInformation.getLoginUser();
++    Assert.assertTrue("UGI should be configured to login from keytab",
++        ugi.isFromKeytab());
++
++    // Verify relogin from keytab.
++    User user = ugi.getSubject().getPrincipals(User.class).iterator().next();
++    final long firstLogin = user.getLastLogin();
++    ugi.reloginFromKeytab();
++    final long secondLogin = user.getLastLogin();
++    Assert.assertTrue("User should have been able to relogin from keytab",
++        secondLogin > firstLogin);
++  }
++
++}
+-- 
+1.7.9.5
+

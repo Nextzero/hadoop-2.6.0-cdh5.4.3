@@ -1,0 +1,87 @@
+From a14d2122bfdcab3609fea6a8903c5e670c46fa5a Mon Sep 17 00:00:00 2001
+From: Jian He <jianhe@apache.org>
+Date: Tue, 27 Jan 2015 13:31:22 -0800
+Subject: [PATCH 547/596] YARN-3011. Possible IllegalArgumentException in
+ ResourceLocalizationService might lead NM to crash.
+ Contributed by Varun Saxena
+
+(cherry picked from commit 4e15fc08411318e11152fcd5a4648ed1d6fbb480)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../localizer/ResourceLocalizationService.java     |   10 +++++++++
+ .../localizer/TestResourceLocalizationService.java |   23 ++++++++++++++++++--
+ 2 files changed, 31 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java
+index d719791..4236392 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java
+@@ -803,6 +803,13 @@ public void addResource(LocalizerResourceRequestEvent request) {
+               .getResource().getRequest(), e.getMessage()));
+             LOG.error("Local path for public localization is not found. "
+                 + " May be disks failed.", e);
++          } catch (IllegalArgumentException ie) {
++            rsrc.unlock();
++            publicRsrc.handle(new ResourceFailedLocalizationEvent(request
++                .getResource().getRequest(), ie.getMessage()));
++            LOG.error("Local path for public localization is not found. "
++                + " Incorrect path. " + request.getResource().getRequest()
++                .getPath(), ie);
+           } catch (RejectedExecutionException re) {
+             rsrc.unlock();
+             publicRsrc.handle(new ResourceFailedLocalizationEvent(request
+@@ -1024,6 +1031,9 @@ LocalizerHeartbeatResponse update(
+         } catch (IOException e) {
+           LOG.error("local path for PRIVATE localization could not be " +
+             "found. Disks might have failed.", e);
++        } catch (IllegalArgumentException e) {
++          LOG.error("Inorrect path for PRIVATE localization."
++              + next.getResource().getFile(), e);
+         } catch (URISyntaxException e) {
+             //TODO fail? Already translated several times...
+         }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/TestResourceLocalizationService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/TestResourceLocalizationService.java
+index b8ab5bb..e3f0f96 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/TestResourceLocalizationService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/TestResourceLocalizationService.java
+@@ -1335,14 +1335,33 @@ public void testPublicResourceAddResourceExceptions() throws Exception {
+             user, appId);
+       Assert.assertNull(tracker.getLocalizedResource(pubReq));
+ 
+-      // test RejectedExecutionException
++      // test IllegalArgumentException
++      String name = Long.toHexString(r.nextLong());
++      URL url = getPath("/local/PRIVATE/" + name + "/");
++      final LocalResource rsrc =
++          BuilderUtils.newLocalResource(url, LocalResourceType.FILE,
++          LocalResourceVisibility.PUBLIC, r.nextInt(1024) + 1024L,
++          r.nextInt(1024) + 2048L);
++      final LocalResourceRequest pubReq1 = new LocalResourceRequest(rsrc);
++      Map<LocalResourceVisibility, Collection<LocalResourceRequest>> req1 =
++          new HashMap<LocalResourceVisibility, 
++          Collection<LocalResourceRequest>>();
++      req1.put(LocalResourceVisibility.PUBLIC,
++          Collections.singletonList(pubReq1));
+       Mockito
+         .doCallRealMethod()
+         .when(dirsHandlerSpy)
+         .getLocalPathForWrite(isA(String.class), Mockito.anyLong(),
+           Mockito.anyBoolean());
++      // send request
++      spyService.handle(new ContainerLocalizationRequestEvent(c, req1));
++      dispatcher.await();
++      tracker =
++          spyService.getLocalResourcesTracker(LocalResourceVisibility.PUBLIC,
++          user, appId);
++      Assert.assertNull(tracker.getLocalizedResource(pubReq));
+ 
+-      // shutdown the thread pool
++      // test RejectedExecutionException by shutting down the thread pool
+       PublicLocalizer publicLocalizer = spyService.getPublicLocalizer();
+       publicLocalizer.threadPool.shutdown();
+ 
+-- 
+1.7.9.5
+

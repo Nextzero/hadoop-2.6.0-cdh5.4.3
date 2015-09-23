@@ -1,0 +1,91 @@
+From 52557b45d2cc138980b03b87e42657e427cf32b0 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Mon, 8 Sep 2014 12:44:23 -0700
+Subject: [PATCH 146/596] HADOOP-11035. distcp on mr1(branch-1) fails with NPE
+ using a short relative source path. Contributed by
+ Zhihai Xu.
+
+(cherry picked from commit 4ca5ce88d5e88fd7368fa94b4886231b1ae9bb26)
+
+Conflicts:
+	CHANGES.txt
+	src/test/org/apache/hadoop/fs/TestCopyFiles.java
+	src/tools/org/apache/hadoop/tools/DistCp.java
+
+(cherry picked from commit 70dd4fff90eb4e686fbe03abcb8814354b21f771)
+(cherry picked from commit 942968f24c296e270a043cbeed524b711084b5d0)
+---
+ .../test/org/apache/hadoop/fs/TestCopyFiles.java   |   39 +++++++++++++++++++-
+ .../src/tools/org/apache/hadoop/tools/DistCp.java  |    4 +-
+ 2 files changed, 41 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/fs/TestCopyFiles.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/fs/TestCopyFiles.java
+index 6654c24..5e299e8 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/fs/TestCopyFiles.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/fs/TestCopyFiles.java
+@@ -266,7 +266,44 @@ public void testCopyFromLocalToLocal() throws Exception {
+     deldir(localfs, TEST_ROOT_DIR+"/destdat");
+     deldir(localfs, TEST_ROOT_DIR+"/srcdat");
+   }
+-  
++
++  /** copy files from local file system to local file system
++   *  using relative short path name to verify
++   *  DistCp supports relative short path name */
++  public void testCopyFromLocalToLocalUsingRelativePathName() throws Exception {
++    Configuration conf = new Configuration();
++    FileSystem localfs = FileSystem.get(LOCAL_FS_URI, conf);
++    MyFile[] files = createFiles(LOCAL_FS_URI, TEST_ROOT_DIR+"/srcdat");
++
++    // get DistCp source and destination relative path
++    Path src = new Path(TEST_ROOT_DIR+"/srcdat");
++    Path srcRoot = new Path(".");
++    FileStatus srcfilestat = localfs.getFileStatus(src);
++    FileStatus srcRootfilestat = localfs.getFileStatus(srcRoot);
++    // srcStr is file:/{hadoop-src-root}/build/test/data/srcdat
++    String srcStr = srcfilestat.getPath().toString();
++    // srcRootStr is file:/{hadoop-src-root}
++    String srcRootStr = srcRootfilestat.getPath().toString();
++    // +1 to remove /, srcRelativePath is build/test/data/srcdat
++    String srcRelativePath = srcStr.substring(srcRootStr.length() + 1);
++    // replace "srcdat" with "destdat" to get destRelativePath,
++    // destRelativePath is build/test/data/destdat
++    String destRelativePath = srcRelativePath.substring(0,
++        srcRelativePath.length() - "srcdat".length()) + "destdat";
++
++    // run DistCp with relative path source and destination parameters
++    ToolRunner.run(new DistCp(new Configuration()),
++        new String[] {srcRelativePath, destRelativePath});
++
++    // check result
++    assertTrue("Source and destination directories do not match.",
++        checkFiles(localfs, TEST_ROOT_DIR+"/destdat", files));
++
++    // clean up
++    deldir(localfs, TEST_ROOT_DIR+"/destdat");
++    deldir(localfs, TEST_ROOT_DIR+"/srcdat");
++  }
++
+   /** copy files from dfs file system to dfs file system */
+   public void testCopyFromDfsToDfs() throws Exception {
+     String namenode = null;
+diff --git a/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java b/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
+index 0d92a07..66c9912 100644
+--- a/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
++++ b/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
+@@ -1102,9 +1102,11 @@ private static boolean setup(Configuration conf, JobConf jobConf,
+     long fileCount = 0L, byteCount = 0L, cbsyncs = 0L;
+     try {
+       for(Iterator<Path> srcItr = args.srcs.iterator(); srcItr.hasNext(); ) {
+-        final Path src = srcItr.next();
++        Path src = srcItr.next();
+         FileSystem srcfs = src.getFileSystem(conf);
+         FileStatus srcfilestat = srcfs.getFileStatus(src);
++        // change src to full path to match child.getPath().
++        src = srcfilestat.getPath();
+         Path root = special && srcfilestat.isDir()? src: src.getParent();
+         if (srcfilestat.isDir()) {
+           ++srcCount;
+-- 
+1.7.9.5
+

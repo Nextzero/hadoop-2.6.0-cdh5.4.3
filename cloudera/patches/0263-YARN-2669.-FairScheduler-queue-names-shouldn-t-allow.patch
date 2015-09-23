@@ -1,0 +1,375 @@
+From 4f8086c7de7317459ee5f93ba366ea972625338e Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Fri, 21 Nov 2014 16:04:32 -0800
+Subject: [PATCH 263/596] YARN-2669. FairScheduler: queue names shouldn't
+ allow periods (Wei Yan via Sandy Ryza)
+
+(cherry picked from commit a128cca305cecb215a2eef2ef543d1bf9b23a41b)
+(cherry picked from commit 531d3b89d97eb6bace15d921f432c1041589dbe3)
+---
+ .../fair/AllocationFileLoaderService.java          |    6 +++
+ .../scheduler/fair/FairScheduler.java              |   11 +++++
+ .../scheduler/fair/QueuePlacementRule.java         |   30 +++++++++---
+ .../scheduler/fair/PeriodGroupsMapping.java        |   44 ++++++++++++++++++
+ .../fair/TestAllocationFileLoaderService.java      |   24 ++++++++++
+ .../scheduler/fair/TestFairScheduler.java          |   40 ++++++++++++++++
+ .../scheduler/fair/TestQueuePlacementPolicy.java   |   49 +++++++++++++++++++-
+ .../src/site/apt/FairScheduler.apt.vm              |   14 ++++--
+ 8 files changed, 208 insertions(+), 10 deletions(-)
+ create mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/PeriodGroupsMapping.java
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/AllocationFileLoaderService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/AllocationFileLoaderService.java
+index 2022510..e0e23e0 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/AllocationFileLoaderService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/AllocationFileLoaderService.java
+@@ -396,6 +396,12 @@ private void loadQueue(String parentName, Element element,
+       Map<FSQueueType, Set<String>> configuredQueues) 
+       throws AllocationConfigurationException {
+     String queueName = element.getAttribute("name");
++
++    if (queueName.contains(".")) {
++      throw new AllocationConfigurationException("Bad fair scheduler config "
++          + "file: queue name (" + queueName + ") shouldn't contain period.");
++    }
++
+     if (parentName != null) {
+       queueName = parentName + "." + queueName;
+     }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
+index dbe0b12..17702d4 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
+@@ -584,6 +584,17 @@ protected synchronized void addApplication(ApplicationId applicationId,
+       return;
+     }
+ 
++    if (queueName.startsWith(".") || queueName.endsWith(".")) {
++      String message = "Reject application " + applicationId
++          + " submitted by user " + user + " with an illegal queue name "
++          + queueName + ". "
++          + "The queue name cannot start/end with period.";
++      LOG.info(message);
++      rmContext.getDispatcher().getEventHandler()
++          .handle(new RMAppRejectedEvent(applicationId, message));
++      return;
++    }
++
+     RMApp rmApp = rmContext.getRMApps().get(applicationId);
+     FSLeafQueue queue = assignToQueue(rmApp, queueName, user);
+     if (queue == null) {
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/QueuePlacementRule.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/QueuePlacementRule.java
+index 056df57..80de315 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/QueuePlacementRule.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/QueuePlacementRule.java
+@@ -23,6 +23,8 @@
+ import java.util.Map;
+ import java.util.Set;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.classification.InterfaceStability.Unstable;
+ import org.apache.hadoop.security.Groups;
+@@ -38,7 +40,9 @@
+ @Unstable
+ public abstract class QueuePlacementRule {
+   protected boolean create;
+-  
++  public static final Log LOG =
++      LogFactory.getLog(QueuePlacementRule.class.getName());
++
+   /**
+    * Initializes the rule with any arguments.
+    * 
+@@ -125,7 +129,7 @@ protected abstract String getQueueForApp(String requestedQueue, String user,
+     @Override
+     protected String getQueueForApp(String requestedQueue, String user,
+         Groups groups, Map<FSQueueType, Set<String>> configuredQueues) {
+-      return "root." + user;
++      return "root." + cleanName(user);
+     }
+     
+     @Override
+@@ -142,7 +146,7 @@ public boolean isTerminal() {
+     protected String getQueueForApp(String requestedQueue, String user,
+         Groups groups, Map<FSQueueType, Set<String>> configuredQueues)
+         throws IOException {
+-      return "root." + groups.getGroups(user).get(0);
++      return "root." + cleanName(groups.getGroups(user).get(0));
+     }
+     
+     @Override
+@@ -164,11 +168,11 @@ protected String getQueueForApp(String requestedQueue, String user,
+         throws IOException {
+       List<String> groupNames = groups.getGroups(user);
+       for (int i = 1; i < groupNames.size(); i++) {
+-        String group = groupNames.get(i);
++        String group = cleanName(groupNames.get(i));
+         if (configuredQueues.get(FSQueueType.LEAF).contains("root." + group)
+             || configuredQueues.get(FSQueueType.PARENT).contains(
+                 "root." + group)) {
+-          return "root." + groupNames.get(i);
++          return "root." + group;
+         }
+       }
+       
+@@ -241,7 +245,7 @@ protected String getQueueForApp(String requestedQueue, String user,
+         if (configuredQueues.get(FSQueueType.LEAF).contains(queueName)) {
+           return "";
+         }
+-        return queueName + "." + user;
++        return queueName + "." + cleanName(user);
+       }
+       return queueName;
+     }
+@@ -339,4 +343,18 @@ public boolean isTerminal() {
+       return true;
+     }
+   }
++
++  /**
++   * Replace the periods in the username or groupname with "_dot_".
++   */
++  protected String cleanName(String name) {
++    if (name.contains(".")) {
++      String converted = name.replaceAll("\\.", "_dot_");
++      LOG.warn("Name " + name + " is converted to " + converted
++          + " when it is used as a queue name.");
++      return converted;
++    } else {
++      return name;
++    }
++  }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/PeriodGroupsMapping.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/PeriodGroupsMapping.java
+new file mode 100644
+index 0000000..9586381
+--- /dev/null
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/PeriodGroupsMapping.java
+@@ -0,0 +1,44 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair;
++
++import org.apache.hadoop.security.GroupMappingServiceProvider;
++
++import java.io.IOException;
++import java.util.Arrays;
++import java.util.List;
++
++public class PeriodGroupsMapping implements GroupMappingServiceProvider {
++  
++  @Override
++  public List<String> getGroups(String user) {
++    return Arrays.asList(user + ".group", user + "subgroup1", user + "subgroup2");
++  }
++
++  @Override
++  public void cacheGroupsRefresh() throws IOException {
++    throw new UnsupportedOperationException();
++  }
++
++  @Override
++  public void cacheGroupsAdd(List<String> groups) throws IOException {
++    throw new UnsupportedOperationException();
++  }
++
++}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestAllocationFileLoaderService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestAllocationFileLoaderService.java
+index 656e20d..9a66a94 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestAllocationFileLoaderService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestAllocationFileLoaderService.java
+@@ -525,6 +525,30 @@ public void testQueueAlongsideRoot() throws Exception {
+     allocLoader.setReloadListener(confHolder);
+     allocLoader.reloadAllocations();
+   }
++
++  /**
++   * Verify that you can't include periods as the queue name in the allocations
++   * file.
++   */
++  @Test (expected = AllocationConfigurationException.class)
++  public void testQueueNameContainingPeriods() throws Exception {
++    Configuration conf = new Configuration();
++    conf.set(FairSchedulerConfiguration.ALLOCATION_FILE, ALLOC_FILE);
++
++    PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
++    out.println("<?xml version=\"1.0\"?>");
++    out.println("<allocations>");
++    out.println("<queue name=\"parent1.child1\">");
++    out.println("</queue>");
++    out.println("</allocations>");
++    out.close();
++
++    AllocationFileLoaderService allocLoader = new AllocationFileLoaderService();
++    allocLoader.init(conf);
++    ReloadListener confHolder = new ReloadListener();
++    allocLoader.setReloadListener(confHolder);
++    allocLoader.reloadAllocations();
++  }
+   
+   private class ReloadListener implements AllocationFileLoaderService.Listener {
+     public AllocationConfiguration allocConf;
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java
+index 0b14499..85fbc63 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java
+@@ -916,6 +916,46 @@ public void testEmptyQueueName() throws Exception {
+   }
+ 
+   @Test
++  public void testQueueuNameWithPeriods() throws Exception {
++    scheduler.init(conf);
++    scheduler.start();
++    scheduler.reinitialize(conf, resourceManager.getRMContext());
++
++    // only default queue
++    assertEquals(1, scheduler.getQueueManager().getLeafQueues().size());
++
++    // submit app with queue name (.A)
++    ApplicationAttemptId appAttemptId1 = createAppAttemptId(1, 1);
++    AppAddedSchedulerEvent appAddedEvent1 =
++        new AppAddedSchedulerEvent(appAttemptId1.getApplicationId(), ".A", "user1");
++    scheduler.handle(appAddedEvent1);
++    // submission rejected
++    assertEquals(1, scheduler.getQueueManager().getLeafQueues().size());
++    assertNull(scheduler.getSchedulerApp(appAttemptId1));
++    assertEquals(0, resourceManager.getRMContext().getRMApps().size());
++
++    // submit app with queue name (A.)
++    ApplicationAttemptId appAttemptId2 = createAppAttemptId(2, 1);
++    AppAddedSchedulerEvent appAddedEvent2 =
++        new AppAddedSchedulerEvent(appAttemptId2.getApplicationId(), "A.", "user1");
++    scheduler.handle(appAddedEvent2);
++    // submission rejected
++    assertEquals(1, scheduler.getQueueManager().getLeafQueues().size());
++    assertNull(scheduler.getSchedulerApp(appAttemptId2));
++    assertEquals(0, resourceManager.getRMContext().getRMApps().size());
++
++    // submit app with queue name (A.B)
++    ApplicationAttemptId appAttemptId3 = createAppAttemptId(3, 1);
++    AppAddedSchedulerEvent appAddedEvent3 =
++        new AppAddedSchedulerEvent(appAttemptId3.getApplicationId(), "A.B", "user1");
++    scheduler.handle(appAddedEvent3);
++    // submission accepted
++    assertEquals(2, scheduler.getQueueManager().getLeafQueues().size());
++    assertNull(scheduler.getSchedulerApp(appAttemptId3));
++    assertEquals(0, resourceManager.getRMContext().getRMApps().size());
++  }
++
++  @Test
+   public void testAssignToQueue() throws Exception {
+     conf.set(FairSchedulerConfiguration.USER_AS_DEFAULT_QUEUE, "true");
+     scheduler.init(conf);
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestQueuePlacementPolicy.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestQueuePlacementPolicy.java
+index e20b0c3..32dba5c 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestQueuePlacementPolicy.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestQueuePlacementPolicy.java
+@@ -345,7 +345,54 @@ public void testNestedUserQueueDefaultRule() throws Exception {
+     assertEquals("root.parentq.user1",
+         policy.assignAppToQueue("root.default", "user1"));
+   }
+-  
++
++  @Test
++  public void testUserContainsPeriod() throws Exception {
++    // This test covers the user case where the username contains periods.
++    StringBuffer sb = new StringBuffer();
++    sb.append("<queuePlacementPolicy>");
++    sb.append("  <rule name='user' />");
++    sb.append("</queuePlacementPolicy>");
++    QueuePlacementPolicy policy = parse(sb.toString());
++    assertEquals("root.first_dot_last",
++        policy.assignAppToQueue("default", "first.last"));
++
++    sb = new StringBuffer();
++    sb.append("<queuePlacementPolicy>");
++    sb.append("  <rule name='specified' create='false' />");
++    sb.append("  <rule name='nestedUserQueue'>");
++    sb.append("       <rule name='default'/>");
++    sb.append("  </rule>");
++    sb.append("  <rule name='default' />");
++    sb.append("</queuePlacementPolicy>");
++    policy = parse(sb.toString());
++    assertEquals("root.default.first_dot_last",
++        policy.assignAppToQueue("root.default", "first.last"));
++  }
++
++  @Test
++  public void testGroupContainsPeriod() throws Exception {
++    StringBuffer sb = new StringBuffer();
++    sb.append("<queuePlacementPolicy>");
++    sb.append("  <rule name='specified' create='false' />");
++    sb.append("  <rule name='nestedUserQueue'>");
++    sb.append("       <rule name='primaryGroup'/>");
++    sb.append("  </rule>");
++    sb.append("  <rule name='default' />");
++    sb.append("</queuePlacementPolicy>");
++
++    conf.setClass(CommonConfigurationKeys.HADOOP_SECURITY_GROUP_MAPPING,
++        PeriodGroupsMapping.class, GroupMappingServiceProvider.class);
++    // User queue would be created under primary group queue, and the period
++    // in the group name should be converted into _dot_
++    QueuePlacementPolicy policy = parse(sb.toString());
++    assertEquals("root.user1_dot_group.user1",
++        policy.assignAppToQueue("root.default", "user1"));
++
++    conf.setClass(CommonConfigurationKeys.HADOOP_SECURITY_GROUP_MAPPING,
++        SimpleGroupsMapping.class, GroupMappingServiceProvider.class);
++  }
++
+   private QueuePlacementPolicy parse(String str) throws Exception {
+     // Read and parse the allocations file.
+     DocumentBuilderFactory docBuilderFactory = DocumentBuilderFactory
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/apt/FairScheduler.apt.vm b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/apt/FairScheduler.apt.vm
+index 2ae8722..13bf7f9 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/apt/FairScheduler.apt.vm
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/apt/FairScheduler.apt.vm
+@@ -321,17 +321,25 @@ Allocation file format
+    continue.  Valid rules are:
+ 
+      * specified: the app is placed into the queue it requested.  If the app
+-       requested no queue, i.e. it specified "default", we continue.
++       requested no queue, i.e. it specified "default", we continue. If the app
++       requested a queue name starting or ending with period, i.e. names like
++       ".q1" or "q1." will be rejected.
+ 
+      * user: the app is placed into a queue with the name of the user who
+-       submitted it.
++       submitted it. Periods in the username will be replace with "_dot_",
++       i.e. the queue name for user "first.last" is "first_dot_last".
+ 
+      * primaryGroup: the app is placed into a queue with the name of the
+-       primary group of the user who submitted it.
++       primary group of the user who submitted it. Periods in the group name
++       will be replaced with "_dot_", i.e. the queue name for group "one.two"
++       is "one_dot_two".
+ 
+      * secondaryGroupExistingQueue: the app is placed into a queue with a name
+        that matches a secondary group of the user who submitted it. The first
+        secondary group that matches a configured queue will be selected.
++       Periods in group names will be replaced with "_dot_", i.e. a user with
++       "one.two" as one of their secondary groups would be placed into the
++       "one_dot_two" queue, if such a queue exists.
+ 
+      * nestedUserQueue : the app is placed into a queue with the name of the user
+        under the queue suggested by the nested rule. This is similar to ‘user’
+-- 
+1.7.9.5
+

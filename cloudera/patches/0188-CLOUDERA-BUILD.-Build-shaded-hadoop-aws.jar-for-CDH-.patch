@@ -1,0 +1,69 @@
+From b63e4aee42c1617bb87873b3e12f821d31b60b43 Mon Sep 17 00:00:00 2001
+From: Lei Xu <lei@cloudera.com>
+Date: Thu, 2 Oct 2014 19:25:38 -0700
+Subject: [PATCH 188/596] CLOUDERA-BUILD. Build shaded hadoop-aws.jar for CDH
+ 5.2.0 (CDH-22019)
+
+Shade all dependencies of hadoop-aws, except hadoop-common into its jar
+file to avoid expose conflicted jackson 2 jar to other projects.
+
+(cherry picked from commit b7126782d0c327396f8e351cf442149fc03b1519)
+---
+ hadoop-tools/hadoop-aws/pom.xml |   41 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 41 insertions(+)
+
+diff --git a/hadoop-tools/hadoop-aws/pom.xml b/hadoop-tools/hadoop-aws/pom.xml
+index bb0ae29..ba2bff8 100644
+--- a/hadoop-tools/hadoop-aws/pom.xml
++++ b/hadoop-tools/hadoop-aws/pom.xml
+@@ -83,6 +83,47 @@
+           <dependencyLocationsEnabled>false</dependencyLocationsEnabled>
+         </configuration>
+       </plugin>
++      <plugin>
++        <groupId>org.apache.maven.plugins</groupId>
++        <artifactId>maven-shade-plugin</artifactId>
++        <executions>
++          <execution>
++            <phase>package</phase>
++            <goals>
++              <goal>shade</goal>
++            </goals>
++            <configuration>
++              <createDependencyReducedPom>false</createDependencyReducedPom>
++              <artifactSet>
++                <includes>
++                  <include>com.amazonaws:aws-java-sdk:jar:*</include>
++                  <include>com.fasterxml.jackson.*:*</include>
++                  <include>joda-time:joda-time:jar:*</include>
++                  <include>org.apache.httpcomponents:*:jar:*</include>
++                </includes>
++              </artifactSet>
++              <relocations>
++                <relocation>
++                  <pattern>com.fasterxml.jackson</pattern>
++                  <shadedPattern>com.cloudera.com.fasterxml.jackson</shadedPattern>
++                </relocation>
++                <relocation>
++                  <pattern>com.amazonaws</pattern>
++                  <shadedPattern>com.cloudera.com.amazonaws</shadedPattern>
++                </relocation>
++                <relocation>
++                  <pattern>org.apache.http</pattern>
++                  <shadedPattern>com.cloudera.org.apache.http</shadedPattern>
++                </relocation>
++                <relocation>
++                  <pattern>org.joda</pattern>
++                  <shadedPattern>com.cloudera.org.joda</shadedPattern>
++                </relocation>
++              </relocations>
++            </configuration>
++          </execution>
++        </executions>
++      </plugin>
+     </plugins>
+   </build>
+ 
+-- 
+1.7.9.5
+

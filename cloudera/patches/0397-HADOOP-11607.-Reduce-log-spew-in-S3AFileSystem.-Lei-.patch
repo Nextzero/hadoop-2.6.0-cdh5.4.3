@@ -1,0 +1,49 @@
+From 59542413327549031e09d7b3e825c2c9692a4518 Mon Sep 17 00:00:00 2001
+From: Steve Loughran <stevel@apache.org>
+Date: Fri, 20 Feb 2015 20:45:05 +0000
+Subject: [PATCH 397/596] HADOOP-11607. Reduce log spew in S3AFileSystem. (Lei
+ (Eddy) Xu via stevel) (cherry picked from commit
+ 4276f8b315c5657727135b2fb0f2fa3de823bd76)
+
+---
+ .../org/apache/hadoop/fs/s3a/S3AFileSystem.java    |   10 +++++++---
+ 1 file changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+index c66ffef..0b22e17 100644
+--- a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
++++ b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+@@ -293,7 +293,9 @@ private Path keyToPath(String key) {
+   public FSDataInputStream open(Path f, int bufferSize)
+       throws IOException {
+ 
+-    LOG.info("Opening '" + f + "' for reading");
++    if (LOG.isDebugEnabled()) {
++      LOG.debug("Opening '{}' for reading.", f);
++    }
+     final FileStatus fileStatus = getFileStatus(f);
+     if (fileStatus.isDirectory()) {
+       throw new FileNotFoundException("Can't open " + f + " because it is a directory");
+@@ -364,7 +366,9 @@ public FSDataOutputStream append(Path f, int bufferSize,
+    * @return true if rename is successful
+    */
+   public boolean rename(Path src, Path dst) throws IOException {
+-    LOG.info("Rename path " + src + " to " + dst);
++    if (LOG.isDebugEnabled()) {
++      LOG.debug("Rename path {} to {}", src, dst);
++    }
+ 
+     String srcKey = pathToKey(src);
+     String dstKey = pathToKey(dst);
+@@ -380,7 +384,7 @@ public boolean rename(Path src, Path dst) throws IOException {
+     try {
+       srcStatus = getFileStatus(src);
+     } catch (FileNotFoundException e) {
+-      LOG.info("rename: src not found " + src);
++      LOG.error("rename: src not found {}", src);
+       return false;
+     }
+ 
+-- 
+1.7.9.5
+

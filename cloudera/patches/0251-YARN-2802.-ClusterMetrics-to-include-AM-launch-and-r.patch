@@ -1,0 +1,179 @@
+From b8f199c000f031fadc52f6c972f4264d5174174e Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Wed, 19 Nov 2014 19:49:36 -0800
+Subject: [PATCH 251/596] YARN-2802. ClusterMetrics to include AM launch and
+ register delays. (Zhihai Xu via kasha)
+
+(cherry picked from commit c90fb84aaa902e6676de65d0016dee3a5414eb95)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+
+(cherry picked from commit 81224c62b83341548578eb83ffdffd16d25e0742)
+---
+ .../server/resourcemanager/ClusterMetrics.java     |   13 ++++-
+ .../rmapp/attempt/RMAppAttemptImpl.java            |   15 ++++-
+ .../server/resourcemanager/TestClusterMetrics.java |   60 ++++++++++++++++++++
+ 3 files changed, 85 insertions(+), 3 deletions(-)
+ create mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestClusterMetrics.java
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/ClusterMetrics.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/ClusterMetrics.java
+index 942ec81..5fa36bc 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/ClusterMetrics.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/ClusterMetrics.java
+@@ -30,6 +30,7 @@
+ import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
+ import org.apache.hadoop.metrics2.lib.MetricsRegistry;
+ import org.apache.hadoop.metrics2.lib.MutableGaugeInt;
++import org.apache.hadoop.metrics2.lib.MutableRate;
+ import com.google.common.annotations.VisibleForTesting;
+ 
+ @InterfaceAudience.Private
+@@ -43,7 +44,9 @@
+   @Metric("# of lost NMs") MutableGaugeInt numLostNMs;
+   @Metric("# of unhealthy NMs") MutableGaugeInt numUnhealthyNMs;
+   @Metric("# of Rebooted NMs") MutableGaugeInt numRebootedNMs;
+-  
++  @Metric("AM container launch delay") MutableRate aMLaunchDelay;
++  @Metric("AM register delay") MutableRate aMRegisterDelay;
++
+   private static final MetricsInfo RECORD_INFO = info("ClusterMetrics",
+   "Metrics for the Yarn Cluster");
+   
+@@ -147,4 +150,12 @@ public void decrNumActiveNodes() {
+     numActiveNMs.decr();
+   }
+ 
++  public void addAMLaunchDelay(long delay) {
++    aMLaunchDelay.add(delay);
++  }
++
++  public void addAMRegisterDelay(long delay) {
++    aMRegisterDelay.add(delay);
++  }
++
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/attempt/RMAppAttemptImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/attempt/RMAppAttemptImpl.java
+index 0d7e334..a80167f 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/attempt/RMAppAttemptImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/attempt/RMAppAttemptImpl.java
+@@ -65,6 +65,7 @@
+ import org.apache.hadoop.yarn.security.AMRMTokenIdentifier;
+ import org.apache.hadoop.yarn.security.client.ClientToAMTokenIdentifier;
+ import org.apache.hadoop.yarn.server.resourcemanager.ApplicationMasterService;
++import org.apache.hadoop.yarn.server.resourcemanager.ClusterMetrics;
+ import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
+ import org.apache.hadoop.yarn.server.resourcemanager.RMServerUtils;
+ import org.apache.hadoop.yarn.server.resourcemanager.amlauncher.AMLauncherEvent;
+@@ -152,8 +153,10 @@
+   private String proxiedTrackingUrl = "N/A";
+   private long startTime = 0;
+   private long finishTime = 0;
++  private long launchAMStartTime = 0;
++  private long launchAMEndTime = 0;
+ 
+-  // Set to null initially. Will eventually get set 
++  // Set to null initially. Will eventually get set
+   // if an RMAppAttemptUnregistrationEvent occurs
+   private FinalApplicationStatus finalStatus = null;
+   private final StringBuilder diagnostics = new StringBuilder();
+@@ -1261,6 +1264,12 @@ public void transition(RMAppAttemptImpl appAttempt,
+     @Override
+     public void transition(RMAppAttemptImpl appAttempt,
+                             RMAppAttemptEvent event) {
++      if (event.getType() == RMAppAttemptEventType.LAUNCHED) {
++        appAttempt.launchAMEndTime = System.currentTimeMillis();
++        long delay = appAttempt.launchAMEndTime -
++            appAttempt.launchAMStartTime;
++        ClusterMetrics.getMetrics().addAMLaunchDelay(delay);
++      }
+       // Register with AMLivelinessMonitor
+       appAttempt.attemptLaunched();
+ 
+@@ -1345,7 +1354,8 @@ public void transition(RMAppAttemptImpl appAttempt,
+     @Override
+     public void transition(RMAppAttemptImpl appAttempt,
+         RMAppAttemptEvent event) {
+-
++      long delay = System.currentTimeMillis() - appAttempt.launchAMEndTime;
++      ClusterMetrics.getMetrics().addAMRegisterDelay(delay);
+       RMAppAttemptRegistrationEvent registrationEvent
+           = (RMAppAttemptRegistrationEvent) event;
+       appAttempt.host = registrationEvent.getHost();
+@@ -1822,6 +1832,7 @@ public YarnApplicationAttemptState createApplicationAttemptState() {
+   }
+ 
+   private void launchAttempt(){
++    launchAMStartTime = System.currentTimeMillis();
+     // Send event to launch the AM Container
+     eventHandler.handle(new AMLauncherEvent(AMLauncherEventType.LAUNCH, this));
+   }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestClusterMetrics.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestClusterMetrics.java
+new file mode 100644
+index 0000000..5b9105f
+--- /dev/null
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestClusterMetrics.java
+@@ -0,0 +1,60 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.yarn.server.resourcemanager;
++
++import org.apache.hadoop.metrics2.MetricsSystem;
++import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Assert;
++import org.junit.Test;
++
++public class TestClusterMetrics {
++
++  private ClusterMetrics metrics;
++  /**
++   * Test aMLaunchDelay and aMRegisterDelay Metrics
++   */
++  @Test
++  public void testAmMetrics() throws Exception {
++    assert(metrics != null);
++    Assert.assertTrue(!metrics.aMLaunchDelay.changed());
++    Assert.assertTrue(!metrics.aMRegisterDelay.changed());
++    metrics.addAMLaunchDelay(1);
++    metrics.addAMRegisterDelay(1);
++    Assert.assertTrue(metrics.aMLaunchDelay.changed());
++    Assert.assertTrue(metrics.aMRegisterDelay.changed());
++  }
++
++  @Before
++  public void setup() {
++    DefaultMetricsSystem.initialize("ResourceManager");
++    metrics = ClusterMetrics.getMetrics();
++  }
++
++  @After
++  public void tearDown() {
++    ClusterMetrics.destroy();
++
++    MetricsSystem ms = DefaultMetricsSystem.instance();
++    if (ms.getSource("ClusterMetrics") != null) {
++      DefaultMetricsSystem.shutdown();
++    }
++  }
++}
+-- 
+1.7.9.5
+

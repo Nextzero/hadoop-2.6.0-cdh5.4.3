@@ -1,0 +1,56 @@
+From 437974a57160482a029a66b3130dff50b0204e68 Mon Sep 17 00:00:00 2001
+From: Sanford Ryza <sandy@apache.org>
+Date: Wed, 7 Aug 2013 19:59:05 +0000
+Subject: [PATCH 096/596] MR1: MAPREDUCE-5450. Unnecessary Configuration
+ instantiation in IFileInputStream slows down merge.
+ (Stanislav Barton and Ted Yu via Sandy Ryza)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1511461 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 53dcb4c56c7bedf382227be43fcbbb5be74bdb67)
+
+Conflicts:
+
+	src/mapred/org/apache/hadoop/mapred/IFile.java
+	src/mapred/org/apache/hadoop/mapred/ReduceTask.java
+(cherry picked from commit 2773f8a300d03bee696def154c2f9f04858e038e)
+
+(cherry picked from commit 34f998a417fec227674b6cb76fda6bdad07178a4)
+(cherry picked from commit 02f0dac155085a85462addeeec7455f643d52bed)
+(cherry picked from commit 4aba5ef71eddf66303bf682a4b9ecda4d397271b)
+---
+ .../src/mapred/org/apache/hadoop/mapred/IFile.java |    4 ++--
+ .../org/apache/hadoop/mapred/ReduceTask.java       |    2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFile.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFile.java
+index 7980230..fb08b6f 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFile.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFile.java
+@@ -475,9 +475,9 @@ public void close() throws IOException {
+     TaskAttemptID taskAttemptId;
+     
+     public InMemoryReader(RamManager ramManager, TaskAttemptID taskAttemptId,
+-                          byte[] data, int start, int length)
++                          byte[] data, int start, int length, Configuration conf)
+                           throws IOException {
+-      super(null, null, length - start, null, null);
++      super(conf, null, length - start, null, null);
+       this.ramManager = ramManager;
+       this.taskAttemptId = taskAttemptId;
+       
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ReduceTask.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ReduceTask.java
+index 3c0f83c..f3c9a34 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ReduceTask.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ReduceTask.java
+@@ -2415,7 +2415,7 @@ private long createInMemorySegments(
+           fullSize -= mo.data.length;
+           Reader<K, V> reader = 
+             new InMemoryReader<K, V>(ramManager, mo.mapAttemptId,
+-                                     mo.data, 0, mo.data.length);
++                                     mo.data, 0, mo.data.length, conf);
+           Segment<K, V> segment = 
+             new Segment<K, V>(reader, true);
+           inMemorySegments.add(segment);
+-- 
+1.7.9.5
+

@@ -1,0 +1,639 @@
+From d70904abf73f756f70e7e85d7651e682d60b638e Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Mon, 12 Aug 2013 10:49:48 -0700
+Subject: [PATCH 181/596] CLOUDERA-BUILD. Revert "svn merge -c 1507259 from
+ trunk for HADOOP-9756. Remove the deprecated
+ getServer(..) methods from RPC."
+
+This reverts commit a004a2812d9109d995d9a7870b772c24a21e69ba.
+
+Conflicts:
+
+	hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPC.java
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/NameNodeProxies.java
+
+(cherry picked from commit 561241771c52496b78b38460443fc80b34c534ec)
+(cherry picked from commit 12c785414fb08d3005831d82ac979deebf7718ec)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPC.java
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/NameNodeProxies.java
+
+(cherry picked from commit 0067065d8bf17d348471093d7c255f8f9b14bf55)
+---
+ hadoop-common-project/hadoop-common/CHANGES.txt    |    3 -
+ .../java/org/apache/hadoop/conf/Configuration.java |    2 +-
+ .../src/main/java/org/apache/hadoop/ipc/RPC.java   |   98 ++++++++++++++++++++
+ .../test/java/org/apache/hadoop/ipc/TestIPC.java   |   48 +++++-----
+ .../apache/hadoop/ipc/TestIPCServerResponder.java  |    9 +-
+ .../test/java/org/apache/hadoop/ipc/TestRPC.java   |   45 +++++----
+ .../apache/hadoop/ipc/TestRPCCompatibility.java    |    2 +-
+ .../org/apache/hadoop/ipc/TestSocketFactory.java   |    2 +-
+ .../hadoop/mapred/TaskAttemptListenerImpl.java     |   15 ++-
+ .../org/apache/hadoop/mapred/TestAuditLogger.java  |    5 +-
+ 10 files changed, 155 insertions(+), 74 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/CHANGES.txt b/hadoop-common-project/hadoop-common/CHANGES.txt
+index 570e53a..a205c2a 100644
+--- a/hadoop-common-project/hadoop-common/CHANGES.txt
++++ b/hadoop-common-project/hadoop-common/CHANGES.txt
+@@ -2052,9 +2052,6 @@ Release 2.1.0-beta - 2013-08-22
+     HADOOP-9760. Move GSet and related classes to common from HDFS.
+     (suresh)
+ 
+-    HADOOP-9756. Remove the deprecated getServer(..) methods from RPC.
+-    (Junping Du via szetszwo)
+-
+     HADOOP-9770. Make RetryCache#state non volatile. (suresh)
+ 
+     HADOOP-9786. RetryInvocationHandler#isRpcInvocation should support 
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/conf/Configuration.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/conf/Configuration.java
+index 1276865..468f8a0 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/conf/Configuration.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/conf/Configuration.java
+@@ -2592,7 +2592,7 @@ private synchronized Document asXmlDocument() throws IOException {
+     doc.appendChild(conf);
+     conf.appendChild(doc.createTextNode("\n"));
+     handleDeprecation(); //ensure properties is set and deprecation is handled
+-    for (Enumeration<Object> e = properties.keys(); e.hasMoreElements();) {
++    for (Enumeration e = properties.keys(); e.hasMoreElements();) {
+       String name = (String)e.nextElement();
+       Object object = properties.get(name);
+       String value = null;
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/RPC.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/RPC.java
+index 7f6d9b6..9971c7f 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/RPC.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/RPC.java
+@@ -676,6 +676,104 @@ public static void stopProxy(Object proxy) {
+             + proxy.getClass());
+   }
+ 
++  /** Construct a server for a protocol implementation instance listening on a
++   * port and address.
++   * @deprecated Please use {@link Builder} to build the {@link Server}
++   */
++  @Deprecated
++  public static Server getServer(final Object instance, final String bindAddress, final int port, Configuration conf) 
++    throws IOException {
++    return getServer(instance, bindAddress, port, 1, false, conf);
++  }
++
++  /** Construct a server for a protocol implementation instance listening on a
++   * port and address.
++   * @deprecated Please use {@link Builder} to build the {@link Server}
++   */
++  @Deprecated
++  public static Server getServer(final Object instance, final String bindAddress, final int port,
++                                 final int numHandlers,
++                                 final boolean verbose, Configuration conf) 
++    throws IOException {
++    return getServer(instance.getClass(),         // use impl class for protocol
++                     instance, bindAddress, port, numHandlers, false, conf, null,
++                     null);
++  }
++
++  /** Construct a server for a protocol implementation instance.
++   *  @deprecated Please use {@link Builder} to build the {@link Server}
++   */
++  @Deprecated
++  public static Server getServer(Class<?> protocol,
++                                 Object instance, String bindAddress,
++                                 int port, Configuration conf) 
++    throws IOException {
++    return getServer(protocol, instance, bindAddress, port, 1, false, conf, null,
++        null);
++  }
++
++  /** Construct a server for a protocol implementation instance.
++   * @deprecated Please use {@link Builder} to build the {@link Server}
++   */
++  @Deprecated
++  public static Server getServer(Class<?> protocol,
++                                 Object instance, String bindAddress, int port,
++                                 int numHandlers,
++                                 boolean verbose, Configuration conf) 
++    throws IOException {
++    
++    return getServer(protocol, instance, bindAddress, port, numHandlers, verbose,
++                 conf, null, null);
++  }
++  
++  /** Construct a server for a protocol implementation instance. 
++   *  @deprecated Please use {@link Builder} to build the {@link Server}
++   */
++  @Deprecated
++  public static Server getServer(Class<?> protocol,
++                                 Object instance, String bindAddress, int port,
++                                 int numHandlers,
++                                 boolean verbose, Configuration conf,
++                                 SecretManager<? extends TokenIdentifier> secretManager) 
++    throws IOException {
++    return getServer(protocol, instance, bindAddress, port, numHandlers, verbose,
++        conf, secretManager, null);
++  }
++  
++  /**
++   *  @deprecated Please use {@link Builder} to build the {@link Server}
++   */
++  @Deprecated
++  public static Server getServer(Class<?> protocol,
++      Object instance, String bindAddress, int port,
++      int numHandlers,
++      boolean verbose, Configuration conf,
++      SecretManager<? extends TokenIdentifier> secretManager,
++      String portRangeConfig) 
++  throws IOException {
++    return getProtocolEngine(protocol, conf)
++      .getServer(protocol, instance, bindAddress, port, numHandlers, -1, -1,
++                 verbose, conf, secretManager, portRangeConfig);
++  }
++
++  /** Construct a server for a protocol implementation instance.
++   *  @deprecated Please use {@link Builder} to build the {@link Server}
++   */
++  @Deprecated
++  public static <PROTO extends VersionedProtocol, IMPL extends PROTO> 
++        Server getServer(Class<PROTO> protocol,
++                                 IMPL instance, String bindAddress, int port,
++                                 int numHandlers, int numReaders, int queueSizePerHandler,
++                                 boolean verbose, Configuration conf,
++                                 SecretManager<? extends TokenIdentifier> secretManager) 
++    throws IOException {
++    
++    return getProtocolEngine(protocol, conf)
++      .getServer(protocol, instance, bindAddress, port, numHandlers,
++                 numReaders, queueSizePerHandler, verbose, conf, secretManager,
++                 null);
++  }
++
+   /**
+    * Class to construct instances of RPC server with specific options.
+    */
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestIPC.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestIPC.java
+index 02516a1..9354a02 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestIPC.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestIPC.java
+@@ -228,14 +228,14 @@ public ConnectionId getConnectionId() {
+   }
+   
+   @Test(timeout=60000)
+-  public void testSerial() throws IOException, InterruptedException {
++  public void testSerial() throws Exception {
+     internalTestSerial(3, false, 2, 5, 100);
+     internalTestSerial(3, true, 2, 5, 10);
+   }
+ 
+   public void internalTestSerial(int handlerCount, boolean handlerSleep,
+                          int clientCount, int callerCount, int callCount)
+-    throws IOException, InterruptedException {
++    throws Exception {
+     Server server = new TestServer(handlerCount, handlerSleep);
+     InetSocketAddress addr = NetUtils.getConnectAddress(server);
+     server.start();
+@@ -261,7 +261,7 @@ public void internalTestSerial(int handlerCount, boolean handlerSleep,
+   }
+ 	
+   @Test(timeout=60000)
+-  public void testStandAloneClient() throws IOException {
++  public void testStandAloneClient() throws Exception {
+     Client client = new Client(LongWritable.class, conf);
+     InetSocketAddress address = new InetSocketAddress("127.0.0.1", 10);
+     try {
+@@ -361,8 +361,7 @@ private void doErrorTest(
+       Class<? extends LongWritable> clientParamClass,
+       Class<? extends LongWritable> serverParamClass,
+       Class<? extends LongWritable> serverResponseClass,
+-      Class<? extends LongWritable> clientResponseClass) 
+-      throws IOException, InstantiationException, IllegalAccessException {
++      Class<? extends LongWritable> clientResponseClass) throws Exception {
+     
+     // start server
+     Server server = new TestServer(1, false,
+@@ -493,7 +492,7 @@ private static void assertExceptionContains(
+    * to the client.
+    */
+   @Test(timeout=60000)
+-  public void testSocketFactoryException() throws IOException {
++  public void testSocketFactoryException() throws Exception {
+     SocketFactory mockFactory = mock(SocketFactory.class);
+     doThrow(new IOException("Injected fault")).when(mockFactory).createSocket();
+     Client client = new Client(LongWritable.class, conf, mockFactory);
+@@ -515,7 +514,7 @@ public void testSocketFactoryException() throws IOException {
+    * HADOOP-7428.
+    */
+   @Test(timeout=60000)
+-  public void testRTEDuringConnectionSetup() throws IOException {
++  public void testRTEDuringConnectionSetup() throws Exception {
+     // Set up a socket factory which returns sockets which
+     // throw an RTE when setSoTimeout is called.
+     SocketFactory spyFactory = spy(NetUtils.getDefaultSocketFactory(conf));
+@@ -556,7 +555,7 @@ public Socket answer(InvocationOnMock invocation) throws Throwable {
+   }
+   
+   @Test(timeout=60000)
+-  public void testIpcTimeout() throws IOException {
++  public void testIpcTimeout() throws Exception {
+     // start server
+     Server server = new TestServer(1, true);
+     InetSocketAddress addr = NetUtils.getConnectAddress(server);
+@@ -578,7 +577,7 @@ public void testIpcTimeout() throws IOException {
+   }
+ 
+   @Test(timeout=60000)
+-  public void testIpcConnectTimeout() throws IOException {
++  public void testIpcConnectTimeout() throws Exception {
+     // start server
+     Server server = new TestServer(1, true);
+     InetSocketAddress addr = NetUtils.getConnectAddress(server);
+@@ -601,7 +600,7 @@ public void testIpcConnectTimeout() throws IOException {
+    * Check service class byte in IPC header is correct on wire.
+    */
+   @Test(timeout=60000)
+-  public void testIpcWithServiceClass() throws IOException {
++  public void testIpcWithServiceClass() throws Exception {
+     // start server
+     Server server = new TestServer(5, false);
+     InetSocketAddress addr = NetUtils.getConnectAddress(server);
+@@ -877,7 +876,7 @@ public void run() {
+    * Make a call from a client and verify if header info is changed in server side
+    */
+   private void callAndVerify(Server server, InetSocketAddress addr,
+-      int serviceClass, boolean noChanged) throws IOException{
++      int serviceClass, boolean noChanged) throws Exception{
+     Client client = new Client(LongWritable.class, conf);
+ 
+     client.call(new LongWritable(RANDOM.nextLong()),
+@@ -911,7 +910,7 @@ public void testIpcAfterStopping() throws IOException {
+    * and stopping IPC servers.
+    */
+   @Test(timeout=60000)
+-  public void testSocketLeak() throws IOException {
++  public void testSocketLeak() throws Exception {
+     Assume.assumeTrue(FD_DIR.exists()); // only run on Linux
+ 
+     long startFds = countOpenFileDescriptors();
+@@ -931,31 +930,31 @@ private long countOpenFileDescriptors() {
+   }
+ 
+   @Test(timeout=60000)
+-  public void testIpcFromHadoop_0_18_13() throws IOException {
++  public void testIpcFromHadoop_0_18_13() throws Exception {
+     doIpcVersionTest(NetworkTraces.HADOOP_0_18_3_RPC_DUMP,
+         NetworkTraces.RESPONSE_TO_HADOOP_0_18_3_RPC);
+   }
+   
+   @Test(timeout=60000)
+-  public void testIpcFromHadoop0_20_3() throws IOException {
++  public void testIpcFromHadoop0_20_3() throws Exception {
+     doIpcVersionTest(NetworkTraces.HADOOP_0_20_3_RPC_DUMP,
+         NetworkTraces.RESPONSE_TO_HADOOP_0_20_3_RPC);
+   }
+   
+   @Test(timeout=60000)
+-  public void testIpcFromHadoop0_21_0() throws IOException {
++  public void testIpcFromHadoop0_21_0() throws Exception {
+     doIpcVersionTest(NetworkTraces.HADOOP_0_21_0_RPC_DUMP,
+         NetworkTraces.RESPONSE_TO_HADOOP_0_21_0_RPC);
+   }
+   
+   @Test(timeout=60000)
+-  public void testHttpGetResponse() throws IOException {
++  public void testHttpGetResponse() throws Exception {
+     doIpcVersionTest("GET / HTTP/1.0\r\n\r\n".getBytes(),
+         Server.RECEIVED_HTTP_REQ_RESPONSE.getBytes());
+   }
+   
+   @Test(timeout=60000)
+-  public void testConnectionRetriesOnSocketTimeoutExceptions() throws IOException {
++  public void testConnectionRetriesOnSocketTimeoutExceptions() throws Exception {
+     Configuration conf = new Configuration();
+     // set max retries to 0
+     conf.setInt(
+@@ -981,7 +980,7 @@ public void testConnectionRetriesOnSocketTimeoutExceptions() throws IOException
+    * (2) the rpc client receives the same call id/retry from the rpc server.
+    */
+   @Test(timeout=60000)
+-  public void testCallIdAndRetry() throws IOException {
++  public void testCallIdAndRetry() throws Exception {
+     final CallInfo info = new CallInfo();
+ 
+     // Override client to store the call info and check response
+@@ -1033,7 +1032,7 @@ public void run() {
+    * Test the retry count while used in a retry proxy.
+    */
+   @Test(timeout=60000)
+-  public void testRetryProxy() throws IOException {
++  public void testRetryProxy() throws Exception {
+     final Client client = new Client(LongWritable.class, conf);
+     
+     final TestServer server = new TestServer(1, false);
+@@ -1070,7 +1069,7 @@ public void run() {
+    * Test if the rpc server gets the default retry count (0) from client.
+    */
+   @Test(timeout=60000)
+-  public void testInitialCallRetryCount() throws IOException {
++  public void testInitialCallRetryCount() throws Exception {
+     // Override client to store the call id
+     final Client client = new Client(LongWritable.class, conf);
+ 
+@@ -1101,9 +1100,8 @@ public void run() {
+    * Test if the rpc server gets the retry count from client.
+    */
+   @Test(timeout=60000)
+-  public void testCallRetryCount() throws IOException {
++  public void testCallRetryCount() throws Exception {
+     final int retryCount = 255;
+-    // Override client to store the call id
+     final Client client = new Client(LongWritable.class, conf);
+     Client.setCallIdAndRetryCount(Client.nextCallId(), 255);
+ 
+@@ -1133,11 +1131,9 @@ public void run() {
+   /**
+    * Tests that client generates a unique sequential call ID for each RPC call,
+    * even if multiple threads are using the same client.
+- * @throws InterruptedException 
+    */
+   @Test(timeout=60000)
+-  public void testUniqueSequentialCallIds() 
+-      throws IOException, InterruptedException {
++  public void testUniqueSequentialCallIds() throws Exception {
+     int serverThreads = 10, callerCount = 100, perCallerCallCount = 100;
+     TestServer server = new TestServer(serverThreads, false);
+ 
+@@ -1202,7 +1198,7 @@ private void assertRetriesOnSocketTimeouts(Configuration conf,
+   
+   private void doIpcVersionTest(
+       byte[] requestData,
+-      byte[] expectedResponse) throws IOException {
++      byte[] expectedResponse) throws Exception {
+     Server server = new TestServer(1, true);
+     InetSocketAddress addr = NetUtils.getConnectAddress(server);
+     server.start();
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestIPCServerResponder.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestIPCServerResponder.java
+index 427c82a..df3e0b7 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestIPCServerResponder.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestIPCServerResponder.java
+@@ -115,8 +115,7 @@ public void run() {
+     }
+   }
+ 
+-  public void testResponseBuffer() 
+-      throws IOException, InterruptedException {
++  public void testResponseBuffer() throws Exception {
+     Server.INITIAL_RESP_BUF_SIZE = 1;
+     conf.setInt(CommonConfigurationKeys.IPC_SERVER_RPC_MAX_RESPONSE_SIZE_KEY,
+                 1);
+@@ -124,8 +123,7 @@ public void testResponseBuffer()
+     conf = new Configuration(); // reset configuration
+   }
+ 
+-  public void testServerResponder()
+-      throws IOException, InterruptedException {
++  public void testServerResponder() throws Exception {
+     testServerResponder(10, true, 1, 10, 200);
+   }
+ 
+@@ -133,8 +131,7 @@ public void testServerResponder(final int handlerCount,
+                                   final boolean handlerSleep, 
+                                   final int clientCount,
+                                   final int callerCount,
+-                                  final int callCount) throws IOException,
+-                                  InterruptedException {
++                                  final int callCount) throws Exception {
+     Server server = new TestServer(handlerCount, handlerSleep);
+     server.start();
+ 
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPC.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPC.java
+index f1855f62..5c57dbc 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPC.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPC.java
+@@ -341,7 +341,7 @@ public int getCloseCalled() {
+   }
+   
+   @Test
+-  public void testConfRpc() throws IOException {
++  public void testConfRpc() throws Exception {
+     Server server = new RPC.Builder(conf).setProtocol(TestProtocol.class)
+         .setInstance(new TestImpl()).setBindAddress(ADDRESS).setPort(0)
+         .setNumHandlers(1).setVerbose(false).build();
+@@ -368,7 +368,7 @@ public void testConfRpc() throws IOException {
+   }
+ 
+   @Test
+-  public void testProxyAddress() throws IOException {
++  public void testProxyAddress() throws Exception {
+     Server server = new RPC.Builder(conf).setProtocol(TestProtocol.class)
+         .setInstance(new TestImpl()).setBindAddress(ADDRESS).setPort(0).build();
+     TestProtocol proxy = null;
+@@ -390,7 +390,7 @@ public void testProxyAddress() throws IOException {
+   }
+ 
+   @Test
+-  public void testSlowRpc() throws IOException {
++  public void testSlowRpc() throws Exception {
+     System.out.println("Testing Slow RPC");
+     // create a server with two handlers
+     Server server = new RPC.Builder(conf).setProtocol(TestProtocol.class)
+@@ -436,11 +436,11 @@ public void testSlowRpc() throws IOException {
+   }
+   
+   @Test
+-  public void testCalls() throws IOException {
++  public void testCalls() throws Exception {
+     testCallsInternal(conf);
+   }
+   
+-  private void testCallsInternal(Configuration conf) throws IOException {
++  private void testCallsInternal(Configuration conf) throws Exception {
+     Server server = new RPC.Builder(conf).setProtocol(TestProtocol.class)
+         .setInstance(new TestImpl()).setBindAddress(ADDRESS).setPort(0).build();
+     TestProtocol proxy = null;
+@@ -560,7 +560,7 @@ public void testStandaloneClient() throws IOException {
+     
+   }
+   
+-  private void doRPCs(Configuration conf, boolean expectFailure) throws IOException {
++  private void doRPCs(Configuration conf, boolean expectFailure) throws Exception {
+     Server server = new RPC.Builder(conf).setProtocol(TestProtocol.class)
+         .setInstance(new TestImpl()).setBindAddress(ADDRESS).setPort(0)
+         .setNumHandlers(5).setVerbose(true).build();
+@@ -619,7 +619,7 @@ public void testServerAddress() throws IOException {
+   }
+ 
+   @Test
+-  public void testAuthorization() throws IOException {
++  public void testAuthorization() throws Exception {
+     Configuration conf = new Configuration();
+     conf.setBoolean(CommonConfigurationKeys.HADOOP_SECURITY_AUTHORIZATION,
+         true);
+@@ -646,7 +646,7 @@ public void testAuthorization() throws IOException {
+    * Switch off setting socketTimeout values on RPC sockets.
+    * Verify that RPC calls still work ok.
+    */
+-  public void testNoPings() throws IOException {
++  public void testNoPings() throws Exception {
+     Configuration conf = new Configuration();
+     
+     conf.setBoolean("ipc.client.ping", false);
+@@ -658,10 +658,10 @@ public void testNoPings() throws IOException {
+ 
+   /**
+    * Test stopping a non-registered proxy
+-   * @throws IOException
++   * @throws Exception
+    */
+   @Test(expected=HadoopIllegalArgumentException.class)
+-  public void testStopNonRegisteredProxy() throws IOException {
++  public void testStopNonRegisteredProxy() throws Exception {
+     RPC.stopProxy(null);
+   }
+ 
+@@ -701,7 +701,7 @@ public void testWrappedStopProxy() throws IOException {
+   }
+ 
+   @Test
+-  public void testErrorMsgForInsecureClient() throws IOException {
++  public void testErrorMsgForInsecureClient() throws Exception {
+     Configuration serverConf = new Configuration(conf);
+     SecurityUtil.setAuthenticationMethod(AuthenticationMethod.KERBEROS,
+                                          serverConf);
+@@ -786,7 +786,7 @@ private static int countThreads(String search) {
+    * Test that server.stop() properly stops all threads
+    */
+   @Test
+-  public void testStopsAllThreads() throws IOException, InterruptedException {
++  public void testStopsAllThreads() throws Exception {
+     int threadsBefore = countThreads("Server$Listener$Reader");
+     assertEquals("Expect no Reader threads running before test",
+       0, threadsBefore);
+@@ -817,7 +817,7 @@ public void testStopsAllThreads() throws IOException, InterruptedException {
+   }
+   
+   @Test
+-  public void testRPCBuilder() throws IOException {
++  public void testRPCBuilder() throws Exception {
+     // Test mandatory field conf
+     try {
+       new RPC.Builder(null).setProtocol(TestProtocol.class)
+@@ -853,13 +853,11 @@ public void testRPCBuilder() throws IOException {
+   }
+   
+   @Test(timeout=90000)
+-  public void testRPCInterruptedSimple() throws IOException {
++  public void testRPCInterruptedSimple() throws Exception {
+     final Configuration conf = new Configuration();
+-    Server server = new RPC.Builder(conf).setProtocol(TestProtocol.class)
+-        .setInstance(new TestImpl()).setBindAddress(ADDRESS)
+-        .setPort(0).setNumHandlers(5).setVerbose(true)
+-        .setSecretManager(null).build();
+-    
++    Server server = RPC.getServer(
++      TestProtocol.class, new TestImpl(), ADDRESS, 0, 5, true, conf, null
++    );
+     server.start();
+     InetSocketAddress addr = NetUtils.getConnectAddress(server);
+ 
+@@ -886,10 +884,9 @@ public void testRPCInterruptedSimple() throws IOException {
+   @Test(timeout=30000)
+   public void testRPCInterrupted() throws IOException, InterruptedException {
+     final Configuration conf = new Configuration();
+-    Server server = new RPC.Builder(conf).setProtocol(TestProtocol.class)
+-        .setInstance(new TestImpl()).setBindAddress(ADDRESS)
+-        .setPort(0).setNumHandlers(5).setVerbose(true)
+-        .setSecretManager(null).build();
++    Server server = RPC.getServer(
++      TestProtocol.class, new TestImpl(), ADDRESS, 0, 5, true, conf, null
++    );
+ 
+     server.start();
+ 
+@@ -1009,7 +1006,7 @@ public void testRpcMetrics() throws Exception {
+     }
+   }
+ 
+-  public static void main(String[] args) throws IOException {
++  public static void main(String[] args) throws Exception {
+     new TestRPC().testCallsInternal(conf);
+ 
+   }
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPCCompatibility.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPCCompatibility.java
+index 2ac2be9..8312607 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPCCompatibility.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestRPCCompatibility.java
+@@ -278,7 +278,7 @@ public void testHashCode() throws Exception {
+         TestProtocol3.class.getMethod("echo_alias", int.class));
+     assertFalse(intEchoHash == intEchoHashAlias);
+     
+-    // Make sure that methods with the same returning type and method name but
++    // Make sure that methods with the same returninig type and method name but
+     // larger number of parameter types have different hash code
+     int intEchoHash2 = ProtocolSignature.getFingerprint(
+         TestProtocol3.class.getMethod("echo", int.class, int.class));
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestSocketFactory.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestSocketFactory.java
+index f2d312e..5d66a54 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestSocketFactory.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/ipc/TestSocketFactory.java
+@@ -35,7 +35,7 @@
+ public class TestSocketFactory {
+ 
+   @Test
+-  public void testSocketFactoryAsKeyInMap() {
++  public void testSocketFactoryAsKeyInMap() throws Exception {
+     Map<SocketFactory, Integer> dummyCache = new HashMap<SocketFactory, Integer>();
+     int toBeCached1 = 1;
+     int toBeCached2 = 2;
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/TaskAttemptListenerImpl.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/TaskAttemptListenerImpl.java
+index e758ee5..78f28be 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/TaskAttemptListenerImpl.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/TaskAttemptListenerImpl.java
+@@ -63,7 +63,7 @@
+  * This class HAS to be in this package to access package private 
+  * methods/classes.
+  */
+-@SuppressWarnings({"unchecked"})
++@SuppressWarnings({"unchecked" , "deprecation"})
+ public class TaskAttemptListenerImpl extends CompositeService 
+     implements TaskUmbilicalProtocol, TaskAttemptListener {
+ 
+@@ -118,14 +118,11 @@ protected void registerHeartbeatHandler(Configuration conf) {
+   protected void startRpcServer() {
+     Configuration conf = getConfig();
+     try {
+-      server = 
+-          new RPC.Builder(conf).setProtocol(TaskUmbilicalProtocol.class)
+-            .setInstance(this).setBindAddress("0.0.0.0")
+-            .setPort(0).setNumHandlers(
+-                conf.getInt(MRJobConfig.MR_AM_TASK_LISTENER_THREAD_COUNT, 
+-                    MRJobConfig.DEFAULT_MR_AM_TASK_LISTENER_THREAD_COUNT))
+-                    .setVerbose(false).setSecretManager(jobTokenSecretManager)
+-                    .build();
++      server =
++          RPC.getServer(TaskUmbilicalProtocol.class, this, "0.0.0.0", 0, 
++              conf.getInt(MRJobConfig.MR_AM_TASK_LISTENER_THREAD_COUNT, 
++                  MRJobConfig.DEFAULT_MR_AM_TASK_LISTENER_THREAD_COUNT),
++              false, conf, jobTokenSecretManager);
+       
+       // Enable service authorization?
+       if (conf.getBoolean(
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/mapred/TestAuditLogger.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/mapred/TestAuditLogger.java
+index 353185b..a6aebb0 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/mapred/TestAuditLogger.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/mapred/TestAuditLogger.java
+@@ -137,12 +137,11 @@ public void ping() {
+   /**
+    * Test {@link AuditLogger} with IP set.
+    */
++  @SuppressWarnings("deprecation")
+   public void testAuditLoggerWithIP() throws Exception {
+     Configuration conf = new Configuration();
+     // start the IPC server
+-    Server server = new RPC.Builder(conf).setProtocol(TestProtocol.class)
+-            .setInstance(new MyTestRPCServer()).setBindAddress("0.0.0.0")
+-            .setPort(0).build();
++    Server server = RPC.getServer(new MyTestRPCServer(), "0.0.0.0", 0, conf);
+     server.start();
+ 
+     InetSocketAddress addr = NetUtils.getConnectAddress(server);
+-- 
+1.7.9.5
+

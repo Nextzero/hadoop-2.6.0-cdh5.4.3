@@ -1,0 +1,74 @@
+From 43456e542508b2a9963d3ee61b0922f40c5b5f72 Mon Sep 17 00:00:00 2001
+From: Sean Busbey <busbey@cloudera.com>
+Date: Thu, 12 Mar 2015 21:18:36 -0500
+Subject: [PATCH 487/596] Revert "HDFS-4629. Using
+ com.sun.org.apache.xml.internal.serialize.* in
+ XmlEditsVisitor.java is JVM vendor specific. Breaks
+ IBM JAVA."
+
+This reverts commit 432e5eef56bf65449105f66d375be0dbdffa12c2.
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+	hadoop-hdfs-project/hadoop-hdfs/pom.xml
+	hadoop-project/pom.xml
+
+Reason: Dependency Compatiblity
+Ref: CDH-26060
+---
+ hadoop-hdfs-project/hadoop-hdfs/pom.xml            |    5 -----
+ .../tools/offlineEditsViewer/XmlEditsVisitor.java  |    4 ++--
+ hadoop-project/pom.xml                             |    6 ------
+ 3 files changed, 2 insertions(+), 13 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/pom.xml b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+index 8c99f0e..7a193c5 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/pom.xml
++++ b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+@@ -186,11 +186,6 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
+       <scope>compile</scope>
+     </dependency>
+     <dependency>
+-      <groupId>xerces</groupId>
+-      <artifactId>xercesImpl</artifactId>
+-      <scope>compile</scope>
+-    </dependency>
+-    <dependency>
+       <groupId>org.htrace</groupId>
+       <artifactId>htrace-core</artifactId>
+     </dependency>
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineEditsViewer/XmlEditsVisitor.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineEditsViewer/XmlEditsVisitor.java
+index 7a39ba6..b4fa791 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineEditsViewer/XmlEditsVisitor.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/offlineEditsViewer/XmlEditsVisitor.java
+@@ -29,8 +29,8 @@
+ import org.xml.sax.SAXException;
+ import org.xml.sax.helpers.AttributesImpl;
+ 
+-import org.apache.xml.serialize.OutputFormat;
+-import org.apache.xml.serialize.XMLSerializer;
++import com.sun.org.apache.xml.internal.serialize.OutputFormat;
++import com.sun.org.apache.xml.internal.serialize.XMLSerializer;
+ 
+ /**
+  * An XmlEditsVisitor walks over an EditLog structure and writes out
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index 38d5239..9710aa0 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -910,12 +910,6 @@
+         <version>2.0.0-M15</version>
+       </dependency>
+ 
+-      <dependency>
+-        <groupId>xerces</groupId>
+-        <artifactId>xercesImpl</artifactId>
+-        <version>2.9.1</version>
+-      </dependency>
+-
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-recipes</artifactId>
+-- 
+1.7.9.5
+

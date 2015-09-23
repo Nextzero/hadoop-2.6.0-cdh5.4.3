@@ -1,0 +1,29 @@
+From 090a1343fc3f1d70933dd670e0cd99d3bc6fb5e3 Mon Sep 17 00:00:00 2001
+From: Vinod Kumar Vavilapalli <vinodkv@apache.org>
+Date: Sat, 15 Nov 2014 12:05:25 -0800
+Subject: [PATCH 261/596] YARN-1703. Fixed ResourceManager web-proxy to close
+ connections correctly. Contributed by Rohith
+ Sharma.
+
+(cherry picked from commit 198fb58776ec02397af5ad83259535b0291b745c)
+(cherry picked from commit 41275755c7f4f6b39f2db6ab180d598572bf7179)
+(cherry picked from commit 1ebe2956c053aebac3fde878eb2214c605508058)
+---
+ .../yarn/server/webproxy/WebAppProxyServlet.java   |    1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-web-proxy/src/main/java/org/apache/hadoop/yarn/server/webproxy/WebAppProxyServlet.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-web-proxy/src/main/java/org/apache/hadoop/yarn/server/webproxy/WebAppProxyServlet.java
+index 19ae9dc..31457a5 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-web-proxy/src/main/java/org/apache/hadoop/yarn/server/webproxy/WebAppProxyServlet.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-web-proxy/src/main/java/org/apache/hadoop/yarn/server/webproxy/WebAppProxyServlet.java
+@@ -166,6 +166,7 @@ private static void proxyLink(HttpServletRequest req,
+     }
+     config.setLocalAddress(localAddress);
+     HttpMethod method = new GetMethod(uri.getEscapedURI());
++    method.setRequestHeader("Connection","close");
+     @SuppressWarnings("unchecked")
+     Enumeration<String> names = req.getHeaderNames();
+     while(names.hasMoreElements()) {
+-- 
+1.7.9.5
+

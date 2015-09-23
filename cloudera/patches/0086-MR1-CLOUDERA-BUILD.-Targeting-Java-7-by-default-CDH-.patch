@@ -1,0 +1,32 @@
+From 1cd368cc0708bcfd99011b4e7820727996e76787 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Thu, 19 Sep 2013 17:59:25 -0700
+Subject: [PATCH 086/596] MR1: CLOUDERA-BUILD. Targeting Java 7 by default
+ (CDH-14356)
+
+(cherry picked from commit 0ee48ef75f980f62cef789eebbab500266e011b4)
+(cherry picked from commit d5d331f708d46d527e33f4bf8c6a145a879eff83)
+(cherry picked from commit fffd223425f539361c84526fc04a212b28efc2fa)
+---
+ hadoop-mapreduce1-project/build.xml |    5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index 44fe6cf..1608693 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -374,9 +374,8 @@
+   </macrodef>
+ 
+   <target name="jvm-check">
+-    <property name="javaVersion" value="1.6"/>
+-    <property name="targetJavaVersion" value="1.6"/>
+-
++    <property name="javaVersion" value="1.7"/>
++    <property name="targetJavaVersion" value="1.7"/>
+     <property name="requiredJavaVersion" value="xx${javaVersion}"/>
+     <property name="currentJavaVersion" value="xx${java.version}"/>
+     <condition property="jvm.fail">
+-- 
+1.7.9.5
+

@@ -1,0 +1,28 @@
+From 4fe8c7a1293647cd27033f2a2304c0223bc9d458 Mon Sep 17 00:00:00 2001
+From: Lei Xu <lei@cloudera.com>
+Date: Thu, 28 May 2015 11:19:34 -0700
+Subject: [PATCH 583/596] CLOUDER-BUILD: OPSAPS-26931, revert the NameNode JMX
+ outputs which are incompatible introduced in
+ HDFS-7604.
+
+---
+ .../hadoop/hdfs/server/namenode/FSNamesystem.java  |    3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index 7f43967..b4cd74f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -7811,7 +7811,8 @@ public String getLiveNodes() {
+             .put("estimatedCapacityLostTotal",
+                 volumeFailureSummary.getEstimatedCapacityLostTotal());
+       }
+-      info.put(node.getHostName() + ":" + node.getXferPort(), innerinfo.build());
++      // CLOUDERA-BUILD: revert JMX output changes in HDFS-7604
++      info.put(node.getHostName(), innerinfo.build());
+     }
+     return JSON.toString(info);
+   }
+-- 
+1.7.9.5
+

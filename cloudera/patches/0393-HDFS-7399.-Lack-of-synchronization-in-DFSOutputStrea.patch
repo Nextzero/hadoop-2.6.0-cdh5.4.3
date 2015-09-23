@@ -1,0 +1,36 @@
+From 843fd1e92aeb70de5de45f1a746012666a42b114 Mon Sep 17 00:00:00 2001
+From: Vinayakumar B <vinayakumarb@apache.org>
+Date: Mon, 17 Nov 2014 20:19:19 +0530
+Subject: [PATCH 393/596] HDFS-7399. Lack of synchronization in
+ DFSOutputStream#Packet#getLastByteOffsetBlock()
+ (Contributed by Vinayakumar B)
+
+(cherry picked from commit 6783d17fcf5b25165767888f756a6b7802ab1371)
+(cherry picked from commit 5bb47d041893bd63c18e497c718ed7893d1aec97)
+---
+ .../org/apache/hadoop/hdfs/DFSOutputStream.java    |    6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
+index e6cc43c..fa668ab 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
+@@ -330,12 +330,12 @@ private void releaseBuffer(ByteArrayManager bam) {
+       bam.release(buf);
+       buf = null;
+     }
+-    
++
+     // get the packet's last byte's offset in the block
+-    long getLastByteOffsetBlock() {
++    synchronized long getLastByteOffsetBlock() {
+       return offsetInBlock + dataPos - dataStart;
+     }
+-    
++
+     /**
+      * Check if this packet is a heart beat packet
+      * @return true if the sequence number is HEART_BEAT_SEQNO
+-- 
+1.7.9.5
+

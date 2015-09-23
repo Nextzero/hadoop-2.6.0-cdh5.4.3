@@ -1,0 +1,33 @@
+From 532f99f5a35e3dd0fb9a0230e1711d184ae39d92 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@apache.org>
+Date: Fri, 5 Dec 2014 12:07:01 -0800
+Subject: [PATCH 307/596] YARN-2461. Fix PROCFS_USE_SMAPS_BASED_RSS_ENABLED
+ property in YarnConfiguration. (rchiang via
+ rkanter)
+
+(cherry picked from commit 3c72f54ef581b4f3e2eb84e1e24e459c38d3f769)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+
+(cherry picked from commit 541797957eef6025e66da96e995c7ca7054f0893)
+---
+ .../apache/hadoop/yarn/conf/YarnConfiguration.java |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
+index e819880..14de944 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
+@@ -817,7 +817,7 @@ private static void addDeprecatedKeys() {
+   public static final String NM_CONTAINER_MON_PROCESS_TREE =
+     NM_PREFIX + "container-monitor.process-tree.class";
+   public static final String PROCFS_USE_SMAPS_BASED_RSS_ENABLED = NM_PREFIX +
+-      ".container-monitor.procfs-tree.smaps-based-rss.enabled";
++      "container-monitor.procfs-tree.smaps-based-rss.enabled";
+   public static final boolean DEFAULT_PROCFS_USE_SMAPS_BASED_RSS_ENABLED =
+       false;
+   
+-- 
+1.7.9.5
+

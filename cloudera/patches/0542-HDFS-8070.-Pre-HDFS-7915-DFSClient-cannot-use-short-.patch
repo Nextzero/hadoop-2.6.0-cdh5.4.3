@@ -1,0 +1,109 @@
+From 0c29a93c479ae7071f5a7eb43173937f1fb119b5 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Thu, 23 Apr 2015 19:03:44 -0700
+Subject: [PATCH 542/596] HDFS-8070. Pre-HDFS-7915 DFSClient cannot use short
+ circuit on post-HDFS-7915 DataNode (cmccabe)
+
+(cherry picked from commit a8898445dc9b5cdb7230e2e23a57393c9f378ff0)
+(cherry picked from commit 3d0385c3c8fab72be02453a158c7692212ab3b5e)
+(cherry picked from commit 176d22b440f74fd2a96fa1e4f5d7925ffbc35f85)
+(cherry picked from commit b329678c35fce6e7a0acdefad1cf621bb609e805)
+---
+ .../org/apache/hadoop/hdfs/BlockReaderFactory.java |    6 ++-
+ .../hdfs/protocol/datatransfer/Receiver.java       |    3 +-
+ .../hdfs/shortcircuit/TestShortCircuitCache.java   |   43 ++++++++++++++++++++
+ 3 files changed, 50 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/BlockReaderFactory.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/BlockReaderFactory.java
+index d0115f2..380f1e0 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/BlockReaderFactory.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/BlockReaderFactory.java
+@@ -74,6 +74,9 @@
+     public void injectRequestFileDescriptorsFailure() throws IOException {
+       // do nothing
+     }
++    public boolean getSupportsReceiptVerification() {
++      return true;
++    }
+   }
+ 
+   @VisibleForTesting
+@@ -531,7 +534,8 @@ private ShortCircuitReplicaInfo requestFileDescriptors(DomainPeer peer,
+     final DataOutputStream out =
+         new DataOutputStream(new BufferedOutputStream(peer.getOutputStream()));
+     SlotId slotId = slot == null ? null : slot.getSlotId();
+-    new Sender(out).requestShortCircuitFds(block, token, slotId, 1, true);
++    new Sender(out).requestShortCircuitFds(block, token, slotId, 1,
++        failureInjector.getSupportsReceiptVerification());
+     DataInputStream in = new DataInputStream(peer.getInputStream());
+     BlockOpResponseProto resp = BlockOpResponseProto.parseFrom(
+         PBHelper.vintPrefixed(in));
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/Receiver.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/Receiver.java
+index ecba7bf..16d4dda 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/Receiver.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/Receiver.java
+@@ -184,7 +184,8 @@ private void opRequestShortCircuitFds(DataInputStream in) throws IOException {
+     try {
+       requestShortCircuitFds(PBHelper.convert(proto.getHeader().getBlock()),
+           PBHelper.convert(proto.getHeader().getToken()),
+-          slotId, proto.getMaxVersion(), true);
++          slotId, proto.getMaxVersion(),
++          proto.getSupportsReceiptVerification());
+     } finally {
+       if (traceScope != null) traceScope.close();
+     }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/shortcircuit/TestShortCircuitCache.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/shortcircuit/TestShortCircuitCache.java
+index 384fa52..0558301 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/shortcircuit/TestShortCircuitCache.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/shortcircuit/TestShortCircuitCache.java
+@@ -744,4 +744,47 @@ public Void answer(InvocationOnMock invocation) throws Throwable {
+     cluster.shutdown();
+     sockDir.close();
+   }
++
++  public static class TestPreReceiptVerificationFailureInjector
++      extends BlockReaderFactory.FailureInjector {
++    @Override
++    public boolean getSupportsReceiptVerification() {
++      return false;
++    }
++  }
++
++  // Regression test for HDFS-8070
++  @Test(timeout=60000)
++  public void testPreReceiptVerificationDfsClientCanDoScr() throws Exception {
++    BlockReaderTestUtil.enableShortCircuitShmTracing();
++    TemporarySocketDirectory sockDir = new TemporarySocketDirectory();
++    Configuration conf = createShortCircuitConf(
++        "testPreReceiptVerificationDfsClientCanDoScr", sockDir);
++    conf.setLong(DFS_CLIENT_READ_SHORTCIRCUIT_STREAMS_CACHE_EXPIRY_MS_KEY,
++        1000000000L);
++    MiniDFSCluster cluster =
++        new MiniDFSCluster.Builder(conf).numDataNodes(1).build();
++    cluster.waitActive();
++    DistributedFileSystem fs = cluster.getFileSystem();
++    fs.getClient().getConf().brfFailureInjector =
++        new TestPreReceiptVerificationFailureInjector();
++    final Path TEST_PATH1 = new Path("/test_file1");
++    DFSTestUtil.createFile(fs, TEST_PATH1, 4096, (short)1, 0xFADE2);
++    final Path TEST_PATH2 = new Path("/test_file2");
++    DFSTestUtil.createFile(fs, TEST_PATH2, 4096, (short)1, 0xFADE2);
++    DFSTestUtil.readFileBuffer(fs, TEST_PATH1);
++    DFSTestUtil.readFileBuffer(fs, TEST_PATH2);
++    ShortCircuitRegistry registry =
++        cluster.getDataNodes().get(0).getShortCircuitRegistry();
++    registry.visit(new ShortCircuitRegistry.Visitor() {
++      @Override
++      public void accept(HashMap<ShmId, RegisteredShm> segments,
++                         HashMultimap<ExtendedBlockId, Slot> slots) {
++        Assert.assertEquals(1, segments.size());
++        Assert.assertEquals(2, slots.size());
++      }
++    });
++    cluster.shutdown();
++    sockDir.close();
++  }
+ }
+-- 
+1.7.9.5
+

@@ -1,0 +1,269 @@
+From f6d07b2c517d3379a185d49f94397fa26afe71ce Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Tue, 30 Jul 2013 15:28:22 -0700
+Subject: [PATCH 094/596] MR1: MAPREDUCE-4366. mapred metrics shows negative
+ count of waiting maps and reduces. (sandyr via
+ tucu)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1507569 13f79535-47bb-0310-9956-ffa450edef68
+
+Ref: CDH-11475
+Author: Sandy Ryza
+(cherry picked from commit 61824f6b3d178e16eb7823c09b4cc0efc8aa217c)
+(cherry picked from commit d974492b8f63aaa3cc75ed1da60a6e6bb0552e40)
+(cherry picked from commit 9daf96073e3443360f11c1d1697a80d5a8532b43)
+(cherry picked from commit a5b24a0b89891de97bfacddc885a50a74c8c09a1)
+---
+ .../org/apache/hadoop/mapred/JobInProgress.java    |   40 +++++++++++---------
+ .../hadoop/mapred/JobTrackerInstrumentation.java   |    8 ++--
+ .../hadoop/mapred/JobTrackerMetricsInst.java       |   29 ++++++++++----
+ .../org/apache/hadoop/mapred/LocalJobRunner.java   |    4 +-
+ 4 files changed, 50 insertions(+), 31 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+index 08c5106..012e91a 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+@@ -126,6 +126,9 @@ public KillInterruptedException(String msg) {
+   
+   // runningMapTasks include speculative tasks, so we need to capture 
+   // speculative tasks separately 
++  // if a task is incomplete, running attempts over one per task are counted
++  // in these variables.  if a task is complete, all its running attempts are
++  // included
+   int speculativeMapTasks = 0;
+   int speculativeReduceTasks = 0;
+   
+@@ -1718,6 +1721,7 @@ synchronized void addRunningTaskToTIP(TaskInProgress tip, TaskAttemptID id,
+     String name;
+     String splits = "";
+     Enum counter = null;
++    boolean speculative = tip.getActiveTasks().size() > 1;
+     if (tip.isJobSetupTask()) {
+       launchedSetup = true;
+       name = Values.SETUP.name();
+@@ -1729,16 +1733,16 @@ synchronized void addRunningTaskToTIP(TaskInProgress tip, TaskAttemptID id,
+       name = Values.MAP.name();
+       counter = Counter.TOTAL_LAUNCHED_MAPS;
+       splits = tip.getSplitNodes();
+-      if (tip.getActiveTasks().size() > 1)
++      if (speculative)
+         speculativeMapTasks++;
+-      metrics.launchMap(id);
++      metrics.launchMap(id, speculative);
+     } else {
+       ++runningReduceTasks;
+       name = Values.REDUCE.name();
+       counter = Counter.TOTAL_LAUNCHED_REDUCES;
+-      if (tip.getActiveTasks().size() > 1)
++      if (speculative)
+         speculativeReduceTasks++;
+-      metrics.launchReduce(id);
++      metrics.launchReduce(id, speculative);
+     }
+     // Note that the logs are for the scheduled tasks only. Tasks that join on 
+     // restart has already their logs in place.
+@@ -2610,10 +2614,6 @@ public synchronized boolean completedTask(TaskInProgress tip,
+       jobtracker.markCompletedTaskAttempt(status.getTaskTracker(), taskid);
+     } else if (tip.isMapTask()) {
+       runningMapTasks -= 1;
+-      // check if this was a sepculative task
+-      if (oldNumAttempts > 1) {
+-        speculativeMapTasks -= (oldNumAttempts - newNumAttempts);
+-      }
+       finishedMapTasks += 1;
+       metrics.completeMap(taskid);
+       // remove the completed map from the resp running caches
+@@ -2623,9 +2623,6 @@ public synchronized boolean completedTask(TaskInProgress tip,
+       }
+     } else {
+       runningReduceTasks -= 1;
+-      if (oldNumAttempts > 1) {
+-        speculativeReduceTasks -= (oldNumAttempts - newNumAttempts);
+-      }
+       finishedReduceTasks += 1;
+       metrics.completeReduce(taskid);
+       // remove the completed reduces from the running reducers set
+@@ -2893,7 +2890,7 @@ private void failedTask(TaskInProgress tip, TaskAttemptID taskid,
+     tip.incompleteSubTask(taskid, this.status);
+    
+     boolean isRunning = tip.isRunning();
+-    boolean isComplete = tip.isComplete();
++    boolean tipIsComplete = tip.isComplete();
+     
+     if (wasAttemptRunning) {
+       // We are decrementing counters without looking for isRunning ,
+@@ -2906,12 +2903,21 @@ private void failedTask(TaskInProgress tip, TaskAttemptID taskid,
+       //      metrics.launchMap(id);
+       // hence we are decrementing the same set.
+       if (!tip.isJobCleanupTask() && !tip.isJobSetupTask()) {
++        boolean incWaiting = !tipIsComplete && !isComplete() &&
++            tip.getActiveTasks().isEmpty();
++        boolean wasSpeculative = wasComplete || !tip.getActiveTasks().isEmpty();
+         if (tip.isMapTask()) {
+           runningMapTasks -= 1;
+-          metrics.failedMap(taskid);
++          metrics.failedMap(taskid, incWaiting);
++          if (wasSpeculative) {
++            speculativeMapTasks--;
++          }
+         } else {
+           runningReduceTasks -= 1;
+-          metrics.failedReduce(taskid);
++          metrics.failedReduce(taskid, incWaiting);
++          if (wasSpeculative) {
++            speculativeReduceTasks--;
++          }
+         }
+       }
+       
+@@ -2928,14 +2934,14 @@ private void failedTask(TaskInProgress tip, TaskAttemptID taskid,
+       } else if (tip.isMapTask()) {
+         // remove from the running queue and put it in the non-running cache
+         // if the tip is not complete i.e if the tip still needs to be run
+-        if (!isComplete) {
++        if (!tipIsComplete) {
+           retireMap(tip);
+           failMap(tip);
+         }
+       } else {
+         // remove from the running queue and put in the failed queue if the tip
+         // is not complete
+-        if (!isComplete) {
++        if (!tipIsComplete) {
+           retireReduce(tip);
+           failReduce(tip);
+         }
+@@ -2944,7 +2950,7 @@ private void failedTask(TaskInProgress tip, TaskAttemptID taskid,
+         
+     // The case when the map was complete but the task tracker went down.
+     // However, we don't need to do any metering here...
+-    if (wasComplete && !isComplete) {
++    if (wasComplete && !tipIsComplete) {
+       if (tip.isMapTask()) {
+         // Put the task back in the cache. This will help locality for cases
+         // where we have a different TaskTracker from the same rack/switch
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerInstrumentation.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerInstrumentation.java
+index 64fbd29..c31b66d 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerInstrumentation.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerInstrumentation.java
+@@ -25,22 +25,22 @@ public JobTrackerInstrumentation(JobTracker jt, JobConf conf) {
+     tracker = jt;
+   }
+ 
+-  public void launchMap(TaskAttemptID taskAttemptID)
++  public void launchMap(TaskAttemptID taskAttemptID, boolean speculative)
+   { }
+ 
+   public void completeMap(TaskAttemptID taskAttemptID)
+   { }
+ 
+-  public void failedMap(TaskAttemptID taskAttemptID)
++  public void failedMap(TaskAttemptID taskAttemptID, boolean taskNowWaiting)
+   { }
+ 
+-  public void launchReduce(TaskAttemptID taskAttemptID)
++  public void launchReduce(TaskAttemptID taskAttemptID, boolean speculative)
+   { }
+ 
+   public void completeReduce(TaskAttemptID taskAttemptID)
+   { }
+   
+-  public void failedReduce(TaskAttemptID taskAttemptID)
++  public void failedReduce(TaskAttemptID taskAttemptID, boolean taskNowWaiting)
+   { }
+ 
+   public void submitJob(JobConf conf, JobID id) 
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerMetricsInst.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerMetricsInst.java
+index 2a0af23..6463a1d 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerMetricsInst.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerMetricsInst.java
+@@ -24,6 +24,7 @@
+ import org.apache.hadoop.metrics.jvm.JvmMetrics;
+ 
+ class JobTrackerMetricsInst extends JobTrackerInstrumentation implements Updater {
++  
+   private final MetricsRecord metricsRecord;
+ 
+   private int numMapTasksLaunched = 0;
+@@ -165,9 +166,12 @@ public void doUpdates(MetricsContext unused) {
+   }
+ 
+   @Override
+-  public synchronized void launchMap(TaskAttemptID taskAttemptID) {
++  public synchronized void launchMap(TaskAttemptID taskAttemptID,
++      boolean speculative) {
+     ++numMapTasksLaunched;
+-    decWaitingMaps(taskAttemptID.getJobID(), 1);
++    if (!speculative) {
++      decWaitingMaps(taskAttemptID.getJobID(), 1);
++    }
+   }
+ 
+   @Override
+@@ -176,15 +180,21 @@ public synchronized void completeMap(TaskAttemptID taskAttemptID) {
+   }
+ 
+   @Override
+-  public synchronized void failedMap(TaskAttemptID taskAttemptID) {
++  public synchronized void failedMap(TaskAttemptID taskAttemptID,
++      boolean incWaiting) {
+     ++numMapTasksFailed;
+-    addWaitingMaps(taskAttemptID.getJobID(), 1);
++    if (incWaiting) {
++      addWaitingMaps(taskAttemptID.getJobID(), 1);
++    }
+   }
+ 
+   @Override
+-  public synchronized void launchReduce(TaskAttemptID taskAttemptID) {
++  public synchronized void launchReduce(TaskAttemptID taskAttemptID,
++      boolean speculative) {
+     ++numReduceTasksLaunched;
+-    decWaitingReduces(taskAttemptID.getJobID(), 1);
++    if (!speculative) {
++      decWaitingReduces(taskAttemptID.getJobID(), 1);
++    }
+   }
+ 
+   @Override
+@@ -193,9 +203,12 @@ public synchronized void completeReduce(TaskAttemptID taskAttemptID) {
+   }
+ 
+   @Override
+-  public synchronized void failedReduce(TaskAttemptID taskAttemptID) {
++  public synchronized void failedReduce(TaskAttemptID taskAttemptID,
++      boolean incWaiting) {
+     ++numReduceTasksFailed;
+-    addWaitingReduces(taskAttemptID.getJobID(), 1);
++    if (incWaiting) {
++      addWaitingReduces(taskAttemptID.getJobID(), 1);
++    }
+   }
+ 
+   @Override
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LocalJobRunner.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LocalJobRunner.java
+index ed095b1..8d2e158 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LocalJobRunner.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LocalJobRunner.java
+@@ -262,7 +262,7 @@ public void run() {
+           map.setConf(localConf);
+           try {
+             map_tasks.getAndIncrement();
+-            myMetrics.launchMap(mapId);
++            myMetrics.launchMap(mapId, false);
+             map.run(localConf, Job.this);
+             myMetrics.completeMap(mapId);
+           } finally {
+@@ -443,7 +443,7 @@ public void run() {
+               reduce.localizeConfiguration(localConf);
+               reduce.setConf(localConf);
+               reduce_tasks += 1;
+-              myMetrics.launchReduce(reduce.getTaskID());
++              myMetrics.launchReduce(reduce.getTaskID(), false);
+               reduce.run(localConf, this);
+               myMetrics.completeReduce(reduce.getTaskID());
+               reduce_tasks -= 1;
+-- 
+1.7.9.5
+

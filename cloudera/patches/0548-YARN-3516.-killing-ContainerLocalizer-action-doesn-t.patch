@@ -1,0 +1,31 @@
+From 30b94a3b3d39f5d6cfdb3d1db2c83b1f8b0db27a Mon Sep 17 00:00:00 2001
+From: Xuan <xgong@apache.org>
+Date: Thu, 23 Apr 2015 16:40:40 -0700
+Subject: [PATCH 548/596] YARN-3516. killing ContainerLocalizer action doesn't
+ take effect when private localizer receives
+ FETCH_FAILURE status. Contributed by zhihai xu
+
+(cherry picked from commit 0b3f8957a87ada1a275c9904b211fdbdcefafb02)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../localizer/ResourceLocalizationService.java     |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java
+index 4236392..611fe80 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java
+@@ -989,7 +989,7 @@ LocalizerHeartbeatResponse update(
+           case FETCH_FAILURE:
+             final String diagnostics = stat.getException().toString();
+             LOG.warn(req + " failed: " + diagnostics);
+-            response.setLocalizerAction(LocalizerAction.DIE);
++            action = LocalizerAction.DIE;
+             getLocalResourcesTracker(req.getVisibility(), user, applicationId)
+               .handle(new ResourceFailedLocalizationEvent(
+                   req, diagnostics));
+-- 
+1.7.9.5
+

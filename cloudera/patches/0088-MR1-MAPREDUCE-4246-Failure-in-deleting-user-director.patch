@@ -1,0 +1,234 @@
+From 34a7ab6e0ffcdb17082a3f6c3bcc0c78a289dc0f Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Fri, 28 Jun 2013 12:16:33 -0700
+Subject: [PATCH 088/596] MR1: MAPREDUCE-4246 Failure in deleting user
+ directories in Secure hadoop (unclean backport)
+ (cherry picked from commit
+ 39d0586fd5bf911275ef4e691bb1773fff68bfff)
+
+(cherry picked from commit c6472663e2401e74f27262c071b5320cd9d94f62)
+(cherry picked from commit d9e8d95d54b72b7c43c3a32e82b7aab33d99e98c)
+(cherry picked from commit 66814d77a88a9546d12175936a6e28446a50b254)
+---
+ .../org/apache/hadoop/mapred/CleanupQueue.java     |    4 +-
+ .../org/apache/hadoop/mapred/TaskController.java   |    7 +-
+ .../org/apache/hadoop/mapred/TaskTracker.java      |    3 +-
+ .../org/apache/hadoop/util/MRAsyncDiskService.java |   86 +++++++++++++++++---
+ 4 files changed, 81 insertions(+), 19 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java
+index 97990fd..489b324 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java
+@@ -30,7 +30,7 @@
+ import org.apache.hadoop.mapreduce.security.token.DelegationTokenRenewal;
+ import org.apache.hadoop.security.UserGroupInformation;
+ 
+-class CleanupQueue {
++public class CleanupQueue {
+ 
+   public static final Log LOG =
+     LogFactory.getLog(CleanupQueue.class);
+@@ -54,7 +54,7 @@ protected CleanupQueue() { }
+   /**
+    * Contains info related to the path of the file/dir to be deleted
+    */
+-  static class PathDeletionContext {
++  public static class PathDeletionContext {
+     final Path fullPath;// full path of file or dir
+     final Configuration conf;
+     final UserGroupInformation ugi;
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskController.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskController.java
+index 3f2c08e..a48ff0f 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskController.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskController.java
+@@ -172,13 +172,14 @@ public abstract void deleteLogAsUser(String user,
+   public abstract void truncateLogsAsUser(String user, List<Task> allAttempts) 
+   throws IOException;
+   
+-  static class DeletionContext extends CleanupQueue.PathDeletionContext {
++  public static class DeletionContext extends CleanupQueue.PathDeletionContext {
+     private TaskController controller;
+     private boolean isLog;
+     private String user;
+     private String subDir;
+-    DeletionContext(TaskController controller, boolean isLog, String user, 
+-                    String subDir) {
++
++    public DeletionContext(TaskController controller, boolean isLog,
++        String user, String subDir) {
+       super(null, null);
+       this.controller = controller;
+       this.isLog = isLog;
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+index b7d49e6..f17d5eb 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+@@ -843,7 +843,8 @@ void initializeDirectories() throws IOException {
+ 
+     deleteUserDirectories(fConf);
+ 
+-    asyncDiskService = new MRAsyncDiskService(fConf);
++    asyncDiskService =
++        new MRAsyncDiskService(localFs, taskController, fConf.getLocalDirs());
+     asyncDiskService.cleanupDirsInAllVolumes(dirsToCleanup);
+ 
+     final FsPermission ttdir = FsPermission.createImmutable((short) 0755);
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/util/MRAsyncDiskService.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/util/MRAsyncDiskService.java
+index 26c0696..e924ce0 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/util/MRAsyncDiskService.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/util/MRAsyncDiskService.java
+@@ -29,8 +29,12 @@
+ import org.apache.hadoop.fs.FileStatus;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.mapred.CleanupQueue;
++import org.apache.hadoop.mapred.CleanupQueue.PathDeletionContext;
+ import org.apache.hadoop.mapred.JobConf;
++import org.apache.hadoop.mapred.TaskController;
+ import org.apache.hadoop.mapred.TaskLog;
++import org.apache.hadoop.security.UserGroupInformation;
+ 
+ /**
+  * This class is a container of multiple thread pools, each for a volume,
+@@ -49,8 +53,10 @@
+ public class MRAsyncDiskService {
+   
+   public static final Log LOG = LogFactory.getLog(MRAsyncDiskService.class);
+-  
++  boolean shouldBeSecure = UserGroupInformation.isSecurityEnabled();
+   AsyncDiskService asyncDiskService;
++  TaskController taskController;
++  private CleanupQueue cleanupQueue;
+   
+   public static final String TOBEDELETED = "toBeDeleted";
+   
+@@ -67,8 +73,10 @@
+    * ("cwd").
+    */
+   public MRAsyncDiskService(FileSystem localFileSystem,
++      TaskController taskController,
+       String[] nonCanonicalVols) throws IOException {
+-    
++    this.taskController = taskController;
++    this.cleanupQueue = CleanupQueue.getInstance();
+     this.localFileSystem = localFileSystem;
+     this.volumes = new String[nonCanonicalVols.length];
+     for (int v = 0; v < nonCanonicalVols.length; v++) {
+@@ -106,14 +114,24 @@ public MRAsyncDiskService(FileSystem localFileSystem,
+           String absoluteFilename = files[f].getPath().toUri().getPath();
+           String relative = TOBEDELETED + Path.SEPARATOR_CHAR
+               + files[f].getPath().getName();
+-          DeleteTask task = new DeleteTask(volumes[v], absoluteFilename,
+-              relative);
+-          execute(volumes[v], task);
++          if (shouldBeSecure) {
++            deletePathsInSecureCluster(absoluteFilename, files[f]);
++          } else {
++            DeleteTask task =
++                new DeleteTask(volumes[v], absoluteFilename, relative,
++                    files[f].getOwner());
++            execute(volumes[v], task);
++          }
+         }
+       }
+     }
+   }
+ 
++  public MRAsyncDiskService(FileSystem localFileSystem,
++                            String[] nonCanonicalVols) throws IOException {
++    this(localFileSystem, null, nonCanonicalVols);
++  }
++
+   /**
+    * Initialize MRAsyncDiskService based on conf.
+    * @param conf  local file system and local dirs will be read from conf 
+@@ -185,15 +203,19 @@ public synchronized boolean awaitTermination(long milliseconds)
+     String originalPath;
+     /** The file name after the move */
+     String pathToBeDeleted;
++    String owner;
+     
+     /**
+      * Delete a file/directory (recursively if needed).
+-     * @param volume        The volume that the file/dir is in.
+-     * @param originalPath  The original name, relative to volume root.
+-     * @param pathToBeDeleted  The name after the move, relative to volume root,
+-     *                         containing TOBEDELETED.
++     * 
++     * @param volume The volume that the file/dir is in.
++     * @param originalPath The original name, relative to volume root.
++     * @param pathToBeDeleted The name after the move, relative to volume root,
++     *          containing TOBEDELETED.
++     * @param owner The owner of the file
+      */
+-    DeleteTask(String volume, String originalPath, String pathToBeDeleted) {
++    DeleteTask(String volume, String originalPath, String pathToBeDeleted,
++        String owner) {
+       this.volume = volume;
+       this.originalPath = originalPath;
+       this.pathToBeDeleted = pathToBeDeleted;
+@@ -212,7 +234,12 @@ public void run() {
+       Exception e = null;
+       try {
+         Path absolutePathToBeDeleted = new Path(volume, pathToBeDeleted);
+-        success = localFileSystem.delete(absolutePathToBeDeleted, true);
++        if (taskController != null & owner != null) {
++          taskController
++              .deleteAsUser(owner, absolutePathToBeDeleted.toString());
++        } else {
++          success = localFileSystem.delete(absolutePathToBeDeleted, true);
++        }
+       } catch (Exception ex) {
+         e = ex;
+       }
+@@ -280,11 +307,44 @@ public boolean moveAndDeleteRelativePath(String volume, String pathName)
+       return false;
+     }
+ 
+-    DeleteTask task = new DeleteTask(volume, pathName, newPathName);
+-    execute(volume, task);
++    FileStatus status = localFileSystem.getFileStatus(target);
++
++    if (shouldBeSecure) {
++      deletePathsInSecureCluster(newPathName, status);
++    } else {
++      DeleteTask task =
++          new DeleteTask(volume, pathName, newPathName, status.getOwner());
++      execute(volume, task);
++    }
+     return true;
+   }
+ 
++  private void deletePathsInSecureCluster(String newPathName, FileStatus status)
++      throws FileNotFoundException, IOException {
++    // In a secure tasktracker, the subdirectories belong
++    // to different user
++    PathDeletionContext item = null;
++
++    // iterate and queue subdirectories for cleanup
++    for (FileStatus subDirStatus : localFileSystem.listStatus(status.getPath())) {
++      String owner = subDirStatus.getOwner();
++      String path = subDirStatus.getPath().getName();
++      if (path.equals(owner)) {
++        // add it to the cleanup queue
++
++        item =
++            new TaskController.DeletionContext(taskController, false, owner,
++                newPathName + Path.SEPARATOR_CHAR + path);
++        cleanupQueue.addToQueue(item);
++      }
++    }
++    // queue the parent directory for cleanup
++    item =
++        new TaskController.DeletionContext(taskController, false,
++            status.getOwner(), newPathName);
++    cleanupQueue.addToQueue(item);
++  }
++
+   /**
+    * Move the path name on each volume to a temporary location and then 
+    * delete them.
+-- 
+1.7.9.5
+

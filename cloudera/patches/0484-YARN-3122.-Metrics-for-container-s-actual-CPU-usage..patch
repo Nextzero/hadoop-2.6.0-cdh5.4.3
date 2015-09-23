@@ -1,0 +1,746 @@
+From 11dd89e1f55c99831159928abee56146d4dfb2d2 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Wed, 4 Mar 2015 17:33:30 -0800
+Subject: [PATCH 484/596] YARN-3122. Metrics for container's actual CPU usage.
+ (Anubhav Dhoot via kasha)
+
+(cherry picked from commit 53947f37c7a84a84ef4ab1a3cab63ff27c078385)
+(cherry picked from commit 1749094fab45ff772d950af7a1a48b8a0adba778)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/LinuxResourceCalculatorPlugin.java
+---
+ .../apache/hadoop/yarn/util/CpuTimeTracker.java    |   99 ++++++++++++++++++++
+ .../yarn/util/LinuxResourceCalculatorPlugin.java   |   47 +++-------
+ .../hadoop/yarn/util/ProcfsBasedProcessTree.java   |   77 ++++++++++++++-
+ .../yarn/util/ResourceCalculatorProcessTree.java   |   12 ++-
+ .../hadoop/yarn/util/WindowsBasedProcessTree.java  |    7 +-
+ .../util/TestLinuxResourceCalculatorPlugin.java    |    4 +-
+ .../yarn/util/TestProcfsBasedProcessTree.java      |   38 ++++++--
+ .../util/TestResourceCalculatorProcessTree.java    |    5 +
+ .../containermanager/monitor/ContainerMetrics.java |   39 ++++++--
+ .../monitor/ContainersMonitorImpl.java             |   18 ++++
+ .../nodemanager/util/NodeManagerHardwareUtils.java |   16 +++-
+ 11 files changed, 309 insertions(+), 53 deletions(-)
+ create mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/CpuTimeTracker.java
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/CpuTimeTracker.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/CpuTimeTracker.java
+new file mode 100644
+index 0000000..d36848e
+--- /dev/null
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/CpuTimeTracker.java
+@@ -0,0 +1,99 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.yarn.util;
++
++import org.apache.hadoop.classification.InterfaceAudience;
++import org.apache.hadoop.classification.InterfaceStability;
++
++import java.math.BigInteger;
++
++@InterfaceAudience.Private
++@InterfaceStability.Unstable
++public class CpuTimeTracker {
++  public static final int UNAVAILABLE = -1;
++  final long MINIMUM_UPDATE_INTERVAL;
++
++  // CPU used time since system is on (ms)
++  BigInteger cumulativeCpuTime = BigInteger.ZERO;
++
++  // CPU used time read last time (ms)
++  BigInteger lastCumulativeCpuTime = BigInteger.ZERO;
++
++  // Unix timestamp while reading the CPU time (ms)
++  long sampleTime;
++  long lastSampleTime;
++  float cpuUsage;
++  BigInteger jiffyLengthInMillis;
++
++  public CpuTimeTracker(long jiffyLengthInMillis) {
++    this.jiffyLengthInMillis = BigInteger.valueOf(jiffyLengthInMillis);
++    this.cpuUsage = UNAVAILABLE;
++    this.sampleTime = UNAVAILABLE;
++    this.lastSampleTime = UNAVAILABLE;
++    MINIMUM_UPDATE_INTERVAL =  10 * jiffyLengthInMillis;
++  }
++
++  /**
++   * Return percentage of cpu time spent over the time since last update.
++   * CPU time spent is based on elapsed jiffies multiplied by amount of
++   * time for 1 core. Thus, if you use 2 cores completely you would have spent
++   * twice the actual time between updates and this will return 200%.
++   *
++   * @return Return percentage of cpu usage since last update, {@link
++   * CpuTimeTracker#UNAVAILABLE} if there haven't been 2 updates more than
++   * {@link CpuTimeTracker#MINIMUM_UPDATE_INTERVAL} apart
++   */
++  public float getCpuTrackerUsagePercent() {
++    if (lastSampleTime == UNAVAILABLE ||
++        lastSampleTime > sampleTime) {
++      // lastSampleTime > sampleTime may happen when the system time is changed
++      lastSampleTime = sampleTime;
++      lastCumulativeCpuTime = cumulativeCpuTime;
++      return cpuUsage;
++    }
++    // When lastSampleTime is sufficiently old, update cpuUsage.
++    // Also take a sample of the current time and cumulative CPU time for the
++    // use of the next calculation.
++    if (sampleTime > lastSampleTime + MINIMUM_UPDATE_INTERVAL) {
++      cpuUsage =
++          ((cumulativeCpuTime.subtract(lastCumulativeCpuTime)).floatValue())
++          * 100F / ((float) (sampleTime - lastSampleTime));
++      lastSampleTime = sampleTime;
++      lastCumulativeCpuTime = cumulativeCpuTime;
++    }
++    return cpuUsage;
++  }
++
++  public void updateElapsedJiffies(BigInteger elapedJiffies, long sampleTime) {
++    this.cumulativeCpuTime = elapedJiffies.multiply(jiffyLengthInMillis);
++    this.sampleTime = sampleTime;
++  }
++
++  @Override
++  public String toString() {
++    StringBuilder sb = new StringBuilder();
++    sb.append("SampleTime " + this.sampleTime);
++    sb.append(" CummulativeCpuTime " + this.cumulativeCpuTime);
++    sb.append(" LastSampleTime " + this.lastSampleTime);
++    sb.append(" LastCummulativeCpuTime " + this.lastCumulativeCpuTime);
++    sb.append(" CpuUsage " + this.cpuUsage);
++    sb.append(" JiffyLengthMillisec " + this.jiffyLengthInMillis);
++    return sb.toString();
++  }
++}
+\ No newline at end of file
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/LinuxResourceCalculatorPlugin.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/LinuxResourceCalculatorPlugin.java
+index 56a81cd..589dc18 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/LinuxResourceCalculatorPlugin.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/LinuxResourceCalculatorPlugin.java
+@@ -22,6 +22,8 @@
+ import java.io.FileNotFoundException;
+ import java.io.FileReader;
+ import java.io.IOException;
++import java.math.BigInteger;
++import java.nio.charset.Charset;
+ import java.util.regex.Matcher;
+ import java.util.regex.Pattern;
+ 
+@@ -39,8 +41,6 @@
+   private static final Log LOG =
+       LogFactory.getLog(LinuxResourceCalculatorPlugin.class);
+ 
+-  public static final int UNAVAILABLE = -1;
+-
+   /**
+    * proc's meminfo virtual file has keys-values in the format
+    * "key:[ \t]*value[ \t]kB".
+@@ -72,6 +72,7 @@
+   private static final Pattern CPU_TIME_FORMAT =
+     Pattern.compile("^cpu[ \t]*([0-9]*)" +
+     		            "[ \t]*([0-9]*)[ \t]*([0-9]*)[ \t].*");
++  private CpuTimeTracker cpuTimeTracker;
+ 
+   private String procfsMemFile;
+   private String procfsCpuFile;
+@@ -85,12 +86,6 @@
+   private long inactiveSize = 0; // inactive cache memory (kB)
+   private int numProcessors = 0; // number of processors on the system
+   private long cpuFrequency = 0L; // CPU frequency on the system (kHz)
+-  private long cumulativeCpuTime = 0L; // CPU used time since system is on (ms)
+-  private long lastCumulativeCpuTime = 0L; // CPU used time read last time (ms)
+-  // Unix timestamp while reading the CPU time (ms)
+-  private float cpuUsage = UNAVAILABLE;
+-  private long sampleTime = UNAVAILABLE;
+-  private long lastSampleTime = UNAVAILABLE;
+ 
+   boolean readMemInfoFile = false;
+   boolean readCpuInfoFile = false;
+@@ -104,10 +99,8 @@ long getCurrentTime() {
+   }
+ 
+   public LinuxResourceCalculatorPlugin() {
+-    procfsMemFile = PROCFS_MEMFILE;
+-    procfsCpuFile = PROCFS_CPUINFO;
+-    procfsStatFile = PROCFS_STAT;
+-    jiffyLengthInMillis = ProcfsBasedProcessTree.JIFFY_LENGTH_IN_MILLIS;
++    this(PROCFS_MEMFILE, PROCFS_CPUINFO, PROCFS_STAT,
++        ProcfsBasedProcessTree.JIFFY_LENGTH_IN_MILLIS);
+   }
+ 
+   /**
+@@ -126,6 +119,7 @@ public LinuxResourceCalculatorPlugin(String procfsMemFile,
+     this.procfsCpuFile = procfsCpuFile;
+     this.procfsStatFile = procfsStatFile;
+     this.jiffyLengthInMillis = jiffyLengthInMillis;
++    this.cpuTimeTracker = new CpuTimeTracker(jiffyLengthInMillis);
+   }
+ 
+   /**
+@@ -271,12 +265,13 @@ private void readProcStatFile() {
+           long uTime = Long.parseLong(mat.group(1));
+           long nTime = Long.parseLong(mat.group(2));
+           long sTime = Long.parseLong(mat.group(3));
+-          cumulativeCpuTime = uTime + nTime + sTime; // milliseconds
++          cpuTimeTracker.updateElapsedJiffies(
++              BigInteger.valueOf(uTime + nTime + sTime),
++              getCurrentTime());
+           break;
+         }
+         str = in.readLine();
+       }
+-      cumulativeCpuTime *= jiffyLengthInMillis;
+     } catch (IOException io) {
+       LOG.warn("Error reading the stream " + io);
+     } finally {
+@@ -340,32 +335,18 @@ public long getCpuFrequency() {
+   @Override
+   public long getCumulativeCpuTime() {
+     readProcStatFile();
+-    return cumulativeCpuTime;
++    return cpuTimeTracker.cumulativeCpuTime.longValue();
+   }
+ 
+   /** {@inheritDoc} */
+   @Override
+   public float getCpuUsage() {
+     readProcStatFile();
+-    sampleTime = getCurrentTime();
+-    if (lastSampleTime == UNAVAILABLE ||
+-        lastSampleTime > sampleTime) {
+-      // lastSampleTime > sampleTime may happen when the system time is changed
+-      lastSampleTime = sampleTime;
+-      lastCumulativeCpuTime = cumulativeCpuTime;
+-      return cpuUsage;
+-    }
+-    // When lastSampleTime is sufficiently old, update cpuUsage.
+-    // Also take a sample of the current time and cumulative CPU time for the
+-    // use of the next calculation.
+-    final long MINIMUM_UPDATE_INTERVAL = 10 * jiffyLengthInMillis;
+-    if (sampleTime > lastSampleTime + MINIMUM_UPDATE_INTERVAL) {
+-	    cpuUsage = (float)(cumulativeCpuTime - lastCumulativeCpuTime) * 100F /
+-	               ((float)(sampleTime - lastSampleTime) * getNumProcessors());
+-	    lastSampleTime = sampleTime;
+-      lastCumulativeCpuTime = cumulativeCpuTime;
++    float overallCpuUsage = cpuTimeTracker.getCpuTrackerUsagePercent();
++    if (overallCpuUsage != CpuTimeTracker.UNAVAILABLE) {
++      overallCpuUsage = overallCpuUsage / getNumProcessors();
+     }
+-    return cpuUsage;
++    return overallCpuUsage;
+   }
+ 
+   /**
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/ProcfsBasedProcessTree.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/ProcfsBasedProcessTree.java
+index eeb559c..6c09860 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/ProcfsBasedProcessTree.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/ProcfsBasedProcessTree.java
+@@ -64,6 +64,8 @@
+   public static final String PROCFS_CMDLINE_FILE = "cmdline";
+   public static final long PAGE_SIZE;
+   public static final long JIFFY_LENGTH_IN_MILLIS; // in millisecond
++  private final CpuTimeTracker cpuTimeTracker;
++  private Clock clock;
+ 
+   enum MemInfo {
+     SIZE("Size"), RSS("Rss"), PSS("Pss"), SHARED_CLEAN("Shared_Clean"),
+@@ -142,7 +144,7 @@ public static MemInfo getMemInfoByName(String name) {
+     new HashMap<String, ProcessInfo>();
+ 
+   public ProcfsBasedProcessTree(String pid) {
+-    this(pid, PROCFS);
++    this(pid, PROCFS, new SystemClock());
+   }
+ 
+   @Override
+@@ -155,6 +157,10 @@ public void setConf(Configuration conf) {
+     }
+   }
+ 
++  public ProcfsBasedProcessTree(String pid, String procfsDir) {
++    this(pid, procfsDir, new SystemClock());
++  }
++
+   /**
+    * Build a new process tree rooted at the pid.
+    *
+@@ -163,11 +169,14 @@ public void setConf(Configuration conf) {
+    *
+    * @param pid root of the process tree
+    * @param procfsDir the root of a proc file system - only used for testing.
++   * @param clock clock for controlling time for testing
+    */
+-  public ProcfsBasedProcessTree(String pid, String procfsDir) {
++  public ProcfsBasedProcessTree(String pid, String procfsDir, Clock clock) {
+     super(pid);
++    this.clock = clock;
+     this.pid = getValidPID(pid);
+     this.procfsDir = procfsDir;
++    this.cpuTimeTracker = new CpuTimeTracker(JIFFY_LENGTH_IN_MILLIS);
+   }
+ 
+   /**
+@@ -445,6 +454,26 @@ public long getCumulativeCpuTime() {
+     return cpuTime;
+   }
+ 
++  private BigInteger getTotalProcessJiffies() {
++    BigInteger totalStime = BigInteger.ZERO;
++    long totalUtime = 0;
++    for (ProcessInfo p : processTree.values()) {
++      if (p != null) {
++        totalUtime += p.getUtime();
++        totalStime = totalStime.add(p.getStime());
++      }
++    }
++    return totalStime.add(BigInteger.valueOf(totalUtime));
++  }
++
++  @Override
++  public float getCpuUsagePercent() {
++    BigInteger processTotalJiffies = getTotalProcessJiffies();
++    cpuTimeTracker.updateElapsedJiffies(processTotalJiffies,
++        clock.getTime());
++    return cpuTimeTracker.getCpuTrackerUsagePercent();
++  }
++
+   private static String getValidPID(String pid) {
+     if (pid == null) return deadPid;
+     Matcher m = numberPattern.matcher(pid);
+@@ -956,4 +985,48 @@ public String toString() {
+       return sb.toString();
+     }
+   }
++
++  /**
++   * Test the {@link ProcfsBasedProcessTree}
++   *
++   * @param args
++   */
++  public static void main(String[] args) {
++    if (args.length != 1) {
++      System.out.println("Provide <pid of process to monitor>");
++      return;
++    }
++
++    int numprocessors =
++        ResourceCalculatorPlugin.getResourceCalculatorPlugin(null, null)
++            .getNumProcessors();
++    System.out.println("Number of processors " + numprocessors);
++
++    System.out.println("Creating ProcfsBasedProcessTree for process " +
++        args[0]);
++    ProcfsBasedProcessTree procfsBasedProcessTree = new
++        ProcfsBasedProcessTree(args[0]);
++    procfsBasedProcessTree.updateProcessTree();
++
++    System.out.println(procfsBasedProcessTree.getProcessTreeDump());
++    System.out.println("Get cpu usage " + procfsBasedProcessTree
++        .getCpuUsagePercent());
++
++    try {
++      // Sleep so we can compute the CPU usage
++      Thread.sleep(500L);
++    } catch (InterruptedException e) {
++      // do nothing
++    }
++
++    procfsBasedProcessTree.updateProcessTree();
++
++    System.out.println(procfsBasedProcessTree.getProcessTreeDump());
++    System.out.println("Cpu usage  " + procfsBasedProcessTree
++        .getCpuUsagePercent());
++    System.out.println("Vmem usage in bytes " + procfsBasedProcessTree
++        .getCumulativeVmem());
++    System.out.println("Rss mem usage in bytes " + procfsBasedProcessTree
++        .getCumulativeRssmem());
++  }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/ResourceCalculatorProcessTree.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/ResourceCalculatorProcessTree.java
+index 85f6f1a..8c22c9e 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/ResourceCalculatorProcessTree.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/ResourceCalculatorProcessTree.java
+@@ -108,13 +108,23 @@ public long getCumulativeRssmem() {
+ 
+   /**
+    * Get the CPU time in millisecond used by all the processes in the
+-   * process-tree since the process-tree created
++   * process-tree since the process-tree was created
+    *
+    * @return cumulative CPU time in millisecond since the process-tree created
+    *         return 0 if it cannot be calculated
+    */
+   public abstract long getCumulativeCpuTime();
+ 
++  /**
++   * Get the CPU usage by all the processes in the process-tree based on
++   * average between samples as a ratio of overall CPU cycles similar to top.
++   * Thus, if 2 out of 4 cores are used this should return 200.0.
++   *
++   * @return percentage CPU usage since the process-tree was created
++   *         return {@link CpuTimeTracker#UNAVAILABLE} if it cannot be calculated
++   */
++  public abstract float getCpuUsagePercent();
++
+   /** Verify that the tree process id is same as its process group id.
+    * @return true if the process id matches else return false.
+    */
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/WindowsBasedProcessTree.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/WindowsBasedProcessTree.java
+index 3759026..dde9dbd 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/WindowsBasedProcessTree.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/util/WindowsBasedProcessTree.java
+@@ -34,7 +34,7 @@
+ 
+   static final Log LOG = LogFactory
+       .getLog(WindowsBasedProcessTree.class);
+-  
++
+   static class ProcessInfo {
+     String pid; // process pid
+     long vmem; // virtual memory
+@@ -202,4 +202,9 @@ public long getCumulativeCpuTime() {
+     return cpuTimeMs;
+   }
+ 
++  @Override
++  public float getCpuUsagePercent() {
++    return CpuTimeTracker.UNAVAILABLE;
++  }
++
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestLinuxResourceCalculatorPlugin.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestLinuxResourceCalculatorPlugin.java
+index c9a33d0..ad09fdf 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestLinuxResourceCalculatorPlugin.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestLinuxResourceCalculatorPlugin.java
+@@ -171,8 +171,8 @@ public void parsingProcStatAndCpuFile() throws IOException {
+     updateStatFile(uTime, nTime, sTime);
+     assertEquals(plugin.getCumulativeCpuTime(),
+                  FAKE_JIFFY_LENGTH * (uTime + nTime + sTime));
+-    assertEquals(plugin.getCpuUsage(), (float)(LinuxResourceCalculatorPlugin.UNAVAILABLE),0.0);
+-    
++    assertEquals(plugin.getCpuUsage(), (float)(CpuTimeTracker.UNAVAILABLE),0.0);
++
+     // Advance the time and sample again to test the CPU usage calculation
+     uTime += 100L;
+     plugin.advanceTime(200L);
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestProcfsBasedProcessTree.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestProcfsBasedProcessTree.java
+index 7719255..d62e21d 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestProcfsBasedProcessTree.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestProcfsBasedProcessTree.java
+@@ -236,8 +236,8 @@ protected ProcfsBasedProcessTree createProcessTree(String pid) {
+   }
+ 
+   protected ProcfsBasedProcessTree createProcessTree(String pid,
+-      String procfsRootDir) {
+-    return new ProcfsBasedProcessTree(pid, procfsRootDir);
++      String procfsRootDir, Clock clock) {
++    return new ProcfsBasedProcessTree(pid, procfsRootDir, clock);
+   }
+ 
+   protected void destroyProcessTree(String pid) throws IOException {
+@@ -388,6 +388,8 @@ public void testCpuAndMemoryForProcessTree() throws IOException {
+ 
+     // test processes
+     String[] pids = { "100", "200", "300", "400" };
++    ControlledClock testClock = new ControlledClock(new SystemClock());
++    testClock.setTime(0);
+     // create the fake procfs root directory.
+     File procfsRootDir = new File(TEST_ROOT_DIR, "proc");
+ 
+@@ -422,7 +424,7 @@ public void testCpuAndMemoryForProcessTree() throws IOException {
+       // crank up the process tree class.
+       Configuration conf = new Configuration();
+       ProcfsBasedProcessTree processTree =
+-          createProcessTree("100", procfsRootDir.getAbsolutePath());
++          createProcessTree("100", procfsRootDir.getAbsolutePath(), testClock);
+       processTree.setConf(conf);
+       // build the process tree.
+       processTree.updateProcessTree();
+@@ -444,6 +446,12 @@ public void testCpuAndMemoryForProcessTree() throws IOException {
+               ? 7200L * ProcfsBasedProcessTree.JIFFY_LENGTH_IN_MILLIS : 0L;
+       Assert.assertEquals("Cumulative cpu time does not match", cumuCpuTime,
+         processTree.getCumulativeCpuTime());
++
++      // verify CPU usage
++      Assert.assertEquals("Percent CPU time should be set to -1 initially",
++          -1.0, processTree.getCpuUsagePercent(),
++          0.01);
++
+       // Check by enabling smaps
+       setSmapsInProceTree(processTree, true);
+       // RSS=Min(shared_dirty,PSS)+PrivateClean+PrivateDirty (exclude r-xs,
+@@ -460,15 +468,31 @@ public void testCpuAndMemoryForProcessTree() throws IOException {
+               "100", "200000", "200", "3000", "500" });
+       writeStatFiles(procfsRootDir, pids, procInfos, memInfo);
+ 
++      long elapsedTimeBetweenUpdatesMsec = 200000;
++      testClock.setTime(elapsedTimeBetweenUpdatesMsec);
+       // build the process tree.
+       processTree.updateProcessTree();
+ 
+       // verify cumulative cpu time again
++      long prevCumuCpuTime = cumuCpuTime;
+       cumuCpuTime =
+           ProcfsBasedProcessTree.JIFFY_LENGTH_IN_MILLIS > 0
+               ? 9400L * ProcfsBasedProcessTree.JIFFY_LENGTH_IN_MILLIS : 0L;
+       Assert.assertEquals("Cumulative cpu time does not match", cumuCpuTime,
+         processTree.getCumulativeCpuTime());
++
++      double expectedCpuUsagePercent =
++          (ProcfsBasedProcessTree.JIFFY_LENGTH_IN_MILLIS > 0) ?
++              (cumuCpuTime - prevCumuCpuTime) * 100.0 /
++                  elapsedTimeBetweenUpdatesMsec : 0;
++      // expectedCpuUsagePercent is given by (94000L - 72000) * 100/
++      //    200000;
++      // which in this case is 11. Lets verify that first
++      Assert.assertEquals(11, expectedCpuUsagePercent, 0.001);
++      Assert.assertEquals("Percent CPU time is not correct expected " +
++              expectedCpuUsagePercent, expectedCpuUsagePercent,
++          processTree.getCpuUsagePercent(),
++          0.01);
+     } finally {
+       FileUtil.fullyDelete(procfsRootDir);
+     }
+@@ -535,7 +559,8 @@ private void testMemForOlderProcesses(boolean smapEnabled) throws IOException {
+ 
+       // crank up the process tree class.
+       ProcfsBasedProcessTree processTree =
+-          createProcessTree("100", procfsRootDir.getAbsolutePath());
++          createProcessTree("100", procfsRootDir.getAbsolutePath(),
++              new SystemClock());
+       setSmapsInProceTree(processTree, smapEnabled);
+ 
+       // verify cumulative memory
+@@ -672,7 +697,7 @@ public void testDestroyProcessTree() throws IOException {
+       setupProcfsRootDir(procfsRootDir);
+ 
+       // crank up the process tree class.
+-      createProcessTree(pid, procfsRootDir.getAbsolutePath());
++      createProcessTree(pid, procfsRootDir.getAbsolutePath(), new SystemClock());
+ 
+       // Let us not create stat file for pid 100.
+       Assert.assertTrue(ProcfsBasedProcessTree.checkPidPgrpidForMatch(pid,
+@@ -741,7 +766,8 @@ public void testProcessTreeDump() throws IOException {
+       writeCmdLineFiles(procfsRootDir, pids, cmdLines);
+ 
+       ProcfsBasedProcessTree processTree =
+-          createProcessTree("100", procfsRootDir.getAbsolutePath());
++          createProcessTree("100", procfsRootDir.getAbsolutePath(),
++              new SystemClock());
+       // build the process tree.
+       processTree.updateProcessTree();
+ 
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestResourceCalculatorProcessTree.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestResourceCalculatorProcessTree.java
+index 32ceb23..eaf7e8e 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestResourceCalculatorProcessTree.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestResourceCalculatorProcessTree.java
+@@ -53,6 +53,11 @@ public long getCumulativeCpuTime() {
+       return 0;
+     }
+ 
++    @Override
++    public float getCpuUsagePercent() {
++      return CpuTimeTracker.UNAVAILABLE;
++    }
++
+     public boolean checkPidPgrpidForMatch() {
+       return false;
+     }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerMetrics.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerMetrics.java
+index e88dbb7..e358476 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerMetrics.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerMetrics.java
+@@ -42,14 +42,29 @@
+ @Metrics(context="container")
+ public class ContainerMetrics implements MetricsSource {
+ 
+-  public static final String PMEM_LIMIT_METRIC_NAME = "pMemLimit";
+-  public static final String VMEM_LIMIT_METRIC_NAME = "vMemLimit";
++  public static final String PMEM_LIMIT_METRIC_NAME = "pMemLimitMBs";
++  public static final String VMEM_LIMIT_METRIC_NAME = "vMemLimitMBs";
+   public static final String VCORE_LIMIT_METRIC_NAME = "vCoreLimit";
+-  public static final String PMEM_USAGE_METRIC_NAME = "pMemUsage";
++  public static final String PMEM_USAGE_METRIC_NAME = "pMemUsageMBs";
++  private static final String PHY_CPU_USAGE_METRIC_NAME = "pCpuUsagePercent";
++
++  // Use a multiplier of 1000 to avoid losing too much precision when
++  // converting to integers
++  private static final String VCORE_USAGE_METRIC_NAME = "milliVcoreUsage";
+ 
+   @Metric
+   public MutableStat pMemMBsStat;
+ 
++  // This tracks overall CPU percentage of the machine in terms of percentage
++  // of 1 core similar to top
++  // Thus if you use 2 cores completely out of 4 available cores this value
++  // will be 200
++  @Metric
++  public MutableStat cpuCoreUsagePercent;
++
++  @Metric
++  public MutableStat milliVcoresUsed;
++
+   @Metric
+   public MutableGaugeInt pMemLimitMbs;
+ 
+@@ -57,7 +72,7 @@
+   public MutableGaugeInt vMemLimitMbs;
+ 
+   @Metric
+-  public MutableGaugeInt cpuVcores;
++  public MutableGaugeInt cpuVcoreLimit;
+ 
+   static final MetricsInfo RECORD_INFO =
+       info("ContainerResource", "Resource limit and usage by container");
+@@ -95,11 +110,17 @@
+ 
+     this.pMemMBsStat = registry.newStat(
+         PMEM_USAGE_METRIC_NAME, "Physical memory stats", "Usage", "MBs", true);
++    this.cpuCoreUsagePercent = registry.newStat(
++        PHY_CPU_USAGE_METRIC_NAME, "Physical Cpu core percent usage stats",
++        "Usage", "Percents", true);
++    this.milliVcoresUsed = registry.newStat(
++        VCORE_USAGE_METRIC_NAME, "1000 times Vcore usage", "Usage",
++        "MilliVcores", true);
+     this.pMemLimitMbs = registry.newGauge(
+         PMEM_LIMIT_METRIC_NAME, "Physical memory limit in MBs", 0);
+     this.vMemLimitMbs = registry.newGauge(
+         VMEM_LIMIT_METRIC_NAME, "Virtual memory limit in MBs", 0);
+-    this.cpuVcores = registry.newGauge(
++    this.cpuVcoreLimit = registry.newGauge(
+         VCORE_LIMIT_METRIC_NAME, "CPU limit in number of vcores", 0);
+   }
+ 
+@@ -170,6 +191,12 @@ public void recordMemoryUsage(int memoryMBs) {
+     this.pMemMBsStat.add(memoryMBs);
+   }
+ 
++  public void recordCpuUsage(
++      int totalPhysicalCpuPercent, int milliVcoresUsed) {
++    this.cpuCoreUsagePercent.add(totalPhysicalCpuPercent);
++    this.milliVcoresUsed.add(milliVcoresUsed);
++  }
++
+   public void recordProcessId(String processId) {
+     registry.tag(PROCESSID_INFO, processId);
+   }
+@@ -177,7 +204,7 @@ public void recordProcessId(String processId) {
+   public void recordResourceLimit(int vmemLimit, int pmemLimit, int cpuVcores) {
+     this.vMemLimitMbs.set(vmemLimit);
+     this.pMemLimitMbs.set(pmemLimit);
+-    this.cpuVcores.set(cpuVcores);
++    this.cpuVcoreLimit.set(cpuVcores);
+   }
+ 
+   private synchronized void scheduleTimerTaskIfRequired() {
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainersMonitorImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainersMonitorImpl.java
+index 2cecda6..b587e46 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainersMonitorImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainersMonitorImpl.java
+@@ -38,6 +38,7 @@
+ import org.apache.hadoop.yarn.server.nodemanager.ContainerExecutor;
+ import org.apache.hadoop.yarn.server.nodemanager.Context;
+ import org.apache.hadoop.yarn.server.nodemanager.containermanager.container.ContainerKillEvent;
++import org.apache.hadoop.yarn.server.nodemanager.util.NodeManagerHardwareUtils;
+ import org.apache.hadoop.yarn.util.ResourceCalculatorProcessTree;
+ import org.apache.hadoop.yarn.util.ResourceCalculatorPlugin;
+ 
+@@ -75,6 +76,7 @@
+   private long maxVCoresAllottedForContainers;
+ 
+   private static final long UNKNOWN_MEMORY_LIMIT = -1L;
++  private int nodeCpuPercentageForYARN;
+ 
+   public ContainersMonitorImpl(ContainerExecutor exec,
+       AsyncDispatcher dispatcher, Context context) {
+@@ -145,6 +147,9 @@ protected void serviceInit(Configuration conf) throws Exception {
+     LOG.info("Physical memory check enabled: " + pmemCheckEnabled);
+     LOG.info("Virtual memory check enabled: " + vmemCheckEnabled);
+ 
++    nodeCpuPercentageForYARN =
++        NodeManagerHardwareUtils.getNodeCpuPercentage(conf);
++
+     if (pmemCheckEnabled) {
+       // Logging if actual pmem cannot be determined.
+       long totalPhysicalMemoryOnNM = UNKNOWN_MEMORY_LIMIT;
+@@ -434,6 +439,16 @@ public void run() {
+             pTree.updateProcessTree();    // update process-tree
+             long currentVmemUsage = pTree.getCumulativeVmem();
+             long currentPmemUsage = pTree.getCumulativeRssmem();
++            // if machine has 6 cores and 3 are used,
++            // cpuUsagePercentPerCore should be 300% and
++            // cpuUsageTotalCoresPercentage should be 50%
++            float cpuUsagePercentPerCore = pTree.getCpuUsagePercent();
++            float cpuUsageTotalCoresPercentage = cpuUsagePercentPerCore /
++                resourceCalculatorPlugin.getNumProcessors();
++
++            // Multiply by 1000 to avoid losing data when converting to int
++            int milliVcoresUsed = (int) (cpuUsageTotalCoresPercentage * 1000
++                * maxVCoresAllottedForContainers /nodeCpuPercentageForYARN);
+             // as processes begin with an age 1, we want to see if there
+             // are processes more than 1 iteration old.
+             long curMemUsageOfAgedProcesses = pTree.getCumulativeVmem(1);
+@@ -451,6 +466,9 @@ public void run() {
+               ContainerMetrics.forContainer(
+                   containerId, containerMetricsPeriodMs).recordMemoryUsage(
+                   (int) (currentPmemUsage >> 20));
++              ContainerMetrics.forContainer(
++                  containerId, containerMetricsPeriodMs).recordCpuUsage
++                  ((int)cpuUsagePercentPerCore, milliVcoresUsed);
+             }
+ 
+             boolean isMemoryOverLimit = false;
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/util/NodeManagerHardwareUtils.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/util/NodeManagerHardwareUtils.java
+index 07cf698..431cf5d 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/util/NodeManagerHardwareUtils.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/util/NodeManagerHardwareUtils.java
+@@ -59,6 +59,19 @@ public static float getContainersCores(Configuration conf) {
+   public static float getContainersCores(ResourceCalculatorPlugin plugin,
+       Configuration conf) {
+     int numProcessors = plugin.getNumProcessors();
++    int nodeCpuPercentage = getNodeCpuPercentage(conf);
++
++    return (nodeCpuPercentage * numProcessors) / 100.0f;
++  }
++
++  /**
++   * Gets the percentage of physical CPU that is configured for YARN containers
++   * This is percent > 0 and <= 100  based on
++   * YarnConfiguration.NM_RESOURCE_PERCENTAGE_PHYSICAL_CPU_LIMIT
++   * @param conf Configuration object
++   * @return percent > 0 and <= 100
++   */
++  public static int getNodeCpuPercentage(Configuration conf) {
+     int nodeCpuPercentage =
+         Math.min(conf.getInt(
+           YarnConfiguration.NM_RESOURCE_PERCENTAGE_PHYSICAL_CPU_LIMIT,
+@@ -73,7 +86,6 @@ public static float getContainersCores(ResourceCalculatorPlugin plugin,
+               + ". Value cannot be less than or equal to 0.";
+       throw new IllegalArgumentException(message);
+     }
+-
+-    return (nodeCpuPercentage * numProcessors) / 100.0f;
++    return nodeCpuPercentage;
+   }
+ }
+-- 
+1.7.9.5
+

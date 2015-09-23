@@ -1,0 +1,30 @@
+From 53437dc9f1c453d39e8a071b8437c628b539eefe Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Mon, 30 Sep 2013 10:30:03 -0700
+Subject: [PATCH 100/596] MR1: CLOUDERA-BUILD. After HDFS-4817, fix
+ TaskTracker to use identifier argument in
+ NativeIO.POSIX.posixFadviseIfPossible
+
+(cherry picked from commit e4344fb374fd009eff22e9d7001d36224c97f6d6)
+(cherry picked from commit 7058ab6f79300c0e08bd60980a89303f41804b90)
+(cherry picked from commit 1e3d09a6a6fc0de526e5550419ff251c5975a92a)
+---
+ .../org/apache/hadoop/mapred/TaskTracker.java      |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+index 84e50c4..c46a4b5 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+@@ -4331,7 +4331,7 @@ public void doGet(HttpServletRequest request,
+         
+         // drop cache if possible
+         if (tracker.manageOsCacheInShuffle && info.partLength > 0) {
+-          NativeIO.POSIX.posixFadviseIfPossible(mapOutputIn.getFD(),
++          NativeIO.POSIX.posixFadviseIfPossible(mapId, mapOutputIn.getFD(),
+               info.startOffset, info.partLength,
+               NativeIO.POSIX.POSIX_FADV_DONTNEED);
+         }
+-- 
+1.7.9.5
+

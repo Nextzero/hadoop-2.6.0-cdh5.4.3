@@ -1,0 +1,169 @@
+From 1f674b480ecff9c835c2ed5410bd13720f3cc216 Mon Sep 17 00:00:00 2001
+From: Chris Nauroth <cnauroth@apache.org>
+Date: Thu, 17 Jul 2014 05:04:53 +0000
+Subject: [PATCH 223/596] HADOOP-10840. Fix OutOfMemoryError caused by metrics
+ system in Azure File System. Contributed by Shanyu
+ Zhao.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/trunk@1611247 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 0b05c9f78f6c2954d762f810c3889f10c6be61f4)
+---
+ .../hadoop/fs/azure/NativeAzureFileSystem.java     |   27 +++++++++++++++-----
+ .../metrics/AzureFileSystemMetricsSystem.java      |   19 +++++++++-----
+ .../fs/azure/AzureBlobStorageTestAccount.java      |    4 +--
+ .../fs/azure/NativeAzureFileSystemBaseTest.java    |    7 +++++
+ 4 files changed, 40 insertions(+), 17 deletions(-)
+
+diff --git a/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/NativeAzureFileSystem.java b/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/NativeAzureFileSystem.java
+index f9d7377..577711f 100644
+--- a/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/NativeAzureFileSystem.java
++++ b/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/NativeAzureFileSystem.java
+@@ -373,6 +373,8 @@ private void restoreKey() throws IOException {
+   private Path workingDir;
+   private long blockSize = MAX_AZURE_BLOCK_SIZE;
+   private AzureFileSystemInstrumentation instrumentation;
++  private String metricsSourceName;
++  private boolean isClosed = false;
+   private static boolean suppressRetryPolicy = false;
+   // A counter to create unique (within-process) names for my metrics sources.
+   private static AtomicInteger metricsSourceNameCounter = new AtomicInteger();
+@@ -482,11 +484,10 @@ public void initialize(URI uri, Configuration conf) throws IOException {
+ 
+     // Make sure the metrics system is available before interacting with Azure
+     AzureFileSystemMetricsSystem.fileSystemStarted();
+-    String sourceName = newMetricsSourceName(),
+-        sourceDesc = "Azure Storage Volume File System metrics";
+-    instrumentation = DefaultMetricsSystem.instance().register(sourceName,
+-        sourceDesc, new AzureFileSystemInstrumentation(conf));
+-    AzureFileSystemMetricsSystem.registerSource(sourceName, sourceDesc,
++    metricsSourceName = newMetricsSourceName();
++    String sourceDesc = "Azure Storage Volume File System metrics";
++    instrumentation = new AzureFileSystemInstrumentation(conf);
++    AzureFileSystemMetricsSystem.registerSource(metricsSourceName, sourceDesc,
+         instrumentation);
+ 
+     store.initialize(uri, conf, instrumentation);
+@@ -502,7 +503,6 @@ public void initialize(URI uri, Configuration conf) throws IOException {
+       LOG.debug("  blockSize  = "
+           + conf.getLong(AZURE_BLOCK_SIZE_PROPERTY_NAME, MAX_AZURE_BLOCK_SIZE));
+     }
+-
+   }
+ 
+   private NativeFileSystemStore createDefaultStore(Configuration conf) {
+@@ -1337,7 +1337,11 @@ public void setOwner(Path p, String username, String groupname)
+   }
+ 
+   @Override
+-  public void close() throws IOException {
++  public synchronized void close() throws IOException {
++    if (isClosed) {
++      return;
++    }
++    
+     // Call the base close() to close any resources there.
+     super.close();
+     // Close the store
+@@ -1349,12 +1353,14 @@ public void close() throws IOException {
+ 
+     long startTime = System.currentTimeMillis();
+ 
++    AzureFileSystemMetricsSystem.unregisterSource(metricsSourceName);
+     AzureFileSystemMetricsSystem.fileSystemClosed();
+ 
+     if (LOG.isDebugEnabled()) {
+         LOG.debug("Submitting metrics when file system closed took "
+                 + (System.currentTimeMillis() - startTime) + " ms.");
+     }
++    isClosed = true;
+   }
+ 
+   /**
+@@ -1498,6 +1504,13 @@ public void deleteFilesWithDanglingTempData(Path root) throws IOException {
+     handleFilesWithDanglingTempData(root, new DanglingFileDeleter());
+   }
+ 
++  @Override
++  protected void finalize() throws Throwable {
++    LOG.debug("finalize() called.");
++    close();
++    super.finalize();
++  }
++
+   /**
+    * Encode the key with a random prefix for load balancing in Azure storage.
+    * Upload data to a random temporary file then do storage side renaming to
+diff --git a/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/metrics/AzureFileSystemMetricsSystem.java b/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/metrics/AzureFileSystemMetricsSystem.java
+index a5f29c1..322795a 100644
+--- a/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/metrics/AzureFileSystemMetricsSystem.java
++++ b/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/metrics/AzureFileSystemMetricsSystem.java
+@@ -44,21 +44,26 @@ public static synchronized void fileSystemStarted() {
+   }
+   
+   public static synchronized void fileSystemClosed() {
+-    if (instance != null) {
+-      instance.publishMetricsNow();
+-    }
+     if (numFileSystems == 1) {
++      instance.publishMetricsNow();
+       instance.stop();
+       instance.shutdown();
+       instance = null;
+     }
+     numFileSystems--;
+   }
+-  
++
+   public static void registerSource(String name, String desc,
+       MetricsSource source) {
+-    // Register the source with the name appended with -WasbSystem
+-    // so that the name is globally unique.
+-    instance.register(name + "-WasbSystem", desc, source);
++    //caller has to use unique name to register source
++    instance.register(name, desc, source);
++  }
++
++  public static synchronized void unregisterSource(String name) {
++    if (instance != null) {
++      //publish metrics before unregister a metrics source
++      instance.publishMetricsNow();
++      instance.unregisterSource(name);
++    }
+   }
+ }
+diff --git a/hadoop-tools/hadoop-azure/src/test/java/org/apache/hadoop/fs/azure/AzureBlobStorageTestAccount.java b/hadoop-tools/hadoop-azure/src/test/java/org/apache/hadoop/fs/azure/AzureBlobStorageTestAccount.java
+index 02738e7..80e8e43 100644
+--- a/hadoop-tools/hadoop-azure/src/test/java/org/apache/hadoop/fs/azure/AzureBlobStorageTestAccount.java
++++ b/hadoop-tools/hadoop-azure/src/test/java/org/apache/hadoop/fs/azure/AzureBlobStorageTestAccount.java
+@@ -324,9 +324,7 @@ public static AzureBlobStorageTestAccount createOutOfBandStore(
+     String sourceName = NativeAzureFileSystem.newMetricsSourceName();
+     String sourceDesc = "Azure Storage Volume File System metrics";
+ 
+-    AzureFileSystemInstrumentation instrumentation =
+-        DefaultMetricsSystem.instance().register(sourceName,
+-                sourceDesc, new AzureFileSystemInstrumentation(conf));
++    AzureFileSystemInstrumentation instrumentation = new AzureFileSystemInstrumentation(conf);
+ 
+     AzureFileSystemMetricsSystem.registerSource(
+         sourceName, sourceDesc, instrumentation);
+diff --git a/hadoop-tools/hadoop-azure/src/test/java/org/apache/hadoop/fs/azure/NativeAzureFileSystemBaseTest.java b/hadoop-tools/hadoop-azure/src/test/java/org/apache/hadoop/fs/azure/NativeAzureFileSystemBaseTest.java
+index bc7e344..e731b21 100644
+--- a/hadoop-tools/hadoop-azure/src/test/java/org/apache/hadoop/fs/azure/NativeAzureFileSystemBaseTest.java
++++ b/hadoop-tools/hadoop-azure/src/test/java/org/apache/hadoop/fs/azure/NativeAzureFileSystemBaseTest.java
+@@ -516,6 +516,13 @@ public void testListSlash() throws Exception {
+     assertNotNull(status);
+   }
+ 
++  @Test
++  public void testCloseFileSystemTwice() throws Exception {
++    //make sure close() can be called multiple times without doing any harm
++    fs.close();
++    fs.close();
++  }
++
+   private boolean testModifiedTime(Path testPath, long time) throws Exception {
+     FileStatus fileStatus = fs.getFileStatus(testPath);
+     final long errorMargin = modifiedTimeErrorMargin;
+-- 
+1.7.9.5
+

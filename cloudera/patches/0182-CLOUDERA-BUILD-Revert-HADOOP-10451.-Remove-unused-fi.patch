@@ -1,0 +1,40 @@
+From 9ff6245f7c37c90a4c9fb348a6b52b25be0ce72c Mon Sep 17 00:00:00 2001
+From: Juan Yu <jyu@cloudera.com>
+Date: Wed, 20 Aug 2014 15:15:41 -0700
+Subject: [PATCH 182/596] CLOUDERA-BUILD Revert "HADOOP-10451. Remove unused
+ field and imports from SaslRpcServer."
+
+This reverts commit 8ae3acb5d23ea1dfadc2e0d5439a4fde61a60d70.
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit 9047f29072ac74f300bf04464e936863ddf53464)
+---
+ .../org/apache/hadoop/security/SaslRpcServer.java  |    3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/SaslRpcServer.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/SaslRpcServer.java
+index 83f46ef..8240fde 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/SaslRpcServer.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/SaslRpcServer.java
+@@ -30,6 +30,7 @@
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
++import java.util.TreeMap;
+ 
+ import javax.security.auth.callback.Callback;
+ import javax.security.auth.callback.CallbackHandler;
+@@ -65,6 +66,8 @@
+ public class SaslRpcServer {
+   public static final Log LOG = LogFactory.getLog(SaslRpcServer.class);
+   public static final String SASL_DEFAULT_REALM = "default";
++  public static final Map<String, String> SASL_PROPS = 
++      new TreeMap<String, String>();
+   private static SaslServerFactory saslFactory;
+ 
+   public static enum QualityOfProtection {
+-- 
+1.7.9.5
+

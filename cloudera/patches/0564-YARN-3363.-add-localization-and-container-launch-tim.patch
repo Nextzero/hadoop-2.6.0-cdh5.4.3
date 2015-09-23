@@ -1,0 +1,241 @@
+From 3faed96db3b6e64b438335c1bf636309a94a3f9e Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@apache.org>
+Date: Fri, 1 May 2015 16:39:21 -0700
+Subject: [PATCH 564/596] YARN-3363. add localization and container launch
+ time to ContainerMetrics at NM to show these timing
+ information for each active container. (zxu via
+ rkanter)
+
+(cherry picked from commit ac7d152901e29b1f444507fe4e421eb6e1402b5a)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+---
+ .../containermanager/container/ContainerImpl.java  |   37 +++++++++++---------
+ .../containermanager/monitor/ContainerMetrics.java |   20 +++++++++++
+ .../monitor/ContainerStartMonitoringEvent.java     |   15 +++++++-
+ .../monitor/ContainersMonitorImpl.java             |    9 +++++
+ .../monitor/TestContainerMetrics.java              |   10 ++++++
+ 5 files changed, 74 insertions(+), 17 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+index 9cd32e0..c6bf7ab 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+@@ -94,6 +94,7 @@
+   private int exitCode = ContainerExitStatus.INVALID;
+   private final StringBuilder diagnostics;
+   private boolean wasLaunched;
++  private long containerLocalizationStartTime;
+   private long containerLaunchStartTime;
+   private static Clock clock = new SystemClock();
+ 
+@@ -486,20 +487,25 @@ private void sendLaunchEvent() {
+   // resource usage.
+   @SuppressWarnings("unchecked") // dispatcher not typed
+   private void sendContainerMonitorStartEvent() {
+-      long pmemBytes = getResource().getMemory() * 1024 * 1024L;
+-     
+-      // absolute minimum of 5MB for zero memory containers
+-      pmemBytes = Math.max(pmemBytes, 5L * 1024 * 1024);
+-
+-      float pmemRatio = daemonConf.getFloat(
+-          YarnConfiguration.NM_VMEM_PMEM_RATIO,
+-          YarnConfiguration.DEFAULT_NM_VMEM_PMEM_RATIO);
+-      long vmemBytes = (long) (pmemRatio * pmemBytes);
+-      int cpuVcores = getResource().getVirtualCores();
+-
+-      dispatcher.getEventHandler().handle(
+-          new ContainerStartMonitoringEvent(containerId,
+-              vmemBytes, pmemBytes, cpuVcores));
++    long launchDuration = clock.getTime() - containerLaunchStartTime;
++    metrics.addContainerLaunchDuration(launchDuration);
++
++    long pmemBytes = getResource().getMemory() * 1024 * 1024L;
++
++    // absolute minimum of 5MB for zero memory containers
++    pmemBytes = Math.max(pmemBytes, 5L * 1024 * 1024);
++
++    float pmemRatio = daemonConf.getFloat(
++        YarnConfiguration.NM_VMEM_PMEM_RATIO,
++        YarnConfiguration.DEFAULT_NM_VMEM_PMEM_RATIO);
++    long vmemBytes = (long) (pmemRatio * pmemBytes);
++    int cpuVcores = getResource().getVirtualCores();
++    long localizationDuration = containerLaunchStartTime -
++        containerLocalizationStartTime;
++    dispatcher.getEventHandler().handle(
++        new ContainerStartMonitoringEvent(containerId,
++        vmemBytes, pmemBytes, cpuVcores, launchDuration,
++        localizationDuration));
+   }
+ 
+   private void addDiagnostics(String... diags) {
+@@ -598,6 +604,7 @@ public ContainerState transition(ContainerImpl container,
+         }
+       }
+ 
++      container.containerLocalizationStartTime = clock.getTime();
+       // Send requests for public, private resources
+       Map<String,LocalResource> cntrRsrc = ctxt.getLocalResources();
+       if (!cntrRsrc.isEmpty()) {
+@@ -705,8 +712,6 @@ public void transition(ContainerImpl container, ContainerEvent event) {
+       container.sendContainerMonitorStartEvent();
+       container.metrics.runningContainer();
+       container.wasLaunched  = true;
+-      long duration = clock.getTime() - container.containerLaunchStartTime;
+-      container.metrics.addContainerLaunchDuration(duration);
+ 
+       if (container.recoveredAsKilled) {
+         LOG.info("Killing " + container.containerId
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerMetrics.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerMetrics.java
+index e358476..a8828f4 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerMetrics.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerMetrics.java
+@@ -28,6 +28,7 @@
+ import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
+ import org.apache.hadoop.metrics2.lib.MetricsRegistry;
+ import org.apache.hadoop.metrics2.lib.MutableGaugeInt;
++import org.apache.hadoop.metrics2.lib.MutableGaugeLong;
+ import org.apache.hadoop.metrics2.lib.MutableStat;
+ import org.apache.hadoop.yarn.api.records.ContainerId;
+ 
+@@ -46,6 +47,9 @@
+   public static final String VMEM_LIMIT_METRIC_NAME = "vMemLimitMBs";
+   public static final String VCORE_LIMIT_METRIC_NAME = "vCoreLimit";
+   public static final String PMEM_USAGE_METRIC_NAME = "pMemUsageMBs";
++  public static final String LAUNCH_DURATION_METRIC_NAME = "launchDurationMs";
++  public static final String LOCALIZATION_DURATION_METRIC_NAME =
++      "localizationDurationMs";
+   private static final String PHY_CPU_USAGE_METRIC_NAME = "pCpuUsagePercent";
+ 
+   // Use a multiplier of 1000 to avoid losing too much precision when
+@@ -74,6 +78,12 @@
+   @Metric
+   public MutableGaugeInt cpuVcoreLimit;
+ 
++  @Metric
++  public MutableGaugeLong launchDurationMs;
++
++  @Metric
++  public MutableGaugeLong localizationDurationMs;
++
+   static final MetricsInfo RECORD_INFO =
+       info("ContainerResource", "Resource limit and usage by container");
+ 
+@@ -122,6 +132,10 @@
+         VMEM_LIMIT_METRIC_NAME, "Virtual memory limit in MBs", 0);
+     this.cpuVcoreLimit = registry.newGauge(
+         VCORE_LIMIT_METRIC_NAME, "CPU limit in number of vcores", 0);
++    this.launchDurationMs = registry.newGauge(
++        LAUNCH_DURATION_METRIC_NAME, "Launch duration in MS", 0L);
++    this.localizationDurationMs = registry.newGauge(
++        LOCALIZATION_DURATION_METRIC_NAME, "Localization duration in MS", 0L);
+   }
+ 
+   ContainerMetrics tag(MetricsInfo info, ContainerId containerId) {
+@@ -207,6 +221,12 @@ public void recordResourceLimit(int vmemLimit, int pmemLimit, int cpuVcores) {
+     this.cpuVcoreLimit.set(cpuVcores);
+   }
+ 
++  public void recordStateChangeDurations(long launchDuration,
++      long localizationDuration) {
++    this.launchDurationMs.set(launchDuration);
++    this.localizationDurationMs.set(localizationDuration);
++  }
++
+   private synchronized void scheduleTimerTaskIfRequired() {
+     if (flushPeriodMs > 0) {
+       // Lazily initialize timer
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerStartMonitoringEvent.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerStartMonitoringEvent.java
+index 56e2d8e..c09bebf 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerStartMonitoringEvent.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainerStartMonitoringEvent.java
+@@ -25,13 +25,18 @@
+   private final long vmemLimit;
+   private final long pmemLimit;
+   private final int cpuVcores;
++  private final long launchDuration;
++  private final long localizationDuration;
+ 
+   public ContainerStartMonitoringEvent(ContainerId containerId,
+-      long vmemLimit, long pmemLimit, int cpuVcores) {
++      long vmemLimit, long pmemLimit, int cpuVcores, long launchDuration,
++      long localizationDuration) {
+     super(containerId, ContainersMonitorEventType.START_MONITORING_CONTAINER);
+     this.vmemLimit = vmemLimit;
+     this.pmemLimit = pmemLimit;
+     this.cpuVcores = cpuVcores;
++    this.launchDuration = launchDuration;
++    this.localizationDuration = localizationDuration;
+   }
+ 
+   public long getVmemLimit() {
+@@ -45,4 +50,12 @@ public long getPmemLimit() {
+   public int getCpuVcores() {
+     return this.cpuVcores;
+   }
++
++  public long getLaunchDuration() {
++    return this.launchDuration;
++  }
++
++  public long getLocalizationDuration() {
++    return this.localizationDuration;
++  }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainersMonitorImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainersMonitorImpl.java
+index b587e46..1f277ba 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainersMonitorImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/ContainersMonitorImpl.java
+@@ -614,6 +614,15 @@ public void handle(ContainersMonitorEvent monitoringEvent) {
+     case START_MONITORING_CONTAINER:
+       ContainerStartMonitoringEvent startEvent =
+           (ContainerStartMonitoringEvent) monitoringEvent;
++
++      if (containerMetricsEnabled) {
++        ContainerMetrics usageMetrics = ContainerMetrics
++            .forContainer(containerId, containerMetricsPeriodMs);
++        usageMetrics.recordStateChangeDurations(
++            startEvent.getLaunchDuration(),
++            startEvent.getLocalizationDuration());
++      }
++
+       synchronized (this.containersToBeAdded) {
+         ProcessTreeInfo processTreeInfo =
+             new ProcessTreeInfo(containerId, null, null,
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/TestContainerMetrics.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/TestContainerMetrics.java
+index c628648..bdf9994 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/TestContainerMetrics.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/monitor/TestContainerMetrics.java
+@@ -87,10 +87,14 @@ public void testContainerMetricsLimit() throws InterruptedException {
+     int anyPmemLimit = 1024;
+     int anyVmemLimit = 2048;
+     int anyVcores = 10;
++    long anyLaunchDuration = 20L;
++    long anyLocalizationDuration = 1000L;
+     String anyProcessId = "1234";
+ 
+     metrics.recordResourceLimit(anyVmemLimit, anyPmemLimit, anyVcores);
+     metrics.recordProcessId(anyProcessId);
++    metrics.recordStateChangeDurations(anyLaunchDuration,
++        anyLocalizationDuration);
+ 
+     Thread.sleep(110);
+     metrics.getMetrics(collector, true);
+@@ -105,6 +109,12 @@ public void testContainerMetricsLimit() throws InterruptedException {
+     MetricsRecords.assertMetric(record, ContainerMetrics.VMEM_LIMIT_METRIC_NAME, anyVmemLimit);
+     MetricsRecords.assertMetric(record, ContainerMetrics.VCORE_LIMIT_METRIC_NAME, anyVcores);
+ 
++    MetricsRecords.assertMetric(record,
++        ContainerMetrics.LAUNCH_DURATION_METRIC_NAME, anyLaunchDuration);
++    MetricsRecords.assertMetric(record,
++        ContainerMetrics.LOCALIZATION_DURATION_METRIC_NAME,
++        anyLocalizationDuration);
++
+     collector.clear();
+   }
+ }
+-- 
+1.7.9.5
+

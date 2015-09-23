@@ -1,0 +1,28 @@
+From 7ada8326f0a94341fdf7e2bfe931383fd7c0b4ff Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Tue, 24 Jun 2014 14:49:29 -0700
+Subject: [PATCH 315/596] CLOUDERA-BUILD. Fix trivial test failure introduced
+ by CLOUDERA-BUILD CDH-13222 (CDH-19994)
+
+(cherry picked from commit 2577048baa35a47b7fb98210ce8285c426c41b50)
+(cherry picked from commit 4189cc67eb18becb682534638077167f1d1130d9)
+---
+ .../mapreduce/v2/hs/TestJobHistoryServer.java      |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/TestJobHistoryServer.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/TestJobHistoryServer.java
+index 010e4b6..a0b370b 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/TestJobHistoryServer.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/TestJobHistoryServer.java
+@@ -72,7 +72,7 @@ public void testStartStopServer() throws Exception {
+     Configuration config = new Configuration();
+     historyServer.init(config);
+     assertEquals(STATE.INITED, historyServer.getServiceState());
+-    assertEquals(6, historyServer.getServices().size());
++    assertEquals(7, historyServer.getServices().size());
+     HistoryClientService historyService = historyServer.getClientService();
+     assertNotNull(historyServer.getClientService());
+     assertEquals(STATE.INITED, historyService.getServiceState());
+-- 
+1.7.9.5
+

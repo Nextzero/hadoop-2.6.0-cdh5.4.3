@@ -1,0 +1,28 @@
+From 1692c11bebf5f3a89956c406d40b239ac81752da Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Thu, 23 Apr 2015 19:16:10 -0700
+Subject: [PATCH 541/596] HADOOP-11802.  Fix renamed constant in test file in
+ backport to 2.7.1 (cmccabe)
+
+(cherry picked from commit c2e6d2589aa1ae4ed885b3d1b3d82d998b52156e)
+(cherry picked from commit 759a8205da498b627413c052e70f599481152494)
+---
+ .../hdfs/shortcircuit/TestShortCircuitCache.java   |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/shortcircuit/TestShortCircuitCache.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/shortcircuit/TestShortCircuitCache.java
+index 3e9e79f..384fa52 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/shortcircuit/TestShortCircuitCache.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/shortcircuit/TestShortCircuitCache.java
+@@ -694,7 +694,7 @@ public void testDataXceiverHandlesRequestShortCircuitShmFailure()
+     TemporarySocketDirectory sockDir = new TemporarySocketDirectory();
+     Configuration conf = createShortCircuitConf(
+         "testDataXceiverHandlesRequestShortCircuitShmFailure", sockDir);
+-    conf.setLong(HdfsClientConfigKeys.Read.ShortCircuit.STREAMS_CACHE_EXPIRY_MS_KEY,
++    conf.setLong(DFS_CLIENT_READ_SHORTCIRCUIT_STREAMS_CACHE_EXPIRY_MS_KEY,
+         1000000000L);
+     MiniDFSCluster cluster =
+         new MiniDFSCluster.Builder(conf).numDataNodes(1).build();
+-- 
+1.7.9.5
+

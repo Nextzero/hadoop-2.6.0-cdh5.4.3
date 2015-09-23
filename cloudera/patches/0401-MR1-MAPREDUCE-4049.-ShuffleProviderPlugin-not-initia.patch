@@ -1,0 +1,29 @@
+From 809afc775ab1330ec644455b6a82ae79eefd8bc6 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Tue, 13 Aug 2013 13:55:59 -0700
+Subject: [PATCH 401/596] MR1: MAPREDUCE-4049. ShuffleProviderPlugin not
+ initializing
+
+  Reason: bug, a missing hunk from the original backport
+
+(cherry picked from commit 68db90ba305c5901e53c1ae573bcf42ab3186dfb)
+---
+ .../org/apache/hadoop/mapred/TaskTracker.java      |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+index 967f4a5..9bcfd6a 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+@@ -1789,7 +1789,7 @@ public TaskTracker(JobConf conf) throws IOException, InterruptedException {
+     String exceptionMsgRegex = conf.get("mapreduce.reduce.shuffle.catch.exception.message.regex");
+     server.setAttribute("exceptionStackRegex", exceptionStackRegex);
+     server.setAttribute("exceptionMsgRegex", exceptionMsgRegex);
+-    server.addInternalServlet("mapOutput", "/mapOutput", MapOutputServlet.class);
++    shuffleProviderPlugin.initialize(this);
+     server.addServlet("taskLog", "/tasklog", TaskLogServlet.class);
+ 
+     boolean shuffleSsl = conf.getBoolean(JobTracker.SHUFFLE_SSL_ENABLED_KEY,
+-- 
+1.7.9.5
+

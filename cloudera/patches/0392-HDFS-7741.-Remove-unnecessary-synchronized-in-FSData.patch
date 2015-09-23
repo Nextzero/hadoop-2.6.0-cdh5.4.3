@@ -1,0 +1,41 @@
+From 5a3eccfb8a8a9553fe57f21893d39f8a63c6fc9a Mon Sep 17 00:00:00 2001
+From: yliu <yliu@apache.org>
+Date: Fri, 6 Feb 2015 06:29:52 +0800
+Subject: [PATCH 392/596] HDFS-7741. Remove unnecessary synchronized in
+ FSDataInputStream and HdfsDataInputStream. (yliu)
+
+(cherry picked from commit e2803f5a5103119388bc8cfddeb7616e6b33f1ca)
+---
+ .../org/apache/hadoop/fs/FSDataInputStream.java    |    2 +-
+ .../hadoop/hdfs/client/HdfsDataInputStream.java    |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/FSDataInputStream.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/FSDataInputStream.java
+index 7dae991..477bd6f 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/FSDataInputStream.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/FSDataInputStream.java
+@@ -58,7 +58,7 @@ public FSDataInputStream(InputStream in) {
+    * @param desired offset to seek to
+    */
+   @Override
+-  public synchronized void seek(long desired) throws IOException {
++  public void seek(long desired) throws IOException {
+     ((Seekable)in).seek(desired);
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/client/HdfsDataInputStream.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/client/HdfsDataInputStream.java
+index 72c57a8..e8ac686 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/client/HdfsDataInputStream.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/client/HdfsDataInputStream.java
+@@ -83,7 +83,7 @@ public ExtendedBlock getCurrentBlock() {
+   /**
+    * Get the collection of blocks that has already been located.
+    */
+-  public synchronized List<LocatedBlock> getAllBlocks() throws IOException {
++  public List<LocatedBlock> getAllBlocks() throws IOException {
+     return getDFSInputStream().getAllBlocks();
+   }
+ 
+-- 
+1.7.9.5
+

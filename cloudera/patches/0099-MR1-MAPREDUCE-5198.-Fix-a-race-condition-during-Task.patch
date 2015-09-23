@@ -1,0 +1,196 @@
+From eff4fa3916754193f0512d5990e0669d1ba173aa Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Tue, 13 Aug 2013 10:54:46 -0700
+Subject: [PATCH 099/596] MR1: MAPREDUCE-5198. Fix a race condition during
+ TaskTracker re-init which was causing failures
+ since task directories were being cleaned up in
+ multiple threads. Contributed by Arpit Gupta
+
+Reason: Proactive bug fix
+Ref: CDH-11905
+(cherry picked from commit cb1430ebafbcd22cc88ab6ceaf8987a67f784b3f)
+(cherry picked from commit 038b1306458321a3e2152d2c2b8cd09c77b58b57)
+(cherry picked from commit 4a58649b12efe4c7830313fa84bce4ce88744da9)
+(cherry picked from commit 966a543a6a42aa44cc5c33e60e6a7b095c701ebb)
+---
+ .../apache/hadoop/mapred/LinuxTaskController.java  |   59 +++++++++++++-------
+ .../org/apache/hadoop/mapred/TaskTracker.java      |   25 +++++----
+ 2 files changed, 54 insertions(+), 30 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LinuxTaskController.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LinuxTaskController.java
+index c4a4ca9..4f33c8b 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LinuxTaskController.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LinuxTaskController.java
+@@ -264,17 +264,27 @@ public int launchTask(String user,
+ 
+   @Override
+   public void deleteAsUser(String user, String subDir) throws IOException {
+-    String[] command = 
+-      new String[]{taskControllerExe, 
+-                   user,
+-                   localStorage.getDirsString(),
+-                   Integer.toString(Commands.DELETE_AS_USER.getValue()),
+-                   subDir};
+-    ShellCommandExecutor shExec = new ShellCommandExecutor(command);
+-    if (LOG.isDebugEnabled()) {
+-      LOG.debug("deleteAsUser: " + Arrays.toString(command));
++    String[] command = new String[] { taskControllerExe, user,
++        localStorage.getDirsString(),
++        Integer.toString(Commands.DELETE_AS_USER.getValue()), subDir };
++    ShellCommandExecutor shExec = null;
++    try {
++      shExec = new ShellCommandExecutor(command);
++
++      if (LOG.isDebugEnabled()) {
++        LOG.debug("deleteAsUser: " + Arrays.toString(command));
++      }
++      shExec.execute();
++    } catch (IOException e) {
++      if (shExec != null) {
++        int exitCode = shExec.getExitCode();
++        LOG.info("deleteAsUser: " + Arrays.toString(command));
++        LOG.warn("Exit code is : " + exitCode);
++        LOG.info("Output from deleteAsUser LinuxTaskController:");
++        logOutput(shExec.getOutput());
++      }
++      throw e;
+     }
+-    shExec.execute();
+   }
+ 
+   @Override
+@@ -285,17 +295,26 @@ public void createLogDir(TaskAttemptID taskID,
+ 
+   @Override
+   public void deleteLogAsUser(String user, String subDir) throws IOException {
+-    String[] command = 
+-      new String[]{taskControllerExe, 
+-                   user,
+-                   localStorage.getDirsString(),
+-                   Integer.toString(Commands.DELETE_LOG_AS_USER.getValue()),
+-                   subDir};
+-    ShellCommandExecutor shExec = new ShellCommandExecutor(command);
+-    if (LOG.isDebugEnabled()) {
+-      LOG.debug("deleteLogAsUser: " + Arrays.toString(command));
++    String[] command = new String[] { taskControllerExe, user,
++        localStorage.getDirsString(),
++        Integer.toString(Commands.DELETE_LOG_AS_USER.getValue()), subDir };
++    ShellCommandExecutor shExec = null;
++    try {
++      shExec = new ShellCommandExecutor(command);
++      if (LOG.isDebugEnabled()) {
++        LOG.debug("deleteLogAsUser: " + Arrays.toString(command));
++      }
++      shExec.execute();
++    } catch (IOException e) {
++      if (shExec != null) {
++        int exitCode = shExec.getExitCode();
++        LOG.info("deleteLogAsUser: " + Arrays.toString(command));
++        LOG.warn("Exit code is : " + exitCode);
++        LOG.info("Output from deleteLogAsUser LinuxTaskController:");
++        logOutput(shExec.getOutput());
++      }
++      throw e;
+     }
+-    shExec.execute();
+   }
+ 
+   @Override
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+index 7739a1d..84e50c4 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+@@ -1603,7 +1603,7 @@ public synchronized void close() throws IOException, InterruptedException {
+       new TreeMap<TaskAttemptID, TaskInProgress>();
+     tasksToClose.putAll(tasks);
+     for (TaskInProgress tip : tasksToClose.values()) {
+-      tip.jobHasFinished(false);
++      tip.jobHasFinished(true, false);
+     }
+     
+     this.running = false;
+@@ -2426,7 +2426,7 @@ synchronized void purgeJob(KillJobAction action) throws IOException {
+         rjob.distCacheMgr.release();
+         // Add this tips of this job to queue of tasks to be purged 
+         for (TaskInProgress tip : rjob.tasks) {
+-          tip.jobHasFinished(false);
++          tip.jobHasFinished(false, false);
+           Task t = tip.getTask();
+           if (t.isMapTask()) {
+             indexCache.removeMap(tip.getTask().getTaskID().toString());
+@@ -2500,7 +2500,7 @@ private void purgeTask(TaskInProgress tip, boolean wasFailure)
+       // Remove the task from running jobs, 
+       // removing the job if it's the last task
+       removeTaskFromJob(tip.getTask().getJobID(), tip);
+-      tip.jobHasFinished(wasFailure);
++      tip.jobHasFinished(false, wasFailure);
+       if (tip.getTask().isMapTask()) {
+         indexCache.removeMap(tip.getTask().getTaskID().toString());
+       }
+@@ -2794,7 +2794,7 @@ void startNewTask(TaskInProgress tip) throws InterruptedException {
+       tip.reportDiagnosticInfo(msg);
+       try {
+         tip.kill(true);
+-        tip.cleanup(true);
++        tip.cleanup(false, true);
+       } catch (IOException ie2) {
+         LOG.info("Error cleaning up " + tip.getTask().getTaskID(), ie2);
+       } catch (InterruptedException ie2) {
+@@ -3358,7 +3358,7 @@ public void taskFinished() {
+         removeTaskFromJob(task.getJobID(), this);
+       }
+       try {
+-        cleanup(needCleanup);
++        cleanup(false, needCleanup);
+       } catch (IOException ie) {
+       }
+ 
+@@ -3446,11 +3446,13 @@ else if (num == -1) {
+     /**
+      * We no longer need anything from this task, as the job has
+      * finished.  If the task is still running, kill it and clean up.
+-     * 
++     *
++     * @param ttReInit is the TaskTracker executing re-initialization sequence?
+      * @param wasFailure did the task fail, as opposed to was it killed by
+      *                   the framework
+      */
+-    public void jobHasFinished(boolean wasFailure) throws IOException {
++    public void jobHasFinished(boolean ttReInit, boolean wasFailure) 
++        throws IOException {
+       // Kill the task if it is still running
+       synchronized(this){
+         if (getRunState() == TaskStatus.State.RUNNING ||
+@@ -3467,7 +3469,7 @@ public void jobHasFinished(boolean wasFailure) throws IOException {
+       }
+       
+       // Cleanup on the finished task
+-      cleanup(true);
++      cleanup(ttReInit, true);
+     }
+ 
+     /**
+@@ -3549,7 +3551,7 @@ private synchronized void mapOutputLost(String failure
+      * otherwise the current working directory of the task 
+      * i.e. &lt;taskid&gt;/work is cleaned up.
+      */
+-    void cleanup(boolean needCleanup) throws IOException {
++    void cleanup(boolean ttReInit, boolean needCleanup) throws IOException {
+       TaskAttemptID taskId = task.getTaskID();
+       LOG.debug("Cleaning up " + taskId);
+ 
+@@ -3578,7 +3580,10 @@ void cleanup(boolean needCleanup) throws IOException {
+           return;
+         }
+         try {
+-          removeTaskFiles(needCleanup);
++          // TT re-initialization sequence: no need to cleanup, TT will cleanup
++          if (!ttReInit) {
++            removeTaskFiles(needCleanup);
++          }
+         } catch (Throwable ie) {
+           LOG.info("Error cleaning up task runner: "
+               + StringUtils.stringifyException(ie));
+-- 
+1.7.9.5
+

@@ -1,0 +1,58 @@
+From 99d9508016e38f541f729edc8eaef98b0e3ce822 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Wed, 3 Jul 2013 15:57:20 -0700
+Subject: [PATCH 090/596] MR1: MAPREDUCE-5364. Deadlock between
+ RenewalTimerTask methods cancel() and run().
+ (kkambatl via tucu) (cherry picked from commit
+ 14d67b8de24078559e2a1d5444e23731a3a6829c)
+
+(cherry picked from commit 37cae4b5ff3238d6f4f5d81154366e5c3c78c319)
+(cherry picked from commit 681753e9c1e8eefa67281914df10b1b6e8e5cf99)
+(cherry picked from commit f6bb3047f982cf9749893c47697f26014684ca8c)
+---
+ .../security/token/DelegationTokenRenewal.java     |   11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/token/DelegationTokenRenewal.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/token/DelegationTokenRenewal.java
+index d49defd..88a28a8 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/token/DelegationTokenRenewal.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/token/DelegationTokenRenewal.java
+@@ -32,6 +32,7 @@
+ import java.util.Timer;
+ import java.util.TimerTask;
+ import java.util.concurrent.LinkedBlockingQueue;
++import java.util.concurrent.atomic.AtomicBoolean;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -202,13 +203,13 @@ public static synchronized void registerDelegationTokensForRenewal(
+    */
+   private static class RenewalTimerTask extends TimerTask {
+     private DelegationTokenToRenew dttr;
+-    private boolean cancelled = false;
++    private AtomicBoolean cancelled = new AtomicBoolean(false);
+     
+     RenewalTimerTask(DelegationTokenToRenew t) {  dttr = t;  }
+     
+     @Override
+-    public synchronized void run() {
+-      if (cancelled) {
++    public void run() {
++      if (cancelled.get()) {
+         return;
+       }
+ 
+@@ -236,8 +237,8 @@ public Long run() throws Exception {
+     }
+ 
+     @Override
+-    public synchronized boolean cancel() {
+-      cancelled = true;
++    public boolean cancel() {
++      cancelled.set(true);
+       return super.cancel();
+     }
+   }
+-- 
+1.7.9.5
+

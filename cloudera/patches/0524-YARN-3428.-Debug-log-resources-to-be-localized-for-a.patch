@@ -1,0 +1,48 @@
+From 3879cd3f299e6d3f948be59150c6d1d0d9787f32 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Tue, 31 Mar 2015 17:34:40 -0700
+Subject: [PATCH 524/596] YARN-3428. Debug log resources to be localized for a
+ container. (kasha)
+
+(cherry picked from commit 2daa478a6420585dc13cea2111580ed5fe347bc1)
+(cherry picked from commit 93b29d962d75ce8a491c11dfadf906400458b0d4)
+(cherry picked from commit 14398fedcd3644b96b90fc02e688805b94119f14)
+---
+ .../localizer/ResourceLocalizationService.java     |   12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java
+index dd50ead..4236392 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/localizer/ResourceLocalizationService.java
+@@ -448,6 +448,10 @@ private void handleInitContainerResources(
+                   .getApplicationId());
+       for (LocalResourceRequest req : e.getValue()) {
+         tracker.handle(new ResourceRequestEvent(req, e.getKey(), ctxt));
++        if (LOG.isDebugEnabled()) {
++          LOG.debug("Localizing " + req.getPath() +
++              " for container " + c.getContainerId());
++        }
+       }
+     }
+   }
+@@ -456,10 +460,14 @@ private void handleCacheCleanup(LocalizationEvent event) {
+     ResourceRetentionSet retain =
+       new ResourceRetentionSet(delService, cacheTargetSize);
+     retain.addResources(publicRsrc);
+-    LOG.debug("Resource cleanup (public) " + retain);
++    if (LOG.isDebugEnabled()) {
++      LOG.debug("Resource cleanup (public) " + retain);
++    }
+     for (LocalResourcesTracker t : privateRsrc.values()) {
+       retain.addResources(t);
+-      LOG.debug("Resource cleanup " + t.getUser() + ":" + retain);
++      if (LOG.isDebugEnabled()) {
++        LOG.debug("Resource cleanup " + t.getUser() + ":" + retain);
++      }
+     }
+     //TODO Check if appRsrcs should also be added to the retention set.
+   }
+-- 
+1.7.9.5
+

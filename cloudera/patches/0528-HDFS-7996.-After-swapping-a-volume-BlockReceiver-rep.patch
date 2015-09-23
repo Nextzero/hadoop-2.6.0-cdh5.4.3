@@ -1,0 +1,183 @@
+From 45aa420815a90ba7b80f829112c461153f381289 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Fri, 3 Apr 2015 14:19:46 -0700
+Subject: [PATCH 528/596] HDFS-7996. After swapping a volume, BlockReceiver
+ reports ReplicaNotFoundException (Lei (Eddy) Xu via
+ Colin P. McCabe)
+
+(cherry picked from commit 023133cef9a7ca05364cefbcead57c921589eda7)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockReceiver.java
+---
+ .../hadoop/hdfs/server/datanode/BlockReceiver.java |   50 +++++++++++++-------
+ .../datanode/TestDataNodeHotSwapVolumes.java       |   30 +++++++++++-
+ 2 files changed, 61 insertions(+), 19 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockReceiver.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockReceiver.java
+index a073789..1e0baed 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockReceiver.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockReceiver.java
+@@ -275,7 +275,7 @@ String getStorageUuid() {
+   }
+ 
+   /**
+-   * close files.
++   * close files and release volume reference.
+    */
+   @Override
+   public void close() throws IOException {
+@@ -791,17 +791,20 @@ void receiveBlock(
+       // then finalize block or convert temporary to RBW.
+       // For client-writes, the block is finalized in the PacketResponder.
+       if (isDatanode || isTransfer) {
+-        // close the block/crc files
+-        close();
+-        block.setNumBytes(replicaInfo.getNumBytes());
+-
+-        if (stage == BlockConstructionStage.TRANSFER_RBW) {
+-          // for TRANSFER_RBW, convert temporary to RBW
+-          datanode.data.convertTemporaryToRbw(block);
+-        } else {
+-          // for isDatnode or TRANSFER_FINALIZED
+-          // Finalize the block.
+-          datanode.data.finalizeBlock(block);
++        // Hold a volume reference to finalize block.
++        try (ReplicaHandler handler = claimReplicaHandler()) {
++          // close the block/crc files
++          close();
++          block.setNumBytes(replicaInfo.getNumBytes());
++
++          if (stage == BlockConstructionStage.TRANSFER_RBW) {
++            // for TRANSFER_RBW, convert temporary to RBW
++            datanode.data.convertTemporaryToRbw(block);
++          } else {
++            // for isDatnode or TRANSFER_FINALIZED
++            // Finalize the block.
++            datanode.data.finalizeBlock(block);
++          }
+         }
+         datanode.metrics.incrBlocksWritten();
+       }
+@@ -974,7 +977,14 @@ private Checksum computePartialChunkCrc(long blkoff, long ckoff)
+     }
+     return partialCrc;
+   }
+-  
++
++  /** The caller claims the ownership of the replica handler. */
++  private ReplicaHandler claimReplicaHandler() {
++    ReplicaHandler handler = replicaHandler;
++    replicaHandler = null;
++    return handler;
++  }
++
+   private static enum PacketResponderType {
+     NON_PIPELINE, LAST_IN_PIPELINE, HAS_DOWNSTREAM_IN_PIPELINE
+   }
+@@ -1274,11 +1284,15 @@ public void run() {
+      * @param startTime time when BlockReceiver started receiving the block
+      */
+     private void finalizeBlock(long startTime) throws IOException {
+-      BlockReceiver.this.close();
+-      final long endTime = ClientTraceLog.isInfoEnabled() ? System.nanoTime()
+-          : 0;
+-      block.setNumBytes(replicaInfo.getNumBytes());
+-      datanode.data.finalizeBlock(block);
++      long endTime = 0;
++      // Hold a volume reference to finalize block.
++      try (ReplicaHandler handler = BlockReceiver.this.claimReplicaHandler()) {
++        BlockReceiver.this.close();
++        endTime = ClientTraceLog.isInfoEnabled() ? System.nanoTime() : 0;
++        block.setNumBytes(replicaInfo.getNumBytes());
++        datanode.data.finalizeBlock(block);
++      }
++
+       datanode.closeBlock(
+           block, DataNode.EMPTY_DEL_HINT, replicaInfo.getStorageUuid());
+       if (ClientTraceLog.isInfoEnabled() && isClient) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
+index 47fff38..75dbfb8 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
+@@ -35,6 +35,7 @@
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
+ import org.apache.hadoop.hdfs.MiniDFSNNTopology;
+ import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
++import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
+ import org.apache.hadoop.hdfs.protocolPB.DatanodeProtocolClientSideTranslatorPB;
+ import org.apache.hadoop.hdfs.server.common.Storage;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsDatasetSpi;
+@@ -65,6 +66,8 @@
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.mockito.Mockito;
++import org.mockito.invocation.InvocationOnMock;
++import org.mockito.stubbing.Answer;
+ 
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY;
+ import static org.hamcrest.CoreMatchers.anyOf;
+@@ -78,6 +81,7 @@
+ import static org.junit.Assert.fail;
+ import static org.mockito.Matchers.any;
+ import static org.mockito.Matchers.anyString;
++import static org.mockito.Mockito.doAnswer;
+ import static org.mockito.Mockito.timeout;
+ 
+ public class TestDataNodeHotSwapVolumes {
+@@ -578,6 +582,7 @@ private void testRemoveVolumeBeingWrittenForDatanode(int dataNodeIdx)
+     final DataNode dn = cluster.getDataNodes().get(dataNodeIdx);
+     final FileSystem fs = cluster.getFileSystem();
+     final Path testFile = new Path("/test");
++    final long lastTimeDiskErrorCheck = dn.getLastDiskErrorCheck();
+ 
+     FSDataOutputStream out = fs.create(testFile, REPLICATION);
+ 
+@@ -587,6 +592,23 @@ private void testRemoveVolumeBeingWrittenForDatanode(int dataNodeIdx)
+     out.write(writeBuf);
+     out.hflush();
+ 
++    // Make FsDatasetSpi#finalizeBlock a time-consuming operation. So if the
++    // BlockReceiver releases volume reference before finalizeBlock(), the blocks
++    // on the volume will be removed, and finalizeBlock() throws IOE.
++    final FsDatasetSpi<? extends FsVolumeSpi> data = dn.data;
++    dn.data = Mockito.spy(data);
++    doAnswer(new Answer<Object>() {
++          public Object answer(InvocationOnMock invocation)
++              throws IOException, InterruptedException {
++            Thread.sleep(1000);
++            // Bypass the argument to FsDatasetImpl#finalizeBlock to verify that
++            // the block is not removed, since the volume reference should not
++            // be released at this point.
++            data.finalizeBlock((ExtendedBlock) invocation.getArguments()[0]);
++            return null;
++          }
++        }).when(dn.data).finalizeBlock(any(ExtendedBlock.class));
++
+     final CyclicBarrier barrier = new CyclicBarrier(2);
+ 
+     List<String> oldDirs = getDataDirs(dn);
+@@ -613,13 +635,19 @@ public void run() {
+     out.hflush();
+     out.close();
+ 
++    reconfigThread.join();
++
+     // Verify the file has sufficient replications.
+     DFSTestUtil.waitReplication(fs, testFile, REPLICATION);
+     // Read the content back
+     byte[] content = DFSTestUtil.readFileBuffer(fs, testFile);
+     assertEquals(BLOCK_SIZE, content.length);
+ 
+-    reconfigThread.join();
++    // If an IOException thrown from BlockReceiver#run, it triggers
++    // DataNode#checkDiskError(). So we can test whether checkDiskError() is called,
++    // to see whether there is IOException in BlockReceiver#run().
++    assertEquals(lastTimeDiskErrorCheck, dn.getLastDiskErrorCheck());
++
+     if (!exceptions.isEmpty()) {
+       throw new IOException(exceptions.get(0).getCause());
+     }
+-- 
+1.7.9.5
+

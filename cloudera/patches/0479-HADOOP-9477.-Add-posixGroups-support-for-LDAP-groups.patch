@@ -1,0 +1,369 @@
+From 38c29aef19edfd030404d0ebdd536790c2765399 Mon Sep 17 00:00:00 2001
+From: Yongjun Zhang <yzhang@cloudera.com>
+Date: Thu, 12 Mar 2015 14:42:34 -0700
+Subject: [PATCH 479/596] HADOOP-9477. Add posixGroups support for LDAP groups
+ mapping service. (Dapeng Sun via Yongjun Zhang)
+
+(cherry picked from commit 82128774156c30a535b62d764bb6cf9c8d2f3a3b)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+---
+ .../apache/hadoop/security/LdapGroupsMapping.java  |   54 ++++++++--
+ .../hadoop/security/TestLdapGroupsMapping.java     |   42 +-------
+ .../hadoop/security/TestLdapGroupsMappingBase.java |   77 +++++++++++++++
+ .../TestLdapGroupsMappingWithPosixGroup.java       |  103 ++++++++++++++++++++
+ 4 files changed, 226 insertions(+), 50 deletions(-)
+ create mode 100644 hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMappingBase.java
+ create mode 100644 hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMappingWithPosixGroup.java
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/LdapGroupsMapping.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/LdapGroupsMapping.java
+index b505819..5d75299 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/LdapGroupsMapping.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/LdapGroupsMapping.java
+@@ -147,6 +147,14 @@
+   public static final String GROUP_NAME_ATTR_DEFAULT = "cn";
+ 
+   /*
++   * Posix attributes
++   */
++  public static final String POSIX_UIDNUMBER = "uidNumber";
++  public static final String POSIX_GIDNUMBER = "gidNumber";
++  public static final String POSIX_GROUP = "posixGroup";
++  public static final String POSIX_ACCOUNT = "posixAccount";
++
++  /*
+    * LDAP {@link SearchControls} attribute to set the time limit
+    * for an invoked directory search. Prevents infinite wait cases.
+    */
+@@ -175,6 +183,7 @@
+   private String userSearchFilter;
+   private String groupMemberAttr;
+   private String groupNameAttr;
++  private boolean isPosix;
+ 
+   public static int RECONNECT_RETRY_COUNT = 3;
+   
+@@ -239,15 +248,40 @@
+       SearchResult result = results.nextElement();
+       String userDn = result.getNameInNamespace();
+ 
+-      NamingEnumeration<SearchResult> groupResults =
+-          ctx.search(baseDN,
+-              "(&" + groupSearchFilter + "(" + groupMemberAttr + "={0}))",
+-              new Object[]{userDn},
+-              SEARCH_CONTROLS);
+-      while (groupResults.hasMoreElements()) {
+-        SearchResult groupResult = groupResults.nextElement();
+-        Attribute groupName = groupResult.getAttributes().get(groupNameAttr);
+-        groups.add(groupName.get().toString());
++      NamingEnumeration<SearchResult> groupResults = null;
++
++      if (isPosix) {
++        String gidNumber = null;
++        String uidNumber = null;
++        Attribute gidAttribute = result.getAttributes().get(POSIX_GIDNUMBER);
++        Attribute uidAttribute = result.getAttributes().get(POSIX_UIDNUMBER);
++        if (gidAttribute != null) {
++          gidNumber = gidAttribute.get().toString();
++        }
++        if (uidAttribute != null) {
++          uidNumber = uidAttribute.get().toString();
++        }
++        if (uidNumber != null && gidNumber != null) {
++          groupResults =
++              ctx.search(baseDN,
++                  "(&"+ groupSearchFilter + "(|(" + POSIX_GIDNUMBER + "={0})" +
++                      "(" + groupMemberAttr + "={1})))",
++                  new Object[] { gidNumber, uidNumber },
++                  SEARCH_CONTROLS);
++        }
++      } else {
++        groupResults =
++            ctx.search(baseDN,
++                "(&" + groupSearchFilter + "(" + groupMemberAttr + "={0}))",
++                new Object[]{userDn},
++                SEARCH_CONTROLS);
++      }
++      if (groupResults != null) {
++        while (groupResults.hasMoreElements()) {
++          SearchResult groupResult = groupResults.nextElement();
++          Attribute groupName = groupResult.getAttributes().get(groupNameAttr);
++          groups.add(groupName.get().toString());
++        }
+       }
+     }
+ 
+@@ -331,6 +365,8 @@ public synchronized void setConf(Configuration conf) {
+         conf.get(GROUP_SEARCH_FILTER_KEY, GROUP_SEARCH_FILTER_DEFAULT);
+     userSearchFilter =
+         conf.get(USER_SEARCH_FILTER_KEY, USER_SEARCH_FILTER_DEFAULT);
++    isPosix = groupSearchFilter.contains(POSIX_GROUP) && userSearchFilter
++        .contains(POSIX_ACCOUNT);
+     groupMemberAttr =
+         conf.get(GROUP_MEMBERSHIP_ATTR_KEY, GROUP_MEMBERSHIP_ATTR_DEFAULT);
+     groupNameAttr =
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMapping.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMapping.java
+index a021a8a..17a14d1 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMapping.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMapping.java
+@@ -29,13 +29,7 @@
+ import java.util.List;
+ 
+ import javax.naming.CommunicationException;
+-import javax.naming.NamingEnumeration;
+ import javax.naming.NamingException;
+-import javax.naming.directory.Attribute;
+-import javax.naming.directory.Attributes;
+-import javax.naming.directory.BasicAttribute;
+-import javax.naming.directory.BasicAttributes;
+-import javax.naming.directory.DirContext;
+ import javax.naming.directory.SearchControls;
+ import javax.naming.directory.SearchResult;
+ 
+@@ -49,46 +43,12 @@
+ import org.junit.Test;
+ 
+ @SuppressWarnings("unchecked")
+-public class TestLdapGroupsMapping {
+-  private DirContext mockContext;
+-  
+-  private LdapGroupsMapping mappingSpy = spy(new LdapGroupsMapping());
+-  private NamingEnumeration mockUserNamingEnum = mock(NamingEnumeration.class);
+-  private NamingEnumeration mockGroupNamingEnum = mock(NamingEnumeration.class);
+-  private String[] testGroups = new String[] {"group1", "group2"};
+-  
++public class TestLdapGroupsMapping extends TestLdapGroupsMappingBase {
+   @Before
+   public void setupMocks() throws NamingException {
+-    mockContext = mock(DirContext.class);
+-    doReturn(mockContext).when(mappingSpy).getDirContext();
+-            
+     SearchResult mockUserResult = mock(SearchResult.class);
+-    // We only ever call hasMoreElements once for the user NamingEnum, so 
+-    // we can just have one return value
+-    when(mockUserNamingEnum.hasMoreElements()).thenReturn(true);
+     when(mockUserNamingEnum.nextElement()).thenReturn(mockUserResult);
+     when(mockUserResult.getNameInNamespace()).thenReturn("CN=some_user,DC=test,DC=com");
+-    
+-    SearchResult mockGroupResult = mock(SearchResult.class);
+-    // We're going to have to define the loop here. We want two iterations,
+-    // to get both the groups
+-    when(mockGroupNamingEnum.hasMoreElements()).thenReturn(true, true, false);
+-    when(mockGroupNamingEnum.nextElement()).thenReturn(mockGroupResult);
+-    
+-    // Define the attribute for the name of the first group
+-    Attribute group1Attr = new BasicAttribute("cn");
+-    group1Attr.add(testGroups[0]);
+-    Attributes group1Attrs = new BasicAttributes();
+-    group1Attrs.put(group1Attr);
+-    
+-    // Define the attribute for the name of the second group
+-    Attribute group2Attr = new BasicAttribute("cn");
+-    group2Attr.add(testGroups[1]);
+-    Attributes group2Attrs = new BasicAttributes();
+-    group2Attrs.put(group2Attr);
+-    
+-    // This search result gets reused, so return group1, then group2
+-    when(mockGroupResult.getAttributes()).thenReturn(group1Attrs, group2Attrs);
+   }
+   
+   @Test
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMappingBase.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMappingBase.java
+new file mode 100644
+index 0000000..c54ac4c
+--- /dev/null
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMappingBase.java
+@@ -0,0 +1,77 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.security;
++
++import static org.mockito.Mockito.doReturn;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.spy;
++import static org.mockito.Mockito.when;
++
++import javax.naming.NamingEnumeration;
++import javax.naming.NamingException;
++import javax.naming.directory.Attribute;
++import javax.naming.directory.Attributes;
++import javax.naming.directory.BasicAttribute;
++import javax.naming.directory.BasicAttributes;
++import javax.naming.directory.DirContext;
++import javax.naming.directory.SearchResult;
++
++import org.junit.Before;
++
++public class TestLdapGroupsMappingBase {
++  protected DirContext mockContext;
++
++  protected LdapGroupsMapping mappingSpy = spy(new LdapGroupsMapping());
++  protected NamingEnumeration mockUserNamingEnum =
++      mock(NamingEnumeration.class);
++  protected NamingEnumeration mockGroupNamingEnum =
++      mock(NamingEnumeration.class);
++  protected String[] testGroups = new String[] {"group1", "group2"};
++
++  @Before
++  public void setupMocksBase() throws NamingException {
++    mockContext = mock(DirContext.class);
++    doReturn(mockContext).when(mappingSpy).getDirContext();
++
++    // We only ever call hasMoreElements once for the user NamingEnum, so
++    // we can just have one return value
++    when(mockUserNamingEnum.hasMoreElements()).thenReturn(true);
++
++    SearchResult mockGroupResult = mock(SearchResult.class);
++    // We're going to have to define the loop here. We want two iterations,
++    // to get both the groups
++    when(mockGroupNamingEnum.hasMoreElements()).thenReturn(true, true, false);
++    when(mockGroupNamingEnum.nextElement()).thenReturn(mockGroupResult);
++
++    // Define the attribute for the name of the first group
++    Attribute group1Attr = new BasicAttribute("cn");
++    group1Attr.add(testGroups[0]);
++    Attributes group1Attrs = new BasicAttributes();
++    group1Attrs.put(group1Attr);
++
++    // Define the attribute for the name of the second group
++    Attribute group2Attr = new BasicAttribute("cn");
++    group2Attr.add(testGroups[1]);
++    Attributes group2Attrs = new BasicAttributes();
++    group2Attrs.put(group2Attr);
++
++    // This search result gets reused, so return group1, then group2
++    when(mockGroupResult.getAttributes()).thenReturn(group1Attrs, group2Attrs);
++  }
++}
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMappingWithPosixGroup.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMappingWithPosixGroup.java
+new file mode 100644
+index 0000000..1d1a354
+--- /dev/null
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestLdapGroupsMappingWithPosixGroup.java
+@@ -0,0 +1,103 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.security;
++
++import static org.mockito.Matchers.anyString;
++
++import static org.mockito.Mockito.any;
++import static org.mockito.Mockito.contains;
++import static org.mockito.Mockito.eq;
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.times;
++import static org.mockito.Mockito.verify;
++import static org.mockito.Mockito.when;
++
++import java.io.IOException;
++import java.util.Arrays;
++import java.util.List;
++
++import javax.naming.NamingException;
++import javax.naming.directory.Attribute;
++import javax.naming.directory.Attributes;
++import javax.naming.directory.SearchControls;
++import javax.naming.directory.SearchResult;
++
++import org.apache.hadoop.conf.Configuration;
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Test;
++
++@SuppressWarnings("unchecked")
++public class TestLdapGroupsMappingWithPosixGroup
++  extends TestLdapGroupsMappingBase {
++
++  @Before
++  public void setupMocks() throws NamingException {
++    SearchResult mockUserResult = mock(SearchResult.class);
++    when(mockUserNamingEnum.nextElement()).thenReturn(mockUserResult);
++
++    Attribute mockUidAttr = mock(Attribute.class);
++    Attribute mockGidAttr = mock(Attribute.class);
++    Attributes mockAttrs = mock(Attributes.class);
++
++    when(mockUidAttr.get()).thenReturn("700");
++    when(mockGidAttr.get()).thenReturn("600");
++    when(mockAttrs.get(eq("uidNumber"))).thenReturn(mockUidAttr);
++    when(mockAttrs.get(eq("gidNumber"))).thenReturn(mockGidAttr);
++
++    when(mockUserResult.getAttributes()).thenReturn(mockAttrs);
++  }
++
++  @Test
++  public void testGetGroups() throws IOException, NamingException {
++    // The search functionality of the mock context is reused, so we will
++    // return the user NamingEnumeration first, and then the group
++    when(mockContext.search(anyString(), contains("posix"),
++        any(Object[].class), any(SearchControls.class)))
++        .thenReturn(mockUserNamingEnum, mockGroupNamingEnum);
++
++    doTestGetGroups(Arrays.asList(testGroups), 2);
++  }
++
++  private void doTestGetGroups(List<String> expectedGroups, int searchTimes)
++      throws IOException, NamingException {
++    Configuration conf = new Configuration();
++    // Set this, so we don't throw an exception
++    conf.set(LdapGroupsMapping.LDAP_URL_KEY, "ldap://test");
++    conf.set(LdapGroupsMapping.GROUP_SEARCH_FILTER_KEY,
++        "(objectClass=posixGroup)(cn={0})");
++    conf.set(LdapGroupsMapping.USER_SEARCH_FILTER_KEY,
++        "(objectClass=posixAccount)");
++    conf.set(LdapGroupsMapping.GROUP_MEMBERSHIP_ATTR_KEY, "memberUid");
++    conf.set(LdapGroupsMapping.GROUP_NAME_ATTR_KEY, "cn");
++
++    mappingSpy.setConf(conf);
++    // Username is arbitrary, since the spy is mocked to respond the same,
++    // regardless of input
++    List<String> groups = mappingSpy.getGroups("some_user");
++
++    Assert.assertEquals(expectedGroups, groups);
++
++    // We should have searched for a user, and then two groups
++    verify(mockContext, times(searchTimes)).search(anyString(),
++                                         anyString(),
++                                         any(Object[].class),
++                                         any(SearchControls.class));
++  }
++}
+-- 
+1.7.9.5
+

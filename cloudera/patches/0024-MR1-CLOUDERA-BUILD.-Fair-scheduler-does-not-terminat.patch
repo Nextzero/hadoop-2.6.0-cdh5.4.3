@@ -1,0 +1,36 @@
+From ebc2289ac5936625fefa739418b556a4811d4f6a Mon Sep 17 00:00:00 2001
+From: Tom White <tom@cloudera.com>
+Date: Tue, 29 Jan 2013 12:01:51 +0000
+Subject: [PATCH 024/596] MR1: CLOUDERA-BUILD. Fair scheduler does not
+ terminate its EagerTaskInitializationListener.
+
+Reason: Bug
+Ref: CDH-10167
+Author: Tom White
+(cherry picked from commit 33ea303ca417b73d0404fa683760aa695284f41e)
+(cherry picked from commit 2808dccb7d7714453f94363da34f6c1b4f71c01a)
+(cherry picked from commit c3c36aea359fe4e2d67c9e6a4050d437bd27376c)
+(cherry picked from commit 4e2b19e4ee02888ea6ebe640070b1395d97f2249)
+---
+ .../org/apache/hadoop/mapred/FairScheduler.java    |    4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/FairScheduler.java b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/FairScheduler.java
+index 5f65a5b..9aab64f 100644
+--- a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/FairScheduler.java
++++ b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/FairScheduler.java
+@@ -257,8 +257,10 @@ public void terminate() throws IOException {
+     running = false;
+     if (jobListener != null)
+       taskTrackerManager.removeJobInProgressListener(jobListener);
+-    if (eagerInitListener != null)
++    if (eagerInitListener != null) {
+       taskTrackerManager.removeJobInProgressListener(eagerInitListener);
++      eagerInitListener.terminate();
++    }
+     if (eventLog != null)
+       eventLog.shutdown();
+     if (metricsUpdater != null) {
+-- 
+1.7.9.5
+

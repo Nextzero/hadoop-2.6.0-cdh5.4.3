@@ -1,0 +1,828 @@
+From a3e0ab607edb0c94e2a5158ec32754a15a024e93 Mon Sep 17 00:00:00 2001
+From: yliu <yliu@apache.org>
+Date: Mon, 12 Jan 2015 00:45:27 +0800
+Subject: [PATCH 403/596] HDFS-7323. Move the get/setStoragePolicy commands
+ out from dfsadmin. (jing9 via yliu)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+
+(cherry picked from commit 668e0f8c705a123d0d58b0f7104f61fe9f3397b8)
+---
+ hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs  |    4 +-
+ .../hadoop-hdfs/src/main/bin/hdfs.cmd              |    4 +-
+ .../org/apache/hadoop/hdfs/tools/DFSAdmin.java     |   66 ----
+ .../hadoop/hdfs/tools/GetStoragePolicies.java      |   65 ----
+ .../hadoop/hdfs/tools/StoragePolicyAdmin.java      |  339 ++++++++++++++++++++
+ .../hadoop/hdfs/TestStoragePolicyCommands.java     |   88 -----
+ .../hdfs/tools/TestStoragePolicyCommands.java      |   93 ++++++
+ 7 files changed, 436 insertions(+), 223 deletions(-)
+ delete mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/GetStoragePolicies.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/StoragePolicyAdmin.java
+ delete mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestStoragePolicyCommands.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/tools/TestStoragePolicyCommands.java
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs b/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs
+index 46d638c..4433623 100755
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs
+@@ -64,7 +64,7 @@ function print_usage(){
+   echo "  nfs3                 run an NFS version 3 gateway"
+   echo "  cacheadmin           configure the HDFS cache"
+   echo "  crypto               configure HDFS encryption zones"
+-  echo "  storagepolicies      get all the existing block storage policies"
++  echo "  storagepolicies      list/get/set block storage policies"
+   echo "  version              print the version"
+   echo ""
+   echo "Most commands print help when invoked w/o parameters."
+@@ -198,7 +198,7 @@ elif [ "$COMMAND" = "mover" ] ; then
+   CLASS=org.apache.hadoop.hdfs.server.mover.Mover
+   HADOOP_OPTS="${HADOOP_OPTS} ${HADOOP_MOVER_OPTS}"
+ elif [ "$COMMAND" = "storagepolicies" ] ; then
+-  CLASS=org.apache.hadoop.hdfs.tools.GetStoragePolicies
++  CLASS=org.apache.hadoop.hdfs.tools.StoragePolicyAdmin
+ elif [ "$COMMAND" = "jmxget" ] ; then
+   CLASS=org.apache.hadoop.hdfs.tools.JMXGet
+ elif [ "$COMMAND" = "oiv" ] ; then
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs.cmd b/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs.cmd
+index 69424ed..12b10c3 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs.cmd
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs.cmd
+@@ -156,7 +156,7 @@ goto :eof
+   goto :eof
+ 
+ :storagepolicies
+-  set CLASS=org.apache.hadoop.hdfs.tools.GetStoragePolicies
++  set CLASS=org.apache.hadoop.hdfs.tools.StoragePolicyAdmin
+   goto :eof
+ 
+ @rem This changes %1, %2 etc. Hence those cannot be used after calling this.
+@@ -208,7 +208,7 @@ goto :eof
+   @echo 						Use -help to see options
+   @echo   cacheadmin           configure the HDFS cache
+   @echo   mover                run a utility to move block replicas across storage types
+-  @echo   storagepolicies      get all the existing block storage policies
++  @echo   storagepolicies      list/get/set block storage policies
+   @echo.
+   @echo Most commands print help when invoked w/o parameters.
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+index 484ac12..ca979c3 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+@@ -52,7 +52,6 @@
+ import org.apache.hadoop.fs.shell.Command;
+ import org.apache.hadoop.fs.shell.CommandFormat;
+ import org.apache.hadoop.hdfs.client.BlockReportOptions;
+-import org.apache.hadoop.hdfs.protocol.BlockStoragePolicy;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
+ import org.apache.hadoop.hdfs.DFSUtil;
+ import org.apache.hadoop.hdfs.DistributedFileSystem;
+@@ -68,10 +67,8 @@
+ import org.apache.hadoop.hdfs.protocol.HdfsConstants.DatanodeReportType;
+ import org.apache.hadoop.hdfs.protocol.HdfsConstants.RollingUpgradeAction;
+ import org.apache.hadoop.hdfs.protocol.HdfsConstants.SafeModeAction;
+-import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
+ import org.apache.hadoop.hdfs.protocol.RollingUpgradeInfo;
+ import org.apache.hadoop.hdfs.protocol.SnapshotException;
+-import org.apache.hadoop.hdfs.server.blockmanagement.BlockStoragePolicySuite;
+ import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.server.namenode.TransferFsImage;
+ import org.apache.hadoop.ipc.GenericRefreshProtocol;
+@@ -398,8 +395,6 @@ static int run(DistributedFileSystem dfs, String[] argv, int idx) throws IOExcep
+     "\t[-shutdownDatanode <datanode_host:ipc_port> [upgrade]]\n" +
+     "\t[-getDatanodeInfo <datanode_host:ipc_port>]\n" +
+     "\t[-metasave filename]\n" +
+-    "\t[-setStoragePolicy path policyName]\n" +
+-    "\t[-getStoragePolicy path]\n" +
+     "\t[-triggerBlockReport [-incremental] <datanode_host:ipc_port>]\n" +
+     "\t[-help [cmd]]\n";
+ 
+@@ -608,35 +603,6 @@ private boolean waitExitSafeMode(ClientProtocol nn, boolean inSafeMode)
+     return inSafeMode;
+   }
+ 
+-  public int setStoragePolicy(String[] argv) throws IOException {
+-    DistributedFileSystem dfs = getDFS();
+-    dfs.setStoragePolicy(new Path(argv[1]), argv[2]);
+-    System.out.println("Set storage policy " + argv[2] + " on " + argv[1]);
+-    return 0;
+-  }
+-
+-  public int getStoragePolicy(String[] argv) throws IOException {
+-    DistributedFileSystem dfs = getDFS();
+-    HdfsFileStatus status = dfs.getClient().getFileInfo(argv[1]);
+-    if (status == null) {
+-      throw new FileNotFoundException("File/Directory does not exist: "
+-          + argv[1]);
+-    }
+-    byte storagePolicyId = status.getStoragePolicy();
+-    if (storagePolicyId == BlockStoragePolicySuite.ID_UNSPECIFIED) {
+-      System.out.println("The storage policy of " + argv[1] + " is unspecified");
+-      return 0;
+-    }
+-    BlockStoragePolicy[] policies = dfs.getStoragePolicies();
+-    for (BlockStoragePolicy p : policies) {
+-      if (p.getId() == storagePolicyId) {
+-        System.out.println("The storage policy of " + argv[1] + ":\n" + p);
+-        return 0;
+-      }
+-    }
+-    throw new IOException("Cannot identify the storage policy for " + argv[1]);
+-  }
+-
+   public int triggerBlockReport(String[] argv) throws IOException {
+     List<String> args = new LinkedList<String>();
+     for (int j = 1; j < argv.length; j++) {
+@@ -1016,12 +982,6 @@ private void printHelp(String cmd) {
+         + "\tGet the information about the given datanode. This command can\n"
+         + "\tbe used for checking if a datanode is alive.\n";
+ 
+-    String setStoragePolicy = "-setStoragePolicy path policyName\n"
+-        + "\tSet the storage policy for a file/directory.\n";
+-
+-    String getStoragePolicy = "-getStoragePolicy path\n"
+-        + "\tGet the storage policy for a file/directory.\n";
+-
+     String triggerBlockReport =
+       "-triggerBlockReport [-incremental] <datanode_host:ipc_port>\n"
+         + "\tTrigger a block report for the datanode.\n"
+@@ -1087,10 +1047,6 @@ private void printHelp(String cmd) {
+       System.out.println(shutdownDatanode);
+     } else if ("getDatanodeInfo".equalsIgnoreCase(cmd)) {
+       System.out.println(getDatanodeInfo);
+-    } else if ("setStoragePolicy".equalsIgnoreCase(cmd))  {
+-      System.out.println(setStoragePolicy);
+-    } else if ("getStoragePolicy".equalsIgnoreCase(cmd))  {
+-      System.out.println(getStoragePolicy);
+     } else if ("help".equals(cmd)) {
+       System.out.println(help);
+     } else {
+@@ -1123,8 +1079,6 @@ private void printHelp(String cmd) {
+       System.out.println(disallowSnapshot);
+       System.out.println(shutdownDatanode);
+       System.out.println(getDatanodeInfo);
+-      System.out.println(setStoragePolicy);
+-      System.out.println(getStoragePolicy);
+       System.out.println(triggerBlockReport);
+       System.out.println(help);
+       System.out.println();
+@@ -1555,12 +1509,6 @@ private static void printUsage(String cmd) {
+     } else if ("-safemode".equals(cmd)) {
+       System.err.println("Usage: hdfs dfsadmin"
+           + " [-safemode enter | leave | get | wait]");
+-    } else if ("-setStoragePolicy".equals(cmd)) {
+-      System.err.println("Usage: java DFSAdmin"
+-          + " [-setStoragePolicy path policyName]");
+-    } else if ("-getStoragePolicy".equals(cmd)) {
+-      System.err.println("Usage: java DFSAdmin"
+-          + " [-getStoragePolicy path]");
+     } else if ("-allowSnapshot".equalsIgnoreCase(cmd)) {
+       System.err.println("Usage: hdfs dfsadmin"
+           + " [-allowSnapshot <snapshotDir>]");
+@@ -1780,21 +1728,11 @@ public int run(String[] argv) throws Exception {
+         printUsage(cmd);
+         return exitCode;
+       }
+-    } else if ("-setStoragePolicy".equals(cmd)) {
+-      if (argv.length != 3) {
+-        printUsage(cmd);
+-        return exitCode;
+-      }
+     } else if ("-triggerBlockReport".equals(cmd)) {
+       if (argv.length < 1) {
+         printUsage(cmd);
+         return exitCode;
+       }
+-    } else if ("-getStoragePolicy".equals(cmd)) {
+-      if (argv.length != 2) {
+-        printUsage(cmd);
+-        return exitCode;
+-      }
+     }
+     
+     // initialize DFSAdmin
+@@ -1868,10 +1806,6 @@ public int run(String[] argv) throws Exception {
+         exitCode = getDatanodeInfo(argv, i);
+       } else if ("-reconfig".equals(cmd)) {
+         exitCode = reconfig(argv, i);
+-      } else if ("-setStoragePolicy".equals(cmd)) {
+-        exitCode = setStoragePolicy(argv);
+-      } else if ("-getStoragePolicy".equals(cmd)) {
+-        exitCode = getStoragePolicy(argv);
+       } else if ("-triggerBlockReport".equals(cmd)) {
+         exitCode = triggerBlockReport(argv);
+       } else if ("-help".equals(cmd)) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/GetStoragePolicies.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/GetStoragePolicies.java
+deleted file mode 100644
+index d2793eb..0000000
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/GetStoragePolicies.java
++++ /dev/null
+@@ -1,65 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.hadoop.hdfs.tools;
+-
+-import org.apache.hadoop.conf.Configured;
+-import org.apache.hadoop.fs.FileSystem;
+-import org.apache.hadoop.hdfs.DistributedFileSystem;
+-import org.apache.hadoop.hdfs.protocol.BlockStoragePolicy;
+-import org.apache.hadoop.util.Tool;
+-import org.apache.hadoop.util.ToolRunner;
+-
+-import java.io.IOException;
+-
+-/**
+- * A tool listing all the existing block storage policies. No argument is
+- * required when using this tool.
+- */
+-public class GetStoragePolicies extends Configured implements Tool {
+-
+-  @Override
+-  public int run(String[] args) throws Exception {
+-    FileSystem fs = FileSystem.get(getConf());
+-    if (!(fs instanceof DistributedFileSystem)) {
+-      System.err.println("GetStoragePolicies can only be used against HDFS. " +
+-          "Please check the default FileSystem setting in your configuration.");
+-      return 1;
+-    }
+-    DistributedFileSystem dfs = (DistributedFileSystem) fs;
+-
+-    try {
+-      BlockStoragePolicy[] policies = dfs.getStoragePolicies();
+-      System.out.println("Block Storage Policies:");
+-      for (BlockStoragePolicy policy : policies) {
+-        if (policy != null) {
+-          System.out.println("\t" + policy);
+-        }
+-      }
+-    } catch (IOException e) {
+-      String[] content = e.getLocalizedMessage().split("\n");
+-      System.err.println("GetStoragePolicies: " + content[0]);
+-      return 1;
+-    }
+-    return 0;
+-  }
+-
+-  public static void main(String[] args) throws Exception {
+-    int rc = ToolRunner.run(new GetStoragePolicies(), args);
+-    System.exit(rc);
+-  }
+-}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/StoragePolicyAdmin.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/StoragePolicyAdmin.java
+new file mode 100644
+index 0000000..6023e40
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/StoragePolicyAdmin.java
+@@ -0,0 +1,339 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.tools;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.conf.Configured;
++import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.hdfs.DistributedFileSystem;
++import org.apache.hadoop.hdfs.protocol.BlockStoragePolicy;
++import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
++import org.apache.hadoop.hdfs.server.blockmanagement.BlockStoragePolicySuite;
++import org.apache.hadoop.tools.TableListing;
++import org.apache.hadoop.util.StringUtils;
++import org.apache.hadoop.util.Tool;
++
++import java.io.IOException;
++import java.util.Arrays;
++import java.util.LinkedList;
++import java.util.List;
++
++/**
++ * This class implements block storage policy operations.
++ */
++public class StoragePolicyAdmin extends Configured implements Tool {
++  private static final int MAX_LINE_WIDTH = 80;
++
++  public static void main(String[] argsArray) throws Exception {
++    final StoragePolicyAdmin admin = new StoragePolicyAdmin(new
++        Configuration());
++    System.exit(admin.run(argsArray));
++  }
++
++  private static DistributedFileSystem getDFS(Configuration conf)
++      throws IOException {
++    final FileSystem fs = FileSystem.get(conf);
++    if (!(fs instanceof DistributedFileSystem)) {
++      throw new IllegalArgumentException("FileSystem " + fs.getUri() +
++          " is not an HDFS file system");
++    }
++    return (DistributedFileSystem) fs;
++  }
++
++  /**
++   * NN exceptions contain the stack trace as part of the exception message.
++   * When it's a known error, pretty-print the error and squish the stack trace.
++   */
++  private static String prettifyException(Exception e) {
++    return e.getClass().getSimpleName() + ": " +
++        e.getLocalizedMessage().split("\n")[0];
++  }
++
++  private static TableListing getOptionDescriptionListing() {
++    return new TableListing.Builder()
++        .addField("").addField("", true)
++        .wrapWidth(MAX_LINE_WIDTH).hideHeaders().build();
++  }
++
++  public StoragePolicyAdmin(Configuration conf) {
++    super(conf);
++  }
++
++  @Override
++  public int run(String[] args) throws Exception {
++    if (args.length == 0) {
++      printUsage(false);
++      return 1;
++    }
++    final Command command = determineCommand(args[0]);
++    if (command == null) {
++      System.err.println("Can't understand command '" + args[0] + "'");
++      if (!args[0].startsWith("-")) {
++        System.err.println("Command names must start with dashes.");
++      }
++      printUsage(false);
++      return 1;
++    }
++    final List<String> argsList = new LinkedList<String>();
++    argsList.addAll(Arrays.asList(args).subList(1, args.length));
++    try {
++      return command.run(getConf(), argsList);
++    } catch (IllegalArgumentException e) {
++      System.err.println(prettifyException(e));
++      return -1;
++    }
++  }
++
++  interface Command {
++    String getName();
++    String getShortUsage();
++    String getLongUsage();
++    int run(Configuration conf, List<String> args) throws IOException;
++  }
++
++  /** Command to list all the existing storage policies */
++  private static class ListStoragePoliciesCommand implements Command {
++    @Override
++    public String getName() {
++      return "-listPolicies";
++    }
++
++    @Override
++    public String getShortUsage() {
++      return "[" + getName() + "]\n";
++    }
++
++    @Override
++    public String getLongUsage() {
++      return getShortUsage() + "\n" +
++          "List all the existing block storage policies.\n";
++    }
++
++    @Override
++    public int run(Configuration conf, List<String> args) throws IOException {
++      final DistributedFileSystem dfs = getDFS(conf);
++      try {
++        BlockStoragePolicy[] policies = dfs.getStoragePolicies();
++        System.out.println("Block Storage Policies:");
++        for (BlockStoragePolicy policy : policies) {
++          if (policy != null) {
++            System.out.println("\t" + policy);
++          }
++        }
++      } catch (IOException e) {
++        System.err.println(prettifyException(e));
++        return 2;
++      }
++      return 0;
++    }
++  }
++
++  /** Command to get the storage policy of a file/directory */
++  private static class GetStoragePolicyCommand implements Command {
++    @Override
++    public String getName() {
++      return "-getStoragePolicy";
++    }
++
++    @Override
++    public String getShortUsage() {
++      return "[" + getName() + " -path <path>]\n";
++    }
++
++    @Override
++    public String getLongUsage() {
++      final TableListing listing = getOptionDescriptionListing();
++      listing.addRow("<path>",
++          "The path of the file/directory for getting the storage policy");
++      return getShortUsage() + "\n" +
++          "Get the storage policy of a file/directory.\n\n" +
++          listing.toString();
++    }
++
++    @Override
++    public int run(Configuration conf, List<String> args) throws IOException {
++      final String path = StringUtils.popOptionWithArgument("-path", args);
++      if (path == null) {
++        System.err.println("Please specify the path with -path.\nUsage:" +
++            getLongUsage());
++        return 1;
++      }
++
++      final DistributedFileSystem dfs = getDFS(conf);
++      try {
++        HdfsFileStatus status = dfs.getClient().getFileInfo(path);
++        if (status == null) {
++          System.err.println("File/Directory does not exist: " + path);
++          return 2;
++        }
++        byte storagePolicyId = status.getStoragePolicy();
++        if (storagePolicyId == BlockStoragePolicySuite.ID_UNSPECIFIED) {
++          System.out.println("The storage policy of " + path + " is unspecified");
++          return 0;
++        }
++        BlockStoragePolicy[] policies = dfs.getStoragePolicies();
++        for (BlockStoragePolicy p : policies) {
++          if (p.getId() == storagePolicyId) {
++            System.out.println("The storage policy of " + path + ":\n" + p);
++            return 0;
++          }
++        }
++      } catch (Exception e) {
++        System.err.println(prettifyException(e));
++        return 2;
++      }
++      System.err.println("Cannot identify the storage policy for " + path);
++      return 2;
++    }
++  }
++
++  /** Command to set the storage policy to a file/directory */
++  private static class SetStoragePolicyCommand implements Command {
++    @Override
++    public String getName() {
++      return "-setStoragePolicy";
++    }
++
++    @Override
++    public String getShortUsage() {
++      return "[" + getName() + " -path <path> -policy <policy>]\n";
++    }
++
++    @Override
++    public String getLongUsage() {
++      TableListing listing = getOptionDescriptionListing();
++      listing.addRow("<path>", "The path of the file/directory to set storage" +
++          " policy");
++      listing.addRow("<policy>", "The name of the block storage policy");
++      return getShortUsage() + "\n" +
++          "Set the storage policy to a file/directory.\n\n" +
++          listing.toString();
++    }
++
++    @Override
++    public int run(Configuration conf, List<String> args) throws IOException {
++      final String path = StringUtils.popOptionWithArgument("-path", args);
++      if (path == null) {
++        System.err.println("Please specify the path for setting the storage " +
++            "policy.\nUsage: " + getLongUsage());
++        return 1;
++      }
++
++      final String policyName = StringUtils.popOptionWithArgument("-policy",
++          args);
++      if (policyName == null) {
++        System.err.println("Please specify the policy name.\nUsage: " +
++            getLongUsage());
++        return 1;
++      }
++
++      final DistributedFileSystem dfs = getDFS(conf);
++      try {
++        dfs.setStoragePolicy(new Path(path), policyName);
++        System.out.println("Set storage policy " + policyName + " on " + path);
++      } catch (Exception e) {
++        System.err.println(prettifyException(e));
++        return 2;
++      }
++      return 0;
++    }
++  }
++
++  private static class HelpCommand implements Command {
++    @Override
++    public String getName() {
++      return "-help";
++    }
++
++    @Override
++    public String getShortUsage() {
++      return "[-help <command-name>]\n";
++    }
++
++    @Override
++    public String getLongUsage() {
++      final TableListing listing = getOptionDescriptionListing();
++      listing.addRow("<command-name>", "The command for which to get " +
++          "detailed help. If no command is specified, print detailed help for " +
++          "all commands");
++      return getShortUsage() + "\n" +
++          "Get detailed help about a command.\n\n" +
++          listing.toString();
++    }
++
++    @Override
++    public int run(Configuration conf, List<String> args) throws IOException {
++      if (args.size() == 0) {
++        for (Command command : COMMANDS) {
++          System.err.println(command.getLongUsage());
++        }
++        return 0;
++      }
++      if (args.size() != 1) {
++        System.out.println("You must give exactly one argument to -help.");
++        return 0;
++      }
++      final String commandName = args.get(0);
++      // prepend a dash to match against the command names
++      final Command command = determineCommand("-" + commandName);
++      if (command == null) {
++        System.err.print("Unknown command '" + commandName + "'.\n");
++        System.err.print("Valid help command names are:\n");
++        String separator = "";
++        for (Command c : COMMANDS) {
++          System.err.print(separator + c.getName().substring(1));
++          separator = ", ";
++        }
++        System.err.print("\n");
++        return 1;
++      }
++      System.err.print(command.getLongUsage());
++      return 0;
++    }
++  }
++
++  private static final Command[] COMMANDS = {
++      new ListStoragePoliciesCommand(),
++      new SetStoragePolicyCommand(),
++      new GetStoragePolicyCommand(),
++      new HelpCommand()
++  };
++
++  private static void printUsage(boolean longUsage) {
++    System.err.println(
++        "Usage: bin/hdfs storagepolicies [COMMAND]");
++    for (Command command : COMMANDS) {
++      if (longUsage) {
++        System.err.print(command.getLongUsage());
++      } else {
++        System.err.print("          " + command.getShortUsage());
++      }
++    }
++    System.err.println();
++  }
++
++  private static Command determineCommand(String commandName) {
++    for (Command COMMAND : COMMANDS) {
++      if (COMMAND.getName().equals(commandName)) {
++        return COMMAND;
++      }
++    }
++    return null;
++  }
++}
+\ No newline at end of file
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestStoragePolicyCommands.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestStoragePolicyCommands.java
+deleted file mode 100644
+index d80356a..0000000
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestStoragePolicyCommands.java
++++ /dev/null
+@@ -1,88 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.hadoop.hdfs;
+-
+-import java.io.IOException;
+-
+-import org.apache.hadoop.conf.Configuration;
+-import org.apache.hadoop.fs.Path;
+-import org.apache.hadoop.hdfs.protocol.BlockStoragePolicy;
+-import org.apache.hadoop.hdfs.server.blockmanagement.BlockStoragePolicySuite;
+-import org.junit.After;
+-import org.junit.Before;
+-import org.junit.Test;
+-
+-/**
+- * Test storage policy related DFSAdmin commands
+- */
+-public class TestStoragePolicyCommands {
+-  private static final short REPL = 1;
+-  private static final int SIZE = 128;
+-
+-  private static Configuration conf;
+-  private static MiniDFSCluster cluster;
+-  private static DistributedFileSystem fs;
+-  
+-  @Before
+-  public void clusterSetUp() throws IOException {
+-    conf = new HdfsConfiguration();
+-    cluster = new MiniDFSCluster.Builder(conf).numDataNodes(REPL).build();
+-    cluster.waitActive();
+-    fs = cluster.getFileSystem();
+-  }
+-
+-  @After
+-  public void clusterShutdown() throws IOException{
+-    if(fs != null){
+-      fs.close();
+-    }
+-    if(cluster != null){
+-      cluster.shutdown();
+-    }
+-  }
+-
+-  @Test
+-  public void testSetAndGetStoragePolicy() throws Exception {
+-    final Path foo = new Path("/foo");
+-    final Path bar = new Path(foo, "bar");
+-    DFSTestUtil.createFile(fs, bar, SIZE, REPL, 0);
+-
+-    DFSTestUtil.DFSAdminRun("-getStoragePolicy /foo", 0,
+-        "The storage policy of " + foo.toString() + " is unspecified", conf);
+-    DFSTestUtil.DFSAdminRun("-getStoragePolicy /foo/bar", 0,
+-        "The storage policy of " + bar.toString() + " is unspecified", conf);
+-
+-    DFSTestUtil.DFSAdminRun("-setStoragePolicy /foo WARM", 0,
+-        "Set storage policy WARM on " + foo.toString(), conf);
+-    DFSTestUtil.DFSAdminRun("-setStoragePolicy /foo/bar COLD", 0,
+-        "Set storage policy COLD on " + bar.toString(), conf);
+-    DFSTestUtil.DFSAdminRun("-setStoragePolicy /fooz WARM", -1,
+-        "File/Directory does not exist: /fooz", conf);
+-
+-    final BlockStoragePolicySuite suite = BlockStoragePolicySuite
+-        .createDefaultSuite();
+-    final BlockStoragePolicy warm = suite.getPolicy("WARM");
+-    final BlockStoragePolicy cold = suite.getPolicy("COLD");
+-    DFSTestUtil.DFSAdminRun("-getStoragePolicy /foo", 0,
+-        "The storage policy of " + foo.toString() + ":\n" + warm, conf);
+-    DFSTestUtil.DFSAdminRun("-getStoragePolicy /foo/bar", 0,
+-        "The storage policy of " + bar.toString() + ":\n" + cold, conf);
+-    DFSTestUtil.DFSAdminRun("-getStoragePolicy /fooz", -1,
+-        "File/Directory does not exist: /fooz", conf);
+-  }
+-}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/tools/TestStoragePolicyCommands.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/tools/TestStoragePolicyCommands.java
+new file mode 100644
+index 0000000..cb249e6
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/tools/TestStoragePolicyCommands.java
+@@ -0,0 +1,93 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.tools;
++
++import java.io.IOException;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.hdfs.DFSTestUtil;
++import org.apache.hadoop.hdfs.DistributedFileSystem;
++import org.apache.hadoop.hdfs.HdfsConfiguration;
++import org.apache.hadoop.hdfs.MiniDFSCluster;
++import org.apache.hadoop.hdfs.protocol.BlockStoragePolicy;
++import org.apache.hadoop.hdfs.server.blockmanagement.BlockStoragePolicySuite;
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++
++/**
++ * Test StoragePolicyAdmin commands
++ */
++public class TestStoragePolicyCommands {
++  private static final short REPL = 1;
++  private static final int SIZE = 128;
++
++  private static Configuration conf;
++  private static MiniDFSCluster cluster;
++  private static DistributedFileSystem fs;
++
++  @Before
++  public void clusterSetUp() throws IOException {
++    conf = new HdfsConfiguration();
++    cluster = new MiniDFSCluster.Builder(conf).numDataNodes(REPL).build();
++    cluster.waitActive();
++    fs = cluster.getFileSystem();
++  }
++
++  @After
++  public void clusterShutdown() throws IOException{
++    if(fs != null) {
++      fs.close();
++    }
++    if(cluster != null) {
++      cluster.shutdown();
++    }
++  }
++
++  @Test
++  public void testSetAndGetStoragePolicy() throws Exception {
++    final Path foo = new Path("/foo");
++    final Path bar = new Path(foo, "bar");
++    DFSTestUtil.createFile(fs, bar, SIZE, REPL, 0);
++
++    final StoragePolicyAdmin admin = new StoragePolicyAdmin(conf);
++    DFSTestUtil.toolRun(admin, "-getStoragePolicy -path /foo", 0,
++        "The storage policy of " + foo.toString() + " is unspecified");
++    DFSTestUtil.toolRun(admin, "-getStoragePolicy -path /foo/bar", 0,
++        "The storage policy of " + bar.toString() + " is unspecified");
++
++    DFSTestUtil.toolRun(admin, "-setStoragePolicy -path /foo -policy WARM", 0,
++        "Set storage policy WARM on " + foo.toString());
++    DFSTestUtil.toolRun(admin, "-setStoragePolicy -path /foo/bar -policy COLD",
++        0, "Set storage policy COLD on " + bar.toString());
++    DFSTestUtil.toolRun(admin, "-setStoragePolicy -path /fooz -policy WARM",
++        2, "File/Directory does not exist: /fooz");
++
++    final BlockStoragePolicySuite suite = BlockStoragePolicySuite
++        .createDefaultSuite();
++    final BlockStoragePolicy warm = suite.getPolicy("WARM");
++    final BlockStoragePolicy cold = suite.getPolicy("COLD");
++    DFSTestUtil.toolRun(admin, "-getStoragePolicy -path /foo", 0,
++        "The storage policy of " + foo.toString() + ":\n" + warm);
++    DFSTestUtil.toolRun(admin, "-getStoragePolicy -path /foo/bar", 0,
++        "The storage policy of " + bar.toString() + ":\n" + cold);
++    DFSTestUtil.toolRun(admin, "-getStoragePolicy -path /fooz", 2,
++        "File/Directory does not exist: /fooz");
++  }
++}
+-- 
+1.7.9.5
+

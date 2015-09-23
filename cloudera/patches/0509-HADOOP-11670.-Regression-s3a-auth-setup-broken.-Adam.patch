@@ -1,0 +1,110 @@
+From fdd0402da57a292cd01c6acd205c311d122b550c Mon Sep 17 00:00:00 2001
+From: Steve Loughran <stevel@apache.org>
+Date: Sun, 8 Mar 2015 11:20:42 -0700
+Subject: [PATCH 509/596] HADOOP-11670. Regression: s3a auth setup broken.
+ (Adam Budde via stevel) (cherry picked from commit
+ 64443490d7f189e8e42d284615f3814ef751395a)
+
+---
+ .../java/org/apache/hadoop/fs/s3a/Constants.java   |    6 +++++-
+ .../org/apache/hadoop/fs/s3a/S3AFileSystem.java    |   20 ++++++++++++++------
+ .../main/site/markdown/tools/hadoop-aws/index.md   |   10 +++++-----
+ 3 files changed, 24 insertions(+), 12 deletions(-)
+
+diff --git a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/Constants.java b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/Constants.java
+index 3467ea4..bbf3c1d 100644
+--- a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/Constants.java
++++ b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/Constants.java
+@@ -18,8 +18,12 @@
+ 
+ package org.apache.hadoop.fs.s3a;
+ 
+-
+ public class Constants {
++  // s3 access key
++  public static final String ACCESS_KEY = "fs.s3a.access.key";
++
++  // s3 secret key
++  public static final String SECRET_KEY = "fs.s3a.secret.key";
+ 
+   // number of simultaneous connections to s3
+   public static final String MAXIMUM_CONNECTIONS = "fs.s3a.connection.maximum";
+diff --git a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+index 1f06175..07875b9 100644
+--- a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
++++ b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+@@ -32,8 +32,6 @@
+ import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.atomic.AtomicInteger;
+ 
+-import org.apache.hadoop.fs.s3.S3Credentials;
+-
+ import com.amazonaws.AmazonClientException;
+ import com.amazonaws.AmazonServiceException;
+ import com.amazonaws.ClientConfiguration;
+@@ -158,12 +156,22 @@ public void initialize(URI name, Configuration conf) throws IOException {
+         this.getWorkingDirectory());
+ 
+     // Try to get our credentials or just connect anonymously
+-    S3Credentials s3Credentials = new S3Credentials();
+-    s3Credentials.initialize(name, conf);
++    String accessKey = conf.get(ACCESS_KEY, null);
++    String secretKey = conf.get(SECRET_KEY, null);
++
++    String userInfo = name.getUserInfo();
++    if (userInfo != null) {
++      int index = userInfo.indexOf(':');
++      if (index != -1) {
++        accessKey = userInfo.substring(0, index);
++        secretKey = userInfo.substring(index + 1);
++      } else {
++        accessKey = userInfo;
++      }
++    }
+ 
+     AWSCredentialsProviderChain credentials = new AWSCredentialsProviderChain(
+-        new BasicAWSCredentialsProvider(s3Credentials.getAccessKey(),
+-                                        s3Credentials.getSecretAccessKey()),
++        new BasicAWSCredentialsProvider(accessKey, secretKey),
+         new InstanceProfileCredentialsProvider(),
+         new AnonymousAWSCredentialsProvider()
+     );
+diff --git a/hadoop-tools/hadoop-aws/src/main/site/markdown/tools/hadoop-aws/index.md b/hadoop-tools/hadoop-aws/src/main/site/markdown/tools/hadoop-aws/index.md
+index 7fa08ac..eba1956 100644
+--- a/hadoop-tools/hadoop-aws/src/main/site/markdown/tools/hadoop-aws/index.md
++++ b/hadoop-tools/hadoop-aws/src/main/site/markdown/tools/hadoop-aws/index.md
+@@ -141,12 +141,12 @@ If you do any of these: change your credentials immediately!
+ ### Authentication properties
+ 
+     <property>
+-      <name>fs.s3a.awsAccessKeyId</name>
++      <name>fs.s3a.access.key</name>
+       <description>AWS access key ID. Omit for Role-based authentication.</description>
+     </property>
+ 
+     <property>
+-      <name>fs.s3a.awsSecretAccessKey</name>
++      <name>fs.s3a.secret.key</name>
+       <description>AWS secret key. Omit for Role-based authentication.</description>
+     </property>
+ 
+@@ -411,13 +411,13 @@ Example:
+       </property>
+ 
+       <property>
+-        <name>fs.s3a.awsAccessKeyId</name>
++        <name>fs.s3a.access.key</name>
+         <description>AWS access key ID. Omit for Role-based authentication.</description>
+-        <value>DONOTPCOMMITTHISKEYTOSCM</value>
++        <value>DONOTCOMMITTHISKEYTOSCM</value>
+       </property>
+ 
+       <property>
+-        <name>fs.s3a.awsSecretAccessKey</name>
++        <name>fs.s3a.secret.key</name>
+         <description>AWS secret key. Omit for Role-based authentication.</description>
+         <value>DONOTEVERSHARETHISSECRETKEY!</value>
+       </property>
+-- 
+1.7.9.5
+

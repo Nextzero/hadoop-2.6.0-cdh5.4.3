@@ -1,0 +1,1532 @@
+From 20e4b8887763f62080cb7167510493184611778e Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Tue, 3 Feb 2015 15:01:16 -0800
+Subject: [PATCH 429/596] HDFS-7712. Switch blockStateChangeLog to use slf4j.
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeRpcServer.java
+	hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestFsckWithMultipleNameNodes.java
+
+(cherry picked from commit 3ae38ec7dfa1aaf451cf889cec6cf862379af32a)
+(cherry picked from commit debd63f0b02028f8b58e79057d26db3a5bc99158)
+---
+ .../BlockInfoUnderConstruction.java                |    6 +-
+ .../hdfs/server/blockmanagement/BlockManager.java  |  167 +++++++++-----------
+ .../server/blockmanagement/CorruptReplicasMap.java |   19 +--
+ .../server/blockmanagement/DatanodeManager.java    |    2 +-
+ .../server/blockmanagement/InvalidateBlocks.java   |    4 +-
+ .../blockmanagement/UnderReplicatedBlocks.java     |   48 +++---
+ .../hadoop/hdfs/server/namenode/BackupNode.java    |    2 +-
+ .../hadoop/hdfs/server/namenode/NameNode.java      |   95 ++++++++---
+ .../hdfs/server/namenode/NameNodeRpcServer.java    |   12 +-
+ .../java/org/apache/hadoop/fs/TestSymlinkHdfs.java |    3 +-
+ .../java/org/apache/hadoop/hdfs/DFSTestUtil.java   |    8 +-
+ .../org/apache/hadoop/hdfs/TestDatanodeDeath.java  |   17 +-
+ .../org/apache/hadoop/hdfs/TestFileAppend2.java    |   14 +-
+ .../org/apache/hadoop/hdfs/TestFileAppend3.java    |   15 +-
+ .../org/apache/hadoop/hdfs/TestFileAppend4.java    |   11 +-
+ .../org/apache/hadoop/hdfs/TestFileCorruption.java |   15 +-
+ .../apache/hadoop/hdfs/TestFileCreationDelete.java |    9 +-
+ .../java/org/apache/hadoop/hdfs/TestPipelines.java |   10 +-
+ .../apache/hadoop/hdfs/TestRenameWhileOpen.java    |    9 +-
+ .../TestBalancerWithMultipleNameNodes.java         |    8 +-
+ .../hdfs/server/datanode/BlockReportTestBase.java  |    8 +-
+ .../datanode/TestIncrementalBrVariations.java      |   13 +-
+ .../fsdataset/impl/LazyPersistTestCase.java        |    8 +-
+ .../server/namenode/NNThroughputBenchmark.java     |   14 +-
+ .../server/namenode/TestListCorruptFileBlocks.java |    7 +-
+ .../hdfs/server/namenode/ha/TestHASafeMode.java    |    5 +-
+ .../web/resources/TestWebHdfsDataLocality.java     |    8 +-
+ .../hdfs/web/TestWebHdfsWithMultipleNameNodes.java |   13 +-
+ 28 files changed, 248 insertions(+), 302 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfoUnderConstruction.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfoUnderConstruction.java
+index 5513322..d9a4541 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfoUnderConstruction.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfoUnderConstruction.java
+@@ -246,7 +246,7 @@ public void setGenerationStampAndVerifyReplicas(long genStamp) {
+       if (genStamp != r.getGenerationStamp()) {
+         r.getExpectedStorageLocation().removeBlock(this);
+         NameNode.blockStateChangeLog.info("BLOCK* Removing stale replica "
+-            + "from location: " + r.getExpectedStorageLocation());
++            + "from location: {}", r.getExpectedStorageLocation());
+       }
+     }
+   }
+@@ -313,8 +313,8 @@ public void initializeBlockRecovery(long recoveryId) {
+     if (primary != null) {
+       primary.getExpectedStorageLocation().getDatanodeDescriptor().addBlockToBeRecovered(this);
+       primary.setChosenAsPrimary(true);
+-      NameNode.blockStateChangeLog.info("BLOCK* " + this
+-        + " recovery started, primary=" + primary);
++      NameNode.blockStateChangeLog.info(
++          "BLOCK* {} recovery started, primary={}", this, primary);
+     }
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index 0933057..3f1dfb5 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -98,8 +98,8 @@
+ @InterfaceAudience.Private
+ public class BlockManager {
+ 
+-  static final Logger LOG = LoggerFactory.getLogger(BlockManager.class);
+-  public static final Log blockLog = NameNode.blockStateChangeLog;
++  public static final Logger LOG = LoggerFactory.getLogger(BlockManager.class);
++  public static final Logger blockLog = NameNode.blockStateChangeLog;
+ 
+   private static final String QUEUE_REASON_CORRUPT_STATE =
+     "it has the wrong state or generation stamp";
+@@ -1002,8 +1002,8 @@ private BlocksWithLocations getBlocksWithLocations(final DatanodeID datanode,
+       final long size) throws UnregisteredNodeException {
+     final DatanodeDescriptor node = getDatanodeManager().getDatanode(datanode);
+     if (node == null) {
+-      blockLog.warn("BLOCK* getBlocks: "
+-          + "Asking for blocks from an unrecorded node " + datanode);
++      blockLog.warn("BLOCK* getBlocks: Asking for blocks from an" +
++          " unrecorded node {}", datanode);
+       throw new HadoopIllegalArgumentException(
+           "Datanode " + datanode + " not found.");
+     }
+@@ -1092,8 +1092,7 @@ private void addToInvalidates(Block b) {
+       datanodes.append(node).append(" ");
+     }
+     if (datanodes.length() != 0) {
+-      blockLog.info("BLOCK* addToInvalidates: " + b + " "
+-          + datanodes);
++      blockLog.info("BLOCK* addToInvalidates: {} {}", b, datanodes.toString());
+     }
+   }
+ 
+@@ -1126,8 +1125,7 @@ public void findAndMarkBlockAsCorrupt(final ExtendedBlock blk,
+       // ignore the request for now. This could happen when BlockScanner
+       // thread of Datanode reports bad block before Block reports are sent
+       // by the Datanode on startup
+-      blockLog.info("BLOCK* findAndMarkBlockAsCorrupt: "
+-          + blk + " not found");
++      blockLog.info("BLOCK* findAndMarkBlockAsCorrupt: {} not found", blk);
+       return;
+     }
+ 
+@@ -1156,8 +1154,8 @@ private void markBlockAsCorrupt(BlockToMarkCorrupt b,
+ 
+     BlockCollection bc = b.corrupted.getBlockCollection();
+     if (bc == null) {
+-      blockLog.info("BLOCK markBlockAsCorrupt: " + b
+-          + " cannot be marked as corrupt as it does not belong to any file");
++      blockLog.info("BLOCK markBlockAsCorrupt: {} cannot be marked as" +
++          " corrupt as it does not belong to any file", b);
+       addToInvalidates(b.corrupted, node);
+       return;
+     } 
+@@ -1204,7 +1202,7 @@ private void markBlockAsCorrupt(BlockToMarkCorrupt b,
+    */
+   private boolean invalidateBlock(BlockToMarkCorrupt b, DatanodeInfo dn
+       ) throws IOException {
+-    blockLog.info("BLOCK* invalidateBlock: " + b + " on " + dn);
++    blockLog.info("BLOCK* invalidateBlock: {} on {}", b, dn);
+     DatanodeDescriptor node = getDatanodeManager().getDatanode(dn);
+     if (node == null) {
+       throw new IOException("Cannot invalidate " + b
+@@ -1218,20 +1216,22 @@ private boolean invalidateBlock(BlockToMarkCorrupt b, DatanodeInfo dn
+           "invalidation of " + b + " on " + dn + " because " +
+           nr.replicasOnStaleNodes() + " replica(s) are located on nodes " +
+           "with potentially out-of-date block reports");
++      blockLog.info("BLOCK* invalidateBlocks: postponing " +
++          "invalidation of {} on {} because {} replica(s) are located on " +
++          "nodes with potentially out-of-date block reports", b, dn,
++          nr.replicasOnStaleNodes());
+       postponeBlock(b.corrupted);
+       return false;
+     } else if (nr.liveReplicas() >= 1) {
+       // If we have at least one copy on a live node, then we can delete it.
+       addToInvalidates(b.corrupted, dn);
+       removeStoredBlock(b.stored, node);
+-      if(blockLog.isDebugEnabled()) {
+-        blockLog.debug("BLOCK* invalidateBlocks: "
+-            + b + " on " + dn + " listed for deletion.");
+-      }
++      blockLog.debug("BLOCK* invalidateBlocks: {} on {} listed for deletion.",
++          b, dn);
+       return true;
+     } else {
+-      blockLog.info("BLOCK* invalidateBlocks: " + b
+-          + " on " + dn + " is the only copy and was not deleted");
++      blockLog.info("BLOCK* invalidateBlocks: {} on {} is the only copy and" +
++          " was not deleted", b, dn);
+       return false;
+     }
+   }
+@@ -1363,8 +1363,8 @@ int computeReplicationWorkForBlocks(List<List<Block>> blocksToReplicate) {
+                    (blockHasEnoughRacks(block)) ) {
+                 neededReplications.remove(block, priority); // remove from neededReplications
+                 neededReplications.decrementReplicationIndex(priority);
+-                blockLog.info("BLOCK* Removing " + block
+-                    + " from neededReplications as it has enough replicas");
++                blockLog.info("BLOCK* Removing {} from neededReplications as" +
++                        " it has enough replicas", block);
+                 continue;
+               }
+             }
+@@ -1435,8 +1435,8 @@ int computeReplicationWorkForBlocks(List<List<Block>> blocksToReplicate) {
+               neededReplications.remove(block, priority); // remove from neededReplications
+               neededReplications.decrementReplicationIndex(priority);
+               rw.targets = null;
+-              blockLog.info("BLOCK* Removing " + block
+-                  + " from neededReplications as it has enough replicas");
++              blockLog.info("BLOCK* Removing {} from neededReplications as" +
++                      " it has enough replicas", block);
+               continue;
+             }
+           }
+@@ -1460,11 +1460,8 @@ int computeReplicationWorkForBlocks(List<List<Block>> blocksToReplicate) {
+           // replications that fail after an appropriate amount of time.
+           pendingReplications.increment(block,
+               DatanodeStorageInfo.toDatanodeDescriptors(targets));
+-          if(blockLog.isDebugEnabled()) {
+-            blockLog.debug(
+-                "BLOCK* block " + block
+-                + " is moved from neededReplications to pendingReplications");
+-          }
++          blockLog.debug("BLOCK* block {} is moved from neededReplications to "
++                  + "pendingReplications", block);
+ 
+           // remove from neededReplications
+           if(numEffectiveReplicas + targets.length >= requiredReplication) {
+@@ -1487,16 +1484,13 @@ int computeReplicationWorkForBlocks(List<List<Block>> blocksToReplicate) {
+             targetList.append(' ');
+             targetList.append(targets[k].getDatanodeDescriptor());
+           }
+-          blockLog.info("BLOCK* ask " + rw.srcNode
+-              + " to replicate " + rw.block + " to " + targetList);
++          blockLog.info("BLOCK* ask {} to replicate {} to {}", rw.srcNode,
++              rw.block, targetList);
+         }
+       }
+     }
+-    if(blockLog.isDebugEnabled()) {
+-        blockLog.debug(
+-          "BLOCK* neededReplications = " + neededReplications.size()
+-          + " pendingReplications = " + pendingReplications.size());
+-    }
++    blockLog.debug("BLOCK* neededReplications = {} pendingReplications = {}",
++        neededReplications.size(), pendingReplications.size());
+ 
+     return scheduledWork;
+   }
+@@ -1794,8 +1788,8 @@ public boolean processReport(final DatanodeID nodeID,
+       if (namesystem.isInStartupSafeMode()
+           && storageInfo.getBlockReportCount() > 0) {
+         blockLog.info("BLOCK* processReport: "
+-            + "discarded non-initial block report from " + nodeID
+-            + " because namenode still in startup phase");
++            + "discarded non-initial block report from {}"
++            + " because namenode still in startup phase", nodeID);
+         return !node.hasStaleStorages();
+       }
+ 
+@@ -1815,9 +1809,8 @@ public boolean processReport(final DatanodeID nodeID,
+ 
+     if (invalidatedBlocks != null) {
+       for (Block b : invalidatedBlocks) {
+-        blockLog.info("BLOCK* processReport: " + b + " on " + node
+-                          + " size " + b.getNumBytes()
+-                          + " does not belong to any file");
++        blockLog.info("BLOCK* processReport: {} on node {} size {} does not " +
++            "belong to any file", b, node, b.getNumBytes());
+       }
+     }
+ 
+@@ -1826,10 +1819,10 @@ public boolean processReport(final DatanodeID nodeID,
+     if (metrics != null) {
+       metrics.addBlockReport((int) (endTime - startTime));
+     }
+-    blockLog.info("BLOCK* processReport: from storage " + storage.getStorageID()
+-        + " node " + nodeID + ", blocks: " + newReport.getNumberOfBlocks()
+-        + ", hasStaleStorages: " + node.hasStaleStorages()
+-        + ", processing time: " + (endTime - startTime) + " msecs");
++    blockLog.info("BLOCK* processReport: from storage {} node {}, " +
++        "blocks: {}, hasStaleStorage: {}, processing time: {} msecs", storage
++        .getStorageID(), nodeID, newReport.getNumberOfBlocks(),
++        node.hasStaleStorages(), (endTime - startTime));
+     return !node.hasStaleStorages();
+   }
+ 
+@@ -1936,8 +1929,8 @@ void rescanPostponedMisreplicatedBlocks() {
+       numBlocksLogged++;
+     }
+     if (numBlocksLogged > maxNumBlocksToLog) {
+-      blockLog.info("BLOCK* processReport: logged info for " + maxNumBlocksToLog
+-          + " of " + numBlocksLogged + " reported.");
++      blockLog.info("BLOCK* processReport: logged info for {} of {} " +
++          "reported.", maxNumBlocksToLog, numBlocksLogged);
+     }
+     for (Block b : toInvalidate) {
+       addToInvalidates(b, node);
+@@ -2416,9 +2409,9 @@ private Block addStoredBlock(final BlockInfo block,
+     }
+     if (storedBlock == null || storedBlock.getBlockCollection() == null) {
+       // If this block does not belong to anyfile, then we are done.
+-      blockLog.info("BLOCK* addStoredBlock: " + block + " on "
+-          + node + " size " + block.getNumBytes()
+-          + " but it does not belong to any file");
++      blockLog.info("BLOCK* addStoredBlock: {} on {} size {} but it does not" +
++          " belong to any file", block, node, block.getNumBytes());
++
+       // we could add this block to invalidate set of this datanode.
+       // it will happen in next block report otherwise.
+       return block;
+@@ -2440,6 +2433,8 @@ private Block addStoredBlock(final BlockInfo block,
+       blockLog.warn("BLOCK* addStoredBlock: " + "block " + storedBlock
+           + " moved to storageType " + storageInfo.getStorageType()
+           + " on node " + node);
++      blockLog.warn("BLOCK* addStoredBlock: block {} moved to storageType " +
++          "{} on node {}", storedBlock, storageInfo.getStorageType(), node);
+     } else {
+       // if the same block is added again and the replica was corrupt
+       // previously because of a wrong gen stamp, remove it from the
+@@ -2447,9 +2442,9 @@ private Block addStoredBlock(final BlockInfo block,
+       corruptReplicas.removeFromCorruptReplicasMap(block, node,
+           Reason.GENSTAMP_MISMATCH);
+       curReplicaDelta = 0;
+-      blockLog.warn("BLOCK* addStoredBlock: "
+-          + "Redundant addStoredBlock request received for " + storedBlock
+-          + " on " + node + " size " + storedBlock.getNumBytes());
++      blockLog.warn("BLOCK* addStoredBlock: Redundant addStoredBlock request"
++              + " received for {} on node {} size {}", storedBlock, node,
++          storedBlock.getNumBytes());
+     }
+ 
+     // Now check for completion of blocks and safe block count
+@@ -2517,7 +2512,7 @@ private void logAddStoredBlock(BlockInfo storedBlock, DatanodeDescriptor node) {
+     storedBlock.appendStringTo(sb);
+     sb.append(" size " )
+       .append(storedBlock.getNumBytes());
+-    blockLog.info(sb);
++    blockLog.info(sb.toString());
+   }
+   /**
+    * Invalidate corrupt replicas.
+@@ -2547,8 +2542,8 @@ private void invalidateCorruptReplicas(BlockInfo blk) {
+           removedFromBlocksMap = false;
+         }
+       } catch (IOException e) {
+-        blockLog.info("invalidateCorruptReplicas "
+-            + "error in deleting bad block " + blk + " on " + node, e);
++        blockLog.info("invalidateCorruptReplicas error in deleting bad block"
++            + " {} on {}", blk, node, e);
+         removedFromBlocksMap = false;
+       }
+     }
+@@ -2880,7 +2875,7 @@ private void chooseExcessReplicates(final Collection<DatanodeStorageInfo> nonExc
+       //
+       addToInvalidates(b, cur.getDatanodeDescriptor());
+       blockLog.info("BLOCK* chooseExcessReplicates: "
+-                +"("+cur+", "+b+") is added to invalidated blocks set");
++                +"({}, {}) is added to invalidated blocks set", cur, b);
+     }
+   }
+ 
+@@ -2914,11 +2909,8 @@ private void addToExcessReplicate(DatanodeInfo dn, Block block) {
+     }
+     if (excessBlocks.add(block)) {
+       excessBlocksCount.incrementAndGet();
+-      if(blockLog.isDebugEnabled()) {
+-        blockLog.debug("BLOCK* addToExcessReplicate:"
+-            + " (" + dn + ", " + block
+-            + ") is added to excessReplicateMap");
+-      }
++      blockLog.debug("BLOCK* addToExcessReplicate: ({}, {}) is added to"
++          + " excessReplicateMap", dn, block);
+     }
+   }
+ 
+@@ -2927,17 +2919,12 @@ private void addToExcessReplicate(DatanodeInfo dn, Block block) {
+    * removed block is still valid.
+    */
+   public void removeStoredBlock(Block block, DatanodeDescriptor node) {
+-    if(blockLog.isDebugEnabled()) {
+-      blockLog.debug("BLOCK* removeStoredBlock: "
+-          + block + " from " + node);
+-    }
++    blockLog.debug("BLOCK* removeStoredBlock: {} from {}", block, node);
+     assert (namesystem.hasWriteLock());
+     {
+       if (!blocksMap.removeNode(block, node)) {
+-        if(blockLog.isDebugEnabled()) {
+-          blockLog.debug("BLOCK* removeStoredBlock: "
+-              + block + " has already been removed from node " + node);
+-        }
++        blockLog.debug("BLOCK* removeStoredBlock: {} has already been" +
++            " removed from node {}", block, node);
+         return;
+       }
+ 
+@@ -2962,10 +2949,8 @@ public void removeStoredBlock(Block block, DatanodeDescriptor node) {
+       if (excessBlocks != null) {
+         if (excessBlocks.remove(block)) {
+           excessBlocksCount.decrementAndGet();
+-          if(blockLog.isDebugEnabled()) {
+-            blockLog.debug("BLOCK* removeStoredBlock: "
+-                + block + " is removed from excessBlocks");
+-          }
++          blockLog.debug("BLOCK* removeStoredBlock: {} is removed from " +
++              "excessBlocks", block);
+           if (excessBlocks.size() == 0) {
+             excessReplicateMap.remove(node.getDatanodeUuid());
+           }
+@@ -3018,8 +3003,8 @@ void addBlock(DatanodeStorageInfo storageInfo, Block block, String delHint)
+     if (delHint != null && delHint.length() != 0) {
+       delHintNode = datanodeManager.getDatanode(delHint);
+       if (delHintNode == null) {
+-        blockLog.warn("BLOCK* blockReceived: " + block
+-            + " is expected to be removed from an unrecorded node " + delHint);
++        blockLog.warn("BLOCK* blockReceived: {} is expected to be removed " +
++            "from an unrecorded node {}", block, delHint);
+       }
+     }
+ 
+@@ -3058,13 +3043,12 @@ private void processAndHandleReportedBlock(
+       numBlocksLogged++;
+     }
+     if (numBlocksLogged > maxNumBlocksToLog) {
+-      blockLog.info("BLOCK* addBlock: logged info for " + maxNumBlocksToLog
+-          + " of " + numBlocksLogged + " reported.");
++      blockLog.info("BLOCK* addBlock: logged info for {} of {} reported.",
++          maxNumBlocksToLog, numBlocksLogged);
+     }
+     for (Block b : toInvalidate) {
+-      blockLog.info("BLOCK* addBlock: block "
+-          + b + " on " + node + " size " + b.getNumBytes()
+-          + " does not belong to any file");
++      blockLog.info("BLOCK* addBlock: block {} on node {} size {} does not " +
++          "belong to any file", b, node, b.getNumBytes());
+       addToInvalidates(b, node);
+     }
+     for (BlockToMarkCorrupt b : toCorrupt) {
+@@ -3087,10 +3071,8 @@ public void processIncrementalBlockReport(final DatanodeID nodeID,
+     int receiving = 0;
+     final DatanodeDescriptor node = datanodeManager.getDatanode(nodeID);
+     if (node == null || !node.isAlive) {
+-      blockLog
+-          .warn("BLOCK* processIncrementalBlockReport"
+-              + " is received from dead or unregistered node "
+-              + nodeID);
++      blockLog.warn("BLOCK* processIncrementalBlockReport"
++              + " is received from dead or unregistered node {}", nodeID);
+       throw new IOException(
+           "Got incremental block report from unregistered or dead node");
+     }
+@@ -3129,17 +3111,12 @@ public void processIncrementalBlockReport(final DatanodeID nodeID,
+         assert false : msg; // if assertions are enabled, throw.
+         break;
+       }
+-      if (blockLog.isDebugEnabled()) {
+-        blockLog.debug("BLOCK* block "
+-            + (rdbi.getStatus()) + ": " + rdbi.getBlock()
+-            + " is received from " + nodeID);
+-      }
+-    }
+-    if (blockLog.isDebugEnabled()) {
+-      blockLog.debug("*BLOCK* NameNode.processIncrementalBlockReport: " + "from "
+-        + nodeID + " receiving: " + receiving + ", " + " received: " + received
+-        + ", " + " deleted: " + deleted);
++      blockLog.debug("BLOCK* block {}: {} is received from {}",
++          rdbi.getStatus(), rdbi.getBlock(), nodeID);
+     }
++    blockLog.debug("*BLOCK* NameNode.processIncrementalBlockReport: from "
++            + "{} receiving: {}, received: {}, deleted: {}", nodeID, receiving,
++        received, deleted);
+   }
+ 
+   /**
+@@ -3463,10 +3440,8 @@ private int invalidateWorkForOneNode(DatanodeInfo dn) {
+     } finally {
+       namesystem.writeUnlock();
+     }
+-    if (NameNode.stateChangeLog.isInfoEnabled()) {
+-      NameNode.stateChangeLog.info("BLOCK* " + getClass().getSimpleName()
+-          + ": ask " + dn + " to delete " + toInvalidate);
+-    }
++    blockLog.info("BLOCK* {}: ask {} to delete {}", getClass().getSimpleName(),
++        dn, toInvalidate);
+     return toInvalidate.size();
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/CorruptReplicasMap.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/CorruptReplicasMap.java
+index 9b7515d..5382f0f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/CorruptReplicasMap.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/CorruptReplicasMap.java
+@@ -73,18 +73,15 @@ void addToCorruptReplicasMap(Block blk, DatanodeDescriptor dn,
+     }
+     
+     if (!nodes.keySet().contains(dn)) {
+-      NameNode.blockStateChangeLog.info("BLOCK NameSystem.addToCorruptReplicasMap: "+
+-                                   blk.getBlockName() +
+-                                   " added as corrupt on " + dn +
+-                                   " by " + Server.getRemoteIp() +
+-                                   reasonText);
++      NameNode.blockStateChangeLog.info(
++          "BLOCK NameSystem.addToCorruptReplicasMap: {} added as corrupt on "
++              + "{} by {} {}", blk.getBlockName(), dn, Server.getRemoteIp(),
++          reasonText);
+     } else {
+-      NameNode.blockStateChangeLog.info("BLOCK NameSystem.addToCorruptReplicasMap: "+
+-                                   "duplicate requested for " + 
+-                                   blk.getBlockName() + " to add as corrupt " +
+-                                   "on " + dn +
+-                                   " by " + Server.getRemoteIp() +
+-                                   reasonText);
++      NameNode.blockStateChangeLog.info(
++          "BLOCK NameSystem.addToCorruptReplicasMap: duplicate requested for" +
++              " {} to add as corrupt on {} by {} {}", blk.getBlockName(), dn,
++              Server.getRemoteIp(), reasonText);
+     }
+     // Add the node or update the reason.
+     nodes.put(dn, reasonCode);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+index 7a8d720..94d6b13 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+@@ -484,7 +484,7 @@ public DatanodeDescriptor getDatanode(DatanodeID nodeID
+     if (!node.getXferAddr().equals(nodeID.getXferAddr())) {
+       final UnregisteredNodeException e = new UnregisteredNodeException(
+           nodeID, node);
+-      NameNode.stateChangeLog.fatal("BLOCK* NameSystem.getDatanode: "
++      NameNode.stateChangeLog.error("BLOCK* NameSystem.getDatanode: "
+                                     + e.getLocalizedMessage());
+       throw e;
+     }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/InvalidateBlocks.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/InvalidateBlocks.java
+index ad29769..e357528 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/InvalidateBlocks.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/InvalidateBlocks.java
+@@ -112,8 +112,8 @@ synchronized void add(final Block block, final DatanodeInfo datanode,
+     if (set.add(block)) {
+       numBlocks++;
+       if (log) {
+-        NameNode.blockStateChangeLog.info("BLOCK* " + getClass().getSimpleName()
+-            + ": add " + block + " to " + datanode);
++        NameNode.blockStateChangeLog.info("BLOCK* {}: add {} to {}",
++            getClass().getSimpleName(), block, datanode);
+       }
+     }
+   }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/UnderReplicatedBlocks.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/UnderReplicatedBlocks.java
+index 8da5aee..0240805 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/UnderReplicatedBlocks.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/UnderReplicatedBlocks.java
+@@ -202,15 +202,12 @@ synchronized boolean add(Block block,
+           expectedReplicas == 1) {
+         corruptReplOneBlocks++;
+       }
+-      if(NameNode.blockStateChangeLog.isDebugEnabled()) {
+-        NameNode.blockStateChangeLog.debug(
+-          "BLOCK* NameSystem.UnderReplicationBlock.add:"
+-          + block
+-          + " has only " + curReplicas
+-          + " replicas and need " + expectedReplicas
+-          + " replicas so is added to neededReplications"
+-          + " at priority level " + priLevel);
+-      }
++      NameNode.blockStateChangeLog.debug(
++          "BLOCK* NameSystem.UnderReplicationBlock.add: {}"
++              + " has only {} replicas and need {} replicas so is added to" +
++              " neededReplications at priority level {}", block, curReplicas,
++          expectedReplicas, priLevel);
++
+       return true;
+     }
+     return false;
+@@ -254,24 +251,18 @@ synchronized boolean remove(Block block,
+   boolean remove(Block block, int priLevel) {
+     if(priLevel >= 0 && priLevel < LEVEL 
+         && priorityQueues.get(priLevel).remove(block)) {
+-      if(NameNode.blockStateChangeLog.isDebugEnabled()) {
+-        NameNode.blockStateChangeLog.debug(
+-          "BLOCK* NameSystem.UnderReplicationBlock.remove: "
+-          + "Removing block " + block
+-          + " from priority queue "+ priLevel);
+-      }
++      NameNode.blockStateChangeLog.debug(
++        "BLOCK* NameSystem.UnderReplicationBlock.remove: Removing block {}" +
++            " from priority queue {}", block, priLevel);
+       return true;
+     } else {
+       // Try to remove the block from all queues if the block was
+       // not found in the queue for the given priority level.
+       for (int i = 0; i < LEVEL; i++) {
+         if (priorityQueues.get(i).remove(block)) {
+-          if(NameNode.blockStateChangeLog.isDebugEnabled()) {
+-            NameNode.blockStateChangeLog.debug(
+-              "BLOCK* NameSystem.UnderReplicationBlock.remove: "
+-              + "Removing block " + block
+-              + " from priority queue "+ i);
+-          }
++          NameNode.blockStateChangeLog.debug(
++              "BLOCK* NameSystem.UnderReplicationBlock.remove: Removing block" +
++                  " {} from priority queue {}", block, priLevel);
+           return true;
+         }
+       }
+@@ -317,15 +308,12 @@ synchronized void update(Block block, int curReplicas,
+       remove(block, oldPri);
+     }
+     if(priorityQueues.get(curPri).add(block)) {
+-      if(NameNode.blockStateChangeLog.isDebugEnabled()) {
+-        NameNode.blockStateChangeLog.debug(
+-          "BLOCK* NameSystem.UnderReplicationBlock.update:"
+-          + block
+-          + " has only "+ curReplicas
+-          + " replicas and needs " + curExpectedReplicas
+-          + " replicas so is added to neededReplications"
+-          + " at priority level " + curPri);
+-      }
++      NameNode.blockStateChangeLog.debug(
++          "BLOCK* NameSystem.UnderReplicationBlock.update: {} has only {} " +
++              "replicas and needs {} replicas so is added to " +
++              "neededReplications at priority level {}", block, curReplicas,
++          curExpectedReplicas, curPri);
++
+     }
+     if (oldPri != curPri || expectedReplicasDelta != 0) {
+       // corruptReplOneBlocks could possibly change
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/BackupNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/BackupNode.java
+index c84f6be..0008069 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/BackupNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/BackupNode.java
+@@ -402,7 +402,7 @@ private static NamespaceInfo handshake(NamenodeProtocol namenode)
+       errorMsg = "Incompatible build versions: active name-node BV = " 
+         + nsInfo.getBuildVersion() + "; backup node BV = "
+         + Storage.getBuildVersion();
+-      LOG.fatal(errorMsg);
++      LOG.error(errorMsg);
+       throw new IOException(errorMsg);
+     }
+     assert HdfsConstants.NAMENODE_LAYOUT_VERSION == nsInfo.getLayoutVersion() :
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
+index a984a42..4819d84 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
+@@ -21,9 +21,6 @@
+ import com.google.common.base.Joiner;
+ import com.google.common.base.Preconditions;
+ import com.google.common.collect.Lists;
+-
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.HadoopIllegalArgumentException;
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.conf.Configuration;
+@@ -43,11 +40,21 @@
+ import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.NamenodeRole;
+ import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.RollingUpgradeStartupOption;
+ import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.StartupOption;
+-import org.apache.hadoop.hdfs.server.namenode.ha.*;
++import org.apache.hadoop.hdfs.server.namenode.ha.ActiveState;
++import org.apache.hadoop.hdfs.server.namenode.ha.BootstrapStandby;
++import org.apache.hadoop.hdfs.server.namenode.ha.HAContext;
++import org.apache.hadoop.hdfs.server.namenode.ha.HAState;
++import org.apache.hadoop.hdfs.server.namenode.ha.StandbyState;
+ import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
+ import org.apache.hadoop.hdfs.server.namenode.startupprogress.StartupProgress;
+ import org.apache.hadoop.hdfs.server.namenode.startupprogress.StartupProgressMetrics;
+-import org.apache.hadoop.hdfs.server.protocol.*;
++import org.apache.hadoop.hdfs.server.protocol.DatanodeProtocol;
++import org.apache.hadoop.hdfs.server.protocol.JournalProtocol;
++import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocol;
++import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocols;
++import org.apache.hadoop.hdfs.server.protocol.NamenodeRegistration;
++import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
++import org.apache.hadoop.ipc.RefreshCallQueueProtocol;
+ import org.apache.hadoop.ipc.Server;
+ import org.apache.hadoop.ipc.StandbyException;
+ import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
+@@ -58,7 +65,6 @@
+ import org.apache.hadoop.security.SecurityUtil;
+ import org.apache.hadoop.security.UserGroupInformation;
+ import org.apache.hadoop.security.authorize.RefreshAuthorizationPolicyProtocol;
+-import org.apache.hadoop.ipc.RefreshCallQueueProtocol;
+ import org.apache.hadoop.tools.GetUserMappingsProtocol;
+ import org.apache.hadoop.tracing.SpanReceiverHost;
+ import org.apache.hadoop.tracing.TraceAdminProtocol;
+@@ -66,6 +72,9 @@
+ import org.apache.hadoop.util.JvmPauseMonitor;
+ import org.apache.hadoop.util.ServicePlugin;
+ import org.apache.hadoop.util.StringUtils;
++import org.apache.log4j.LogManager;
++import org.slf4j.Logger;
++import org.slf4j.LoggerFactory;
+ 
+ import javax.management.ObjectName;
+ 
+@@ -82,7 +91,41 @@
+ import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY;
+ import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_DEFAULT;
+ import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_TRASH_INTERVAL_KEY;
+-import static org.apache.hadoop.hdfs.DFSConfigKeys.*;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_HA_AUTO_FAILOVER_ENABLED_DEFAULT;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_HA_AUTO_FAILOVER_ENABLED_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_HA_FENCE_METHODS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_HA_NAMENODE_ID_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_HA_ZKFC_PORT_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_METRICS_PERCENTILES_INTERVALS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_BACKUP_ADDRESS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_BACKUP_HTTP_ADDRESS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_BACKUP_SERVICE_RPC_ADDRESS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_CHECKPOINT_DIR_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_CHECKPOINT_EDITS_DIR_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_EDITS_DIR_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_HTTPS_ADDRESS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_HTTPS_BIND_HOST_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_HTTP_ADDRESS_DEFAULT;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_HTTP_ADDRESS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_HTTP_BIND_HOST_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_KERBEROS_INTERNAL_SPNEGO_PRINCIPAL_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_KERBEROS_PRINCIPAL_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_KEYTAB_FILE_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_NAME_DIR_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_PLUGINS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_RPC_ADDRESS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_RPC_BIND_HOST_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_SECONDARY_HTTPS_ADDRESS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_SECONDARY_HTTP_ADDRESS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_SERVICE_RPC_ADDRESS_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_SERVICE_RPC_BIND_HOST_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_SHARED_EDITS_DIR_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_STARTUP_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_SUPPORT_ALLOW_FORMAT_DEFAULT;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_SUPPORT_ALLOW_FORMAT_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMESERVICE_ID;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_SECONDARY_NAMENODE_KEYTAB_FILE_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.HADOOP_USER_GROUP_METRICS_PERCENTILES_INTERVALS;
+ import static org.apache.hadoop.util.ExitUtil.terminate;
+ import static org.apache.hadoop.util.ToolRunner.confirmPrompt;
+ 
+@@ -251,9 +294,12 @@ public long getProtocolVersion(String protocol,
+   }
+     
+   public static final int DEFAULT_PORT = 8020;
+-  public static final Log LOG = LogFactory.getLog(NameNode.class.getName());
+-  public static final Log stateChangeLog = LogFactory.getLog("org.apache.hadoop.hdfs.StateChange");
+-  public static final Log blockStateChangeLog = LogFactory.getLog("BlockStateChange");
++  public static final Logger LOG =
++      LoggerFactory.getLogger(NameNode.class.getName());
++  public static final Logger stateChangeLog =
++      LoggerFactory.getLogger("org.apache.hadoop.hdfs.StateChange");
++  public static final Logger blockStateChangeLog =
++      LoggerFactory.getLogger("BlockStateChange");
+   public static final HAState ACTIVE_STATE = new ActiveState();
+   public static final HAState STANDBY_STATE = new StandbyState();
+   
+@@ -346,7 +392,7 @@ public void setClientNamenodeAddress(Configuration conf) {
+       return;
+     }
+ 
+-    LOG.info(FS_DEFAULT_NAME_KEY + " is " + nnAddr);
++    LOG.info("{} is {}", FS_DEFAULT_NAME_KEY, nnAddr);
+     URI nnUri = URI.create(nnAddr);
+ 
+     String nnHost = nnUri.getHost();
+@@ -366,8 +412,8 @@ public void setClientNamenodeAddress(Configuration conf) {
+       clientNamenodeAddress = null;
+       return;
+     }
+-    LOG.info("Clients are to use " + clientNamenodeAddress + " to access"
+-        + " this namenode/service.");
++    LOG.info("Clients are to use {} to access"
++        + " this namenode/service.", clientNamenodeAddress );
+   }
+ 
+   /**
+@@ -388,7 +434,7 @@ public static InetSocketAddress getAddress(String address) {
+    */
+   public static void setServiceAddress(Configuration conf,
+                                            String address) {
+-    LOG.info("Setting ADDRESS " + address);
++    LOG.info("Setting ADDRESS {}", address);
+     conf.set(DFS_NAMENODE_SERVICE_RPC_ADDRESS_KEY, address);
+   }
+   
+@@ -1005,7 +1051,7 @@ private static boolean initializeSharedEdits(Configuration conf,
+     initializeGenericKeys(conf, nsId, namenodeId);
+     
+     if (conf.get(DFSConfigKeys.DFS_NAMENODE_SHARED_EDITS_DIR_KEY) == null) {
+-      LOG.fatal("No shared edits directory configured for namespace " +
++      LOG.error("No shared edits directory configured for namespace " +
+           nsId + " namenode " + namenodeId);
+       return false;
+     }
+@@ -1179,7 +1225,7 @@ static StartupOption parseArguments(String args[]) {
+             i++;
+             if (i >= argsLen) {
+               // if no cluster id specified, return null
+-              LOG.fatal("Must specify a valid cluster ID after the "
++              LOG.error("Must specify a valid cluster ID after the "
+                   + StartupOption.CLUSTERID.getName() + " flag");
+               return null;
+             }
+@@ -1189,7 +1235,7 @@ static StartupOption parseArguments(String args[]) {
+                 clusterId.equalsIgnoreCase(StartupOption.FORCE.getName()) ||
+                 clusterId.equalsIgnoreCase(
+                     StartupOption.NONINTERACTIVE.getName())) {
+-              LOG.fatal("Must specify a valid cluster ID after the "
++              LOG.error("Must specify a valid cluster ID after the "
+                   + StartupOption.CLUSTERID.getName() + " flag");
+               return null;
+             }
+@@ -1226,7 +1272,7 @@ static StartupOption parseArguments(String args[]) {
+               i += 2;
+               startOpt.setClusterId(args[i]);
+             } else {
+-              LOG.fatal("Must specify a valid cluster ID after the "
++              LOG.error("Must specify a valid cluster ID after the "
+                   + StartupOption.CLUSTERID.getName() + " flag");
+               return null;
+             }
+@@ -1240,7 +1286,7 @@ static StartupOption parseArguments(String args[]) {
+               i += 1;
+             }
+           } else {
+-            LOG.fatal("Unknown upgrade flag " + flag);
++            LOG.error("Unknown upgrade flag " + flag);
+             return null;
+           }
+         }
+@@ -1248,7 +1294,7 @@ static StartupOption parseArguments(String args[]) {
+         startOpt = StartupOption.ROLLINGUPGRADE;
+         ++i;
+         if (i >= argsLen) {
+-          LOG.fatal("Must specify a rolling upgrade startup option "
++          LOG.error("Must specify a rolling upgrade startup option "
+               + RollingUpgradeStartupOption.getAllOptionString());
+           return null;
+         }
+@@ -1270,7 +1316,7 @@ static StartupOption parseArguments(String args[]) {
+           } else if (StartupOption.FORCE.getName().equals(args[i])) {
+             startOpt.setForceFormat(true);
+           } else {
+-            LOG.fatal("Invalid argument: " + args[i]);
++            LOG.error("Invalid argument: " + args[i]);
+             return null;
+           }
+         }
+@@ -1500,13 +1546,14 @@ public static void main(String argv[]) throws Exception {
+     }
+ 
+     try {
+-      StringUtils.startupShutdownMessage(NameNode.class, argv, LOG);
++      StringUtils.startupShutdownMessage(NameNode.class, argv,
++          (org.apache.commons.logging.Log) LogManager.getLogger(LOG.getName()));
+       NameNode namenode = createNameNode(argv, null);
+       if (namenode != null) {
+         namenode.join();
+       }
+     } catch (Throwable e) {
+-      LOG.fatal("Failed to start namenode.", e);
++      LOG.error("Failed to start namenode.", e);
+       terminate(1, e);
+     }
+   }
+@@ -1633,7 +1680,7 @@ protected synchronized void doImmediateShutdown(Throwable t)
+     String message = "Error encountered requiring NN shutdown. " +
+         "Shutting down immediately.";
+     try {
+-      LOG.fatal(message, t);
++      LOG.error(message, t);
+     } catch (Throwable ignored) {
+       // This is unlikely to happen, but there's nothing we can do if it does.
+     }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeRpcServer.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeRpcServer.java
+index 25fd290..8eb9ed0 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeRpcServer.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeRpcServer.java
+@@ -35,7 +35,7 @@
+ import java.util.Set;
+ 
+ import com.google.common.collect.Lists;
+-import org.apache.commons.logging.Log;
++
+ import org.apache.hadoop.HadoopIllegalArgumentException;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.crypto.CryptoProtocolVersion;
+@@ -173,6 +173,7 @@
+ import org.apache.hadoop.tracing.TraceAdminProtocolServerSideTranslatorPB;
+ import org.apache.hadoop.util.VersionInfo;
+ import org.apache.hadoop.util.VersionUtil;
++import org.slf4j.Logger;
+ 
+ import com.google.common.annotations.VisibleForTesting;
+ import com.google.protobuf.BlockingService;
+@@ -183,9 +184,10 @@
+  */
+ class NameNodeRpcServer implements NamenodeProtocols {
+   
+-  private static final Log LOG = NameNode.LOG;
+-  private static final Log stateChangeLog = NameNode.stateChangeLog;
+-  private static final Log blockStateChangeLog = NameNode.blockStateChangeLog;
++  private static final Logger LOG = NameNode.LOG;
++  private static final Logger stateChangeLog = NameNode.stateChangeLog;
++  private static final Logger blockStateChangeLog = NameNode
++      .blockStateChangeLog;
+   
+   // Dependencies from other parts of NN.
+   protected final FSNamesystem namesystem;
+@@ -1291,7 +1293,7 @@ private void verifySoftwareVersion(DatanodeRegistration dnReg)
+         IncorrectVersionException ive = new IncorrectVersionException(
+             messagePrefix + " and CTime of DN ('" + dnCTime +
+             "') does not match CTime of NN ('" + nnCTime + "')");
+-        LOG.warn(ive);
++        LOG.warn(ive.toString(), ive);
+         throw ive;
+       } else {
+         LOG.info(messagePrefix +
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/fs/TestSymlinkHdfs.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/fs/TestSymlinkHdfs.java
+index 3ce2893..0c3abec 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/fs/TestSymlinkHdfs.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/fs/TestSymlinkHdfs.java
+@@ -23,7 +23,6 @@
+ import java.io.IOException;
+ import java.net.URI;
+ 
+-import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.permission.FsPermission;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
+@@ -48,7 +47,7 @@
+ abstract public class TestSymlinkHdfs extends SymlinkBaseTest {
+ 
+   {
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(NameNode.stateChangeLog, Level.ALL);
+   }
+ 
+   protected static MiniDFSCluster cluster;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
+index 2de5294..54ac938 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
+@@ -63,6 +63,7 @@
+ import org.apache.hadoop.hdfs.server.datanode.TestTransferRbw;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsDatasetSpi;
+ import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
++import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+ import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.server.namenode.ha
+         .ConfiguredFailoverProxyProvider;
+@@ -1653,8 +1654,11 @@ public Boolean get() {
+   }
+ 
+   public static void setNameNodeLogLevel(Level level) {
+-    GenericTestUtils.setLogLevel(LogFactory.getLog(FSNamesystem.class), level);
+-    GenericTestUtils.setLogLevel(LogFactory.getLog(BlockManager.class), level);
++    GenericTestUtils.setLogLevel(FSNamesystem.LOG, level);
++    GenericTestUtils.setLogLevel(BlockManager.LOG, level);
++    GenericTestUtils.setLogLevel(LeaseManager.LOG, level);
++    GenericTestUtils.setLogLevel(NameNode.LOG, level);
+     GenericTestUtils.setLogLevel(NameNode.stateChangeLog, level);
++    GenericTestUtils.setLogLevel(NameNode.blockStateChangeLog, level);
+   }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeDeath.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeDeath.java
+index 2504a26..5a9b0e9 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeDeath.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeDeath.java
+@@ -22,8 +22,6 @@
+ 
+ import java.io.IOException;
+ 
+-import org.apache.commons.logging.LogFactory;
+-import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.BlockLocation;
+ import org.apache.hadoop.fs.CommonConfigurationKeys;
+@@ -33,10 +31,8 @@
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
++import org.apache.hadoop.test.GenericTestUtils;
+ import org.apache.log4j.Level;
+ import org.junit.Test;
+ 
+@@ -46,13 +42,10 @@
+  */
+ public class TestDatanodeDeath {
+   {
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)NameNode.blockStateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)InterDatanodeProtocol.LOG).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(DataNode.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(DFSClient.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(InterDatanodeProtocol.LOG, Level.ALL);
+   }
+ 
+   static final int blockSize = 8192;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend2.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend2.java
+index eecd23b..6c942b5 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend2.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend2.java
+@@ -25,7 +25,6 @@
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ 
+-import org.apache.commons.logging.LogFactory;
+ import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataOutputStream;
+@@ -34,12 +33,10 @@
+ import org.apache.hadoop.fs.permission.FsPermission;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+ import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.io.IOUtils;
+ import org.apache.hadoop.security.AccessControlException;
+ import org.apache.hadoop.security.UserGroupInformation;
++import org.apache.hadoop.test.GenericTestUtils;
+ import org.apache.log4j.Level;
+ import org.junit.Test;
+ 
+@@ -50,12 +47,9 @@
+ public class TestFileAppend2 {
+ 
+   {
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)NameNode.blockStateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(DataNode.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(DFSClient.LOG, Level.ALL);
+   }
+ 
+   static final int numBlocks = 5;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend3.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend3.java
+index d5de0ff..84912f1 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend3.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend3.java
+@@ -25,12 +25,12 @@
+ import java.io.IOException;
+ import java.io.RandomAccessFile;
+ 
++import org.apache.hadoop.test.GenericTestUtils;
+ import org.mockito.invocation.InvocationOnMock;
+ import static org.mockito.Mockito.spy;
+ import static org.mockito.Mockito.when;
+ import org.mockito.stubbing.Answer;
+ 
+-import org.apache.commons.logging.LogFactory;
+ import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.CommonConfigurationKeys;
+@@ -46,9 +46,6 @@
+ import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+ import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.server.protocol.InterDatanodeProtocol;
+ import org.apache.log4j.Level;
+ import org.junit.AfterClass;
+@@ -58,12 +55,10 @@
+ /** This class implements some of tests posted in HADOOP-2658. */
+ public class TestFileAppend3  {
+   {
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)InterDatanodeProtocol.LOG).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(DataNode.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(DFSClient.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(InterDatanodeProtocol.LOG, Level.ALL);
+   }
+ 
+   static final long BLOCK_SIZE = 64 * 1024;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend4.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend4.java
+index 32a4196..ca25018 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend4.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileAppend4.java
+@@ -45,10 +45,7 @@
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+ import org.apache.hadoop.hdfs.server.datanode.SimulatedFSDataset;
+ import org.apache.hadoop.hdfs.server.namenode.FSDirectory;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+ import org.apache.hadoop.hdfs.server.namenode.INodeFile;
+-import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.server.protocol.NamenodeProtocols;
+ import org.apache.hadoop.test.GenericTestUtils;
+ import org.apache.log4j.Level;
+@@ -72,11 +69,9 @@
+   final boolean simulatedStorage = false;
+ 
+   {
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(DataNode.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(DFSClient.LOG, Level.ALL);
+   }
+ 
+   @Before
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileCorruption.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileCorruption.java
+index a7c6a69..7d3946a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileCorruption.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileCorruption.java
+@@ -29,9 +29,6 @@
+ import java.util.ArrayList;
+ import java.util.List;
+ 
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+-import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.ChecksumException;
+ import org.apache.hadoop.fs.FileSystem;
+@@ -39,27 +36,27 @@
+ import org.apache.hadoop.hdfs.protocol.Block;
+ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+ import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
+-import org.apache.hadoop.hdfs.server.common.GenerationStamp;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+ import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
+ import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+ import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
++import org.apache.hadoop.test.GenericTestUtils;
+ import org.apache.hadoop.test.PathUtils;
+ import org.apache.log4j.Level;
+ import org.junit.Test;
++import org.slf4j.Logger;
+ 
+ /**
+  * A JUnit test for corrupted file handling.
+  */
+ public class TestFileCorruption {
+   {
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DFSClient.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)DataNode.LOG).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(DataNode.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(DFSClient.LOG, Level.ALL);
+   }
+-  static Log LOG = ((Log4JLogger)NameNode.stateChangeLog);
++  static Logger LOG = NameNode.stateChangeLog;
+ 
+   /** check if DFS can handle corrupted blocks properly */
+   @Test
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileCreationDelete.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileCreationDelete.java
+index 46569c7..47ce947 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileCreationDelete.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestFileCreationDelete.java
+@@ -20,23 +20,16 @@
+ 
+ import java.io.IOException;
+ 
+-import org.apache.commons.logging.LogFactory;
+-import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataOutputStream;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.log4j.Level;
+ import org.junit.Test;
+ 
+ public class TestFileCreationDelete {
+   {
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
+   }
+ 
+   @Test
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestPipelines.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestPipelines.java
+index e0bcb0f..a82f04f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestPipelines.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestPipelines.java
+@@ -26,7 +26,6 @@
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+-import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataOutputStream;
+ import org.apache.hadoop.fs.Path;
+@@ -35,8 +34,6 @@
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+ import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
+ import org.apache.hadoop.hdfs.server.datanode.Replica;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.test.GenericTestUtils;
+ import org.apache.log4j.Level;
+ import org.junit.After;
+@@ -159,9 +156,8 @@ private static void setConfiguration() {
+   }
+ 
+   private static void initLoggers() {
+-    ((Log4JLogger) NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) DataNode.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) DFSClient.LOG).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(DataNode.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(DFSClient.LOG, Level.ALL);
+   }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestRenameWhileOpen.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestRenameWhileOpen.java
+index a5d0425..823c184 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestRenameWhileOpen.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestRenameWhileOpen.java
+@@ -22,25 +22,18 @@
+ 
+ import java.io.IOException;
+ 
+-import org.apache.commons.logging.LogFactory;
+-import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataOutputStream;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.server.namenode.FSEditLog;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.log4j.Level;
+ import org.junit.Test;
+ import org.mockito.Mockito;
+ 
+ public class TestRenameWhileOpen {
+   {
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
+   }
+ 
+   //TODO: un-comment checkFullFile once the lease recovery is done
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/balancer/TestBalancerWithMultipleNameNodes.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/balancer/TestBalancerWithMultipleNameNodes.java
+index 6ee6e54..f51757c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/balancer/TestBalancerWithMultipleNameNodes.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/balancer/TestBalancerWithMultipleNameNodes.java
+@@ -26,7 +26,6 @@
+ import java.util.concurrent.TimeoutException;
+ 
+ import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+ import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+@@ -43,9 +42,6 @@
+ import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
+ import org.apache.hadoop.hdfs.protocol.HdfsConstants.DatanodeReportType;
+ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.log4j.Level;
+ import org.junit.Assert;
+ import org.junit.Test;
+@@ -57,9 +53,7 @@
+   static final Log LOG = Balancer.LOG;
+   {
+     ((Log4JLogger)LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.OFF);
+-    ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.OFF);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.OFF);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
+   }
+ 
+   
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/BlockReportTestBase.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/BlockReportTestBase.java
+index e9557da..8eaad11 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/BlockReportTestBase.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/BlockReportTestBase.java
+@@ -51,7 +51,6 @@
+ import org.apache.hadoop.hdfs.protocolPB.DatanodeProtocolClientSideTranslatorPB;
+ import org.apache.hadoop.hdfs.server.blockmanagement.BlockManagerTestUtil;
+ import org.apache.hadoop.hdfs.server.common.HdfsServerConstants;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+ import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
+ import org.apache.hadoop.hdfs.server.protocol.DatanodeStorage;
+@@ -809,10 +808,9 @@ public boolean accept(File file, String s) {
+   }
+ 
+   private static void initLoggers() {
+-    ((Log4JLogger) NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) DataNode.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) BlockReportTestBase.LOG).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(DataNode.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(BlockReportTestBase.LOG, Level.ALL);
+   }
+ 
+   private Block findBlock(Path path, long size) throws IOException {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestIncrementalBrVariations.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestIncrementalBrVariations.java
+index d3d0244..4e73e6e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestIncrementalBrVariations.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestIncrementalBrVariations.java
+@@ -79,12 +79,13 @@
+   private DatanodeRegistration dn0Reg;  // DataNodeRegistration for dn0
+ 
+   static {
+-    ((Log4JLogger) NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) BlockManager.blockLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) NameNode.blockStateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) DataNode.LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) TestIncrementalBrVariations.LOG).getLogger().setLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(NameNode.stateChangeLog, Level.ALL);
++    GenericTestUtils.setLogLevel(BlockManager.blockLog, Level.ALL);
++    GenericTestUtils.setLogLevel(NameNode.blockStateChangeLog, Level.ALL);
++    GenericTestUtils
++        .setLogLevel(LogFactory.getLog(FSNamesystem.class), Level.ALL);
++    GenericTestUtils.setLogLevel(DataNode.LOG, Level.ALL);
++    GenericTestUtils.setLogLevel(TestIncrementalBrVariations.LOG, Level.ALL);
+   }
+ 
+   @Before
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/LazyPersistTestCase.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/LazyPersistTestCase.java
+index c762849..9fd2051 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/LazyPersistTestCase.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/LazyPersistTestCase.java
+@@ -20,7 +20,6 @@
+ import org.apache.commons.io.IOUtils;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+-import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.CreateFlag;
+ import org.apache.hadoop.fs.FSDataOutputStream;
+@@ -36,10 +35,10 @@
+ import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
+ import org.apache.hadoop.hdfs.server.datanode.DatanodeUtil;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsVolumeSpi;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.tools.JMXGet;
+ import org.apache.hadoop.net.unix.TemporarySocketDirectory;
+ import org.apache.hadoop.security.UserGroupInformation;
++import org.apache.hadoop.test.GenericTestUtils;
+ import org.apache.log4j.Level;
+ import org.junit.After;
+ import org.junit.Rule;
+@@ -65,9 +64,8 @@
+ public abstract class LazyPersistTestCase {
+ 
+   static {
+-    ((Log4JLogger) NameNode.blockStateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger) FsDatasetImpl.LOG).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(FsDatasetImpl.LOG, Level.ALL);
+   }
+ 
+   protected static final int BLOCK_SIZE = 5 * 1024 * 1024;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/NNThroughputBenchmark.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/NNThroughputBenchmark.java
+index 1fb1c1f..4c8b099 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/NNThroughputBenchmark.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/NNThroughputBenchmark.java
+@@ -28,11 +28,11 @@
+ import com.google.common.base.Preconditions;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+-import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.CreateFlag;
+ import org.apache.hadoop.fs.permission.FsPermission;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
++import org.apache.hadoop.hdfs.DFSTestUtil;
+ import org.apache.hadoop.hdfs.HdfsConfiguration;
+ import org.apache.hadoop.hdfs.protocol.Block;
+ import org.apache.hadoop.hdfs.protocol.BlockListAsLongs;
+@@ -60,6 +60,7 @@
+ import org.apache.hadoop.net.DNS;
+ import org.apache.hadoop.net.NetworkTopology;
+ import org.apache.hadoop.security.Groups;
++import org.apache.hadoop.test.GenericTestUtils;
+ import org.apache.hadoop.util.StringUtils;
+ import org.apache.hadoop.util.Time;
+ import org.apache.hadoop.util.Tool;
+@@ -144,12 +145,11 @@ void close() {
+   static void setNameNodeLoggingLevel(Level logLevel) {
+     LOG.fatal("Log level = " + logLevel.toString());
+     // change log level to NameNode logs
+-    LogManager.getLogger(NameNode.class.getName()).setLevel(logLevel);
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(logLevel);
+-    LogManager.getLogger(NetworkTopology.class.getName()).setLevel(logLevel);
+-    LogManager.getLogger(FSNamesystem.class.getName()).setLevel(logLevel);
+-    LogManager.getLogger(LeaseManager.class.getName()).setLevel(logLevel);
+-    LogManager.getLogger(Groups.class.getName()).setLevel(logLevel);
++    DFSTestUtil.setNameNodeLogLevel(logLevel);
++    GenericTestUtils.setLogLevel(LogManager.getLogger(
++            NetworkTopology.class.getName()), logLevel);
++    GenericTestUtils.setLogLevel(LogManager.getLogger(
++            Groups.class.getName()), logLevel);
+   }
+ 
+   /**
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestListCorruptFileBlocks.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestListCorruptFileBlocks.java
+index 7e36acb..92ea111 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestListCorruptFileBlocks.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestListCorruptFileBlocks.java
+@@ -28,7 +28,6 @@
+ import java.util.List;
+ import java.util.Random;
+ 
+-import org.apache.commons.logging.Log;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+@@ -40,13 +39,11 @@
+ import org.apache.hadoop.hdfs.DistributedFileSystem;
+ import org.apache.hadoop.hdfs.HdfsConfiguration;
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
+-import org.apache.hadoop.hdfs.TestFileCorruption;
+ import org.apache.hadoop.hdfs.protocol.Block;
+-import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
+ import org.apache.hadoop.hdfs.protocol.HdfsConstants;
+-import org.apache.hadoop.hdfs.server.datanode.DatanodeUtil;
+ import org.apache.hadoop.util.StringUtils;
+ import org.junit.Test;
++import org.slf4j.Logger;
+ 
+ /**
+  * This class tests the listCorruptFileBlocks API.
+@@ -57,7 +54,7 @@
+  * blocks/files are also returned.
+  */
+ public class TestListCorruptFileBlocks {
+-  static final Log LOG = NameNode.stateChangeLog;
++  static final Logger LOG = NameNode.stateChangeLog;
+ 
+   /** check if nn.getCorruptFiles() returns a file that has corrupted blocks */
+   @Test (timeout=300000)
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestHASafeMode.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestHASafeMode.java
+index 25c023f..c5aad9c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestHASafeMode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestHASafeMode.java
+@@ -84,9 +84,8 @@
+   private MiniDFSCluster cluster;
+   
+   static {
+-    ((Log4JLogger)LogFactory.getLog(FSImage.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.ALL);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(FSImage.LOG, Level.ALL);
+   }
+   
+   @Before
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/web/resources/TestWebHdfsDataLocality.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/web/resources/TestWebHdfsDataLocality.java
+index c1169dc..077361c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/web/resources/TestWebHdfsDataLocality.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/web/resources/TestWebHdfsDataLocality.java
+@@ -22,11 +22,11 @@
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+-import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataOutputStream;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
++import org.apache.hadoop.hdfs.DFSTestUtil;
+ import org.apache.hadoop.hdfs.DistributedFileSystem;
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
+ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+@@ -34,8 +34,6 @@
+ import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+ import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeManager;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+ import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.server.namenode.NameNodeAdapter;
+ import org.apache.hadoop.hdfs.web.WebHdfsTestUtil;
+@@ -52,9 +50,7 @@
+ public class TestWebHdfsDataLocality {
+   static final Log LOG = LogFactory.getLog(TestWebHdfsDataLocality.class);
+   {
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.OFF);
+-    ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.OFF);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.OFF);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
+   }
+   
+   private static final String RACK0 = "/rack0";
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/web/TestWebHdfsWithMultipleNameNodes.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/web/TestWebHdfsWithMultipleNameNodes.java
+index 335c346c..11abd2c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/web/TestWebHdfsWithMultipleNameNodes.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/web/TestWebHdfsWithMultipleNameNodes.java
+@@ -21,7 +21,6 @@
+ import java.net.URI;
+ 
+ import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+ import org.apache.commons.logging.impl.Log4JLogger;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataInputStream;
+@@ -29,14 +28,12 @@
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
++import org.apache.hadoop.hdfs.DFSTestUtil;
+ import org.apache.hadoop.hdfs.HdfsConfiguration;
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
+ import org.apache.hadoop.hdfs.MiniDFSNNTopology;
+-import org.apache.hadoop.hdfs.server.datanode.DataNode;
+-import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.namenode.LeaseManager;
+-import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.hdfs.server.namenode.web.resources.NamenodeWebHdfsMethods;
++import org.apache.hadoop.test.GenericTestUtils;
+ import org.apache.log4j.Level;
+ import org.junit.AfterClass;
+ import org.junit.Assert;
+@@ -51,11 +48,9 @@
+ 
+   static private void setLogLevel() {
+     ((Log4JLogger)LOG).getLogger().setLevel(Level.ALL);
+-    ((Log4JLogger)NamenodeWebHdfsMethods.LOG).getLogger().setLevel(Level.ALL);
++    GenericTestUtils.setLogLevel(NamenodeWebHdfsMethods.LOG, Level.ALL);
+ 
+-    ((Log4JLogger)NameNode.stateChangeLog).getLogger().setLevel(Level.OFF);
+-    ((Log4JLogger)LeaseManager.LOG).getLogger().setLevel(Level.OFF);
+-    ((Log4JLogger)LogFactory.getLog(FSNamesystem.class)).getLogger().setLevel(Level.OFF);
++    DFSTestUtil.setNameNodeLogLevel(Level.ALL);
+   }
+ 
+   private static final Configuration conf = new HdfsConfiguration();
+-- 
+1.7.9.5
+

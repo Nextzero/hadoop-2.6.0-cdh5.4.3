@@ -1,0 +1,173 @@
+From 1e521f3824596178b7f1c6a24b0a4d5bf4ba59d8 Mon Sep 17 00:00:00 2001
+From: Yongjun Zhang <yzhang@cloudera.com>
+Date: Tue, 21 Apr 2015 12:31:50 -0700
+Subject: [PATCH 556/596] MAPREDUCE-5710. Backport MAPREDUCE-1305 to branch-1
+ (Yongjun Zhang via Sandy Ryza)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1556372 13f79535-47bb-0310-9956-ffa450edef68
+---
+ .../test/org/apache/hadoop/fs/TestCopyFiles.java   |    8 ++++
+ .../src/tools/org/apache/hadoop/tools/DistCp.java  |   48 +++++++++-----------
+ 2 files changed, 30 insertions(+), 26 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/fs/TestCopyFiles.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/fs/TestCopyFiles.java
+index 62156d2..c195a33 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/fs/TestCopyFiles.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/fs/TestCopyFiles.java
+@@ -52,6 +52,7 @@
+ 
+   private static final String JT_STAGING_AREA_ROOT = "mapreduce.jobtracker.staging.root.dir";
+   private static final String JT_STAGING_AREA_ROOT_DEFAULT = "/tmp/hadoop/mapred/staging";
++  private static final String FS_TRASH_INTERVAL_KEY = "fs.trash.interval";
+ 
+   {
+     ((Log4JLogger)LogFactory.getLog("org.apache.hadoop.hdfs.StateChange")
+@@ -1025,6 +1026,7 @@ public Void run() throws Exception {
+   /** test -delete */
+   public void testDelete() throws Exception {
+     final Configuration conf = new Configuration();
++    conf.setInt(FS_TRASH_INTERVAL_KEY, 60);
+     MiniDFSCluster cluster = null;
+     try {
+       cluster = new MiniDFSCluster(conf, 2, true, null);
+@@ -1075,6 +1077,12 @@ public void testDelete() throws Exception {
+         dstresults = removePrefix(dstresults, dstrootdir);
+         System.out.println("second dstresults=" +  dstresults);
+         assertEquals(srcresults, dstresults);
++        // verify that files removed in -delete were moved to the trash
++        // regrettably, this test will break if Trash changes incompatibly
++        assertTrue(fs.exists(new Path(fs.getHomeDirectory(),
++                ".Trash/Current" + dstrootdir + "/foo")));
++        assertTrue(fs.exists(new Path(fs.getHomeDirectory(),
++                ".Trash/Current" + dstrootdir + "/foobar")));
+ 
+         //cleanup
+         deldir(fs, dstrootdir);
+diff --git a/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java b/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
+index f74b4a4..e7a27b9 100644
+--- a/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
++++ b/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
+@@ -42,12 +42,14 @@
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.FsShell;
+ import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.fs.Trash;
+ import org.apache.hadoop.fs.permission.FsPermission;
+ import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
+ import org.apache.hadoop.io.LongWritable;
+ import org.apache.hadoop.io.SequenceFile;
+ import org.apache.hadoop.io.Text;
+ import org.apache.hadoop.io.Writable;
++import org.apache.hadoop.io.NullWritable;
+ import org.apache.hadoop.io.WritableComparable;
+ import org.apache.hadoop.ipc.RemoteException;
+ import org.apache.hadoop.mapred.FileOutputFormat;
+@@ -1305,7 +1307,7 @@ static private void deleteNonexisting(
+     final FileStatus jobDirStat = jobfs.getFileStatus(jobdir);   
+     final Path dstlsr = new Path(jobdir, "_distcp_dst_lsr");
+     final SequenceFile.Writer writer = SequenceFile.createWriter(jobfs, jobconf,
+-        dstlsr, Text.class, dstroot.getClass(),
++        dstlsr, Text.class, NullWritable.class,
+         SequenceFile.CompressionType.NONE);
+     try {
+       // do lsr to get all file statuses in dstroot
+@@ -1318,7 +1320,7 @@ static private void deleteNonexisting(
+           }         
+           for(FileStatus child : dstfs.listStatus(status.getPath())) {
+             String relative = makeRelative(dstroot.getPath(), child.getPath());
+-            writer.append(new Text(relative), child);
++            writer.append(new Text(relative), NullWritable.get());
+             lsrstack.push(child);
+           }
+         }
+@@ -1330,7 +1332,7 @@ static private void deleteNonexisting(
+     // sort lsr results
+     final Path sortedlsr = new Path(jobdir, "_distcp_dst_lsr_sorted");
+     SequenceFile.Sorter sorter = new SequenceFile.Sorter(jobfs,
+-        new Text.Comparator(), Text.class, FileStatus.class, jobconf);
++        new Text.Comparator(), Text.class, NullWritable.class, jobconf);
+     sorter.sort(dstlsr, sortedlsr);
+ 
+     // compare lsr list and dst list
+@@ -1343,14 +1345,13 @@ static private void deleteNonexisting(
+ 
+       // compare sorted lsr list and sorted dst list
+       final Text lsrpath = new Text();
+-      final FileStatus lsrstatus = new FileStatus();
+       final Text dstpath = new Text();
+       final Text dstfrom = new Text();
+-      final FsShell shell = new FsShell(conf);
+-      final String[] shellargs = {"-rmr", null};
++      final Trash trash = new Trash(dstfs, conf);
++      Path lastpath = null;
+ 
+       boolean hasnext = dstin.next(dstpath, dstfrom);
+-      for(; lsrin.next(lsrpath, lsrstatus); ) {
++      while (lsrin.next(lsrpath, NullWritable.get())) {
+         //
+         // check if lsrpath is in dst (represented here by dstsorted, which
+         // contains files and dirs to be copied from the source to destination),
+@@ -1358,7 +1359,7 @@ static private void deleteNonexisting(
+         // ancestor.
+         //
+         int dst_cmp_lsr = dstpath.compareTo(lsrpath);
+-        for(; hasnext && dst_cmp_lsr < 0; ) {
++        while (hasnext && dst_cmp_lsr < 0) {
+           hasnext = dstin.next(dstpath, dstfrom);
+           dst_cmp_lsr = dstpath.compareTo(lsrpath);
+         }
+@@ -1370,29 +1371,22 @@ static private void deleteNonexisting(
+         else {
+           // lsrpath does not exist in dst, delete it if it's not jobDir or
+           // jobDir's ancestor
+-          String s = new Path(dstroot.getPath(), lsrpath.toString()).toString();
++          final Path rmpath = new Path(dstroot.getPath(), lsrpath.toString());
+           if (needToFilterJobDir) {
+-            int cmpJobDir = s.compareTo(jobDirStr);
++            int cmpJobDir = rmpath.toString().compareTo(jobDirStr);
+             if (cmpJobDir > 0) {
+               // do nothing
+-            } else if (cmpJobDir == 0 || isAncestorPath(s, jobDirStr)) {
++            } else if (cmpJobDir == 0 || isAncestorPath(rmpath, jobdir)) {
+               continue;
+             }
+           }
+-  
+-          if (shellargs[1] == null || !isAncestorPath(shellargs[1], s)) {
+-            shellargs[1] = s;
+-            int r = 0;
+-            try {
+-               r = shell.run(shellargs);
+-            } catch(Exception e) {
+-              throw new IOException("Exception from shell.", e);
++          
++          if ((lastpath == null || !isAncestorPath(lastpath, rmpath))) {                       
++            if (!(trash.moveToTrash(rmpath) || dstfs.delete(rmpath, true))) {
++              throw new IOException("Failed to delete " + rmpath);
+             }
+-            if (r != 0) {
+-              throw new IOException("\"" + shellargs[0] + " " + shellargs[1]
+-                  + "\" returns non-zero value " + r);
+-            }
+-          }
++            lastpath = rmpath;
++          }  
+         }
+       }
+     } finally {
+@@ -1401,8 +1395,10 @@ static private void deleteNonexisting(
+     }
+   }
+ 
+-  //is x an ancestor path of y?
+-  static private boolean isAncestorPath(String x, String y) {
++  // is xp an ancestor path of yp?
++  static private boolean isAncestorPath(Path xp, Path yp) {
++    final String x = xp.toString();
++    final String y = yp.toString();
+     if (!y.startsWith(x)) {
+       return false;
+     }
+-- 
+1.7.9.5
+

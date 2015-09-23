@@ -1,0 +1,31 @@
+From 26461602751021a23e01a39954498495f4dae06d Mon Sep 17 00:00:00 2001
+From: Jian He <jianhe@apache.org>
+Date: Fri, 14 Nov 2014 17:24:09 -0800
+Subject: [PATCH 260/596] YARN-2432. RMStateStore should process the pending
+ events before close. Contributed by Varun Saxena
+ (cherry picked from commit
+ 9b860661a5754e829bd8c34ef092757421589bbe)
+
+(cherry picked from commit 21054c5d149ae56ee998e42a11cafd80b7aaa279)
+(cherry picked from commit ed676d2ad5ecf9b3a002605edb233a5657261fdb)
+---
+ .../resourcemanager/recovery/RMStateStore.java     |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/RMStateStore.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/RMStateStore.java
+index beac403..8948b54 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/RMStateStore.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/RMStateStore.java
+@@ -492,8 +492,8 @@ protected void serviceStart() throws Exception {
+ 
+   @Override
+   protected void serviceStop() throws Exception {
+-    closeInternal();
+     dispatcher.stop();
++    closeInternal();
+   }
+ 
+   /**
+-- 
+1.7.9.5
+

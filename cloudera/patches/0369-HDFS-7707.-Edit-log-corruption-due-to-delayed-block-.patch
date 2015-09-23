@@ -1,0 +1,133 @@
+From 424ecc8d9524c8d00bc83fae52dca0b35198bd15 Mon Sep 17 00:00:00 2001
+From: Kihwal Lee <kihwal@apache.org>
+Date: Tue, 3 Feb 2015 14:45:15 -0600
+Subject: [PATCH 369/596] HDFS-7707. Edit log corruption due to delayed block
+ removal again. Contributed by Yongjun Zhang
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../hadoop/hdfs/server/namenode/FSNamesystem.java  |   14 +++++++--
+ .../namenode/TestCommitBlockSynchronization.java   |    4 ++-
+ .../hdfs/server/namenode/TestDeleteRace.java       |   32 +++++++++++++++-----
+ 3 files changed, 40 insertions(+), 10 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index 9bdd2c6..bd2904e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -239,6 +239,7 @@
+ import org.apache.hadoop.hdfs.server.namenode.ha.StandbyCheckpointer;
+ import org.apache.hadoop.hdfs.server.namenode.metrics.FSNamesystemMBean;
+ import org.apache.hadoop.hdfs.server.namenode.metrics.NameNodeMetrics;
++import org.apache.hadoop.hdfs.server.namenode.snapshot.DirectoryWithSnapshotFeature;
+ import org.apache.hadoop.hdfs.server.namenode.snapshot.Snapshot;
+ import org.apache.hadoop.hdfs.server.namenode.snapshot.SnapshotManager;
+ import org.apache.hadoop.hdfs.server.namenode.startupprogress.Phase;
+@@ -6935,13 +6936,22 @@ private boolean isFileDeleted(INodeFile file) {
+     INode tmpChild = file;
+     INodeDirectory tmpParent = file.getParent();
+     while (true) {
+-      if (tmpParent == null ||
+-          tmpParent.searchChildren(tmpChild.getLocalNameBytes()) < 0) {
++      if (tmpParent == null) {
+         return true;
+       }
++
++      INode childINode = tmpParent.getChild(tmpChild.getLocalNameBytes(),
++          Snapshot.CURRENT_STATE_ID);
++      if (childINode == null || !childINode.equals(tmpChild)) {
++        // a newly created INode with the same name as an already deleted one
++        // would be a different INode than the deleted one
++        return true;
++      }
++
+       if (tmpParent.isRoot()) {
+         break;
+       }
++
+       tmpChild = tmpParent;
+       tmpParent = tmpParent.getParent();
+     }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestCommitBlockSynchronization.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestCommitBlockSynchronization.java
+index bd71870..816c7c8 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestCommitBlockSynchronization.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestCommitBlockSynchronization.java
+@@ -54,7 +54,9 @@ private FSNamesystem makeNameSystemSpy(Block block, INodeFile file)
+     // set file's parent as root and put the file to inodeMap, so
+     // FSNamesystem's isFileDeleted() method will return false on this file
+     if (file.getParent() == null) {
+-      INodeDirectory parent = mock(INodeDirectory.class);
++      INodeDirectory mparent = mock(INodeDirectory.class);
++      INodeDirectory parent = new INodeDirectory(mparent.getId(), new byte[0],
++          mparent.getPermissionStatus(), mparent.getAccessTime());
+       parent.setLocalName(new byte[0]);
+       parent.addChild(file);
+       file.setParent(parent);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDeleteRace.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDeleteRace.java
+index 267821f..7d4eb31 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDeleteRace.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDeleteRace.java
+@@ -18,6 +18,8 @@
+ package org.apache.hadoop.hdfs.server.namenode;
+ 
+ import java.io.FileNotFoundException;
++import java.util.AbstractMap;
++import java.util.ArrayList;
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+@@ -226,10 +228,19 @@ public void testRenameRace() throws Exception {
+   private void testDeleteAndCommitBlockSynchronizationRace(boolean hasSnapshot)
+       throws Exception {
+     LOG.info("Start testing, hasSnapshot: " + hasSnapshot);
+-    final String testPaths[] = {
+-        "/test-file",
+-        "/testdir/testdir1/test-file"
+-    };
++    ArrayList<AbstractMap.SimpleImmutableEntry<String, Boolean>> testList =
++        new ArrayList<AbstractMap.SimpleImmutableEntry<String, Boolean>> ();
++    testList.add(
++        new AbstractMap.SimpleImmutableEntry<String, Boolean>("/test-file", false));
++    testList.add(     
++        new AbstractMap.SimpleImmutableEntry<String, Boolean>("/test-file1", true));
++    testList.add(
++        new AbstractMap.SimpleImmutableEntry<String, Boolean>(
++            "/testdir/testdir1/test-file", false));
++    testList.add(
++        new AbstractMap.SimpleImmutableEntry<String, Boolean>(
++            "/testdir/testdir1/test-file1", true));
++    
+     final Path rootPath = new Path("/");
+     final Configuration conf = new Configuration();
+     // Disable permissions so that another user can recover the lease.
+@@ -247,8 +258,11 @@ private void testDeleteAndCommitBlockSynchronizationRace(boolean hasSnapshot)
+ 
+       DistributedFileSystem fs = cluster.getFileSystem();
+       int stId = 0;
+-      for (String testPath : testPaths) {
+-        LOG.info("test on " + testPath + " snapshot: " + hasSnapshot);
++      for(AbstractMap.SimpleImmutableEntry<String, Boolean> stest : testList) {
++        String testPath = stest.getKey();
++        Boolean mkSameDir = stest.getValue();
++        LOG.info("test on " + testPath + " mkSameDir: " + mkSameDir
++            + " snapshot: " + hasSnapshot);
+         Path fPath = new Path(testPath);
+         //find grandest non-root parent
+         Path grandestNonRootParent = fPath;
+@@ -304,7 +318,11 @@ private void testDeleteAndCommitBlockSynchronizationRace(boolean hasSnapshot)
+ 
+         LOG.info("Deleting recursively " + grandestNonRootParent);
+         fs.delete(grandestNonRootParent, true);
+-
++        if (mkSameDir && !grandestNonRootParent.toString().equals(testPath)) {
++          LOG.info("Recreate dir " + grandestNonRootParent + " testpath: "
++              + testPath);
++          fs.mkdirs(grandestNonRootParent);
++        }
+         delayer.proceed();
+         LOG.info("Now wait for result");
+         delayer.waitForResult();
+-- 
+1.7.9.5
+

@@ -1,0 +1,35 @@
+From 52feabc5eab7dcdbae64832383afaf05d7c5193f Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Tue, 10 Mar 2015 14:28:08 -0700
+Subject: [PATCH 463/596] CLOUDERA-BUILD. Hadoop brings in two versions of
+ Curator (CDH-25961)
+
+---
+ hadoop-project/pom.xml |   11 -----------
+ 1 file changed, 11 deletions(-)
+
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index 08706df..38d5239 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -916,17 +916,6 @@
+         <version>2.9.1</version>
+       </dependency>
+ 
+-      <dependency>
+-        <groupId>org.apache.curator</groupId>
+-        <artifactId>curator-framework</artifactId>
+-        <version>2.6.0</version>
+-      </dependency>
+-      <dependency>
+-        <groupId>org.apache.curator</groupId>
+-        <artifactId>curator-test</artifactId>
+-        <version>2.6.0</version>
+-      </dependency>
+-
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-recipes</artifactId>
+-- 
+1.7.9.5
+

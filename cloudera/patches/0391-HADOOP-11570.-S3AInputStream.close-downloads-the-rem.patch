@@ -1,0 +1,77 @@
+From ce1e8a47873134847a89d407da86fb2b7ff1356f Mon Sep 17 00:00:00 2001
+From: Steve Loughran <stevel@apache.org>
+Date: Tue, 17 Feb 2015 16:36:32 +0000
+Subject: [PATCH 391/596] HADOOP-11570. S3AInputStream.close() downloads the
+ remaining bytes of the object from S3. (Dan Hecht
+ via stevel). (cherry picked from commit
+ 701b96ca8e9a89d51ee47a470e524307fea3a035)
+
+---
+ .../org/apache/hadoop/fs/s3a/S3AInputStream.java   |   20 ++++++++++++--------
+ 1 file changed, 12 insertions(+), 8 deletions(-)
+
+diff --git a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AInputStream.java b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AInputStream.java
+index 4c56b82..685026e 100644
+--- a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AInputStream.java
++++ b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AInputStream.java
+@@ -37,14 +37,13 @@
+   private long pos;
+   private boolean closed;
+   private S3ObjectInputStream wrappedStream;
+-  private S3Object wrappedObject;
+   private FileSystem.Statistics stats;
+   private AmazonS3Client client;
+   private String bucket;
+   private String key;
+   private long contentLength;
+   public static final Logger LOG = S3AFileSystem.LOG;
+-
++  public static final long CLOSE_THRESHOLD = 4096;
+ 
+   public S3AInputStream(String bucket, String key, long contentLength, AmazonS3Client client,
+                         FileSystem.Statistics stats) {
+@@ -55,12 +54,11 @@ public S3AInputStream(String bucket, String key, long contentLength, AmazonS3Cli
+     this.stats = stats;
+     this.pos = 0;
+     this.closed = false;
+-    this.wrappedObject = null;
+     this.wrappedStream = null;
+   }
+ 
+   private void openIfNeeded() throws IOException {
+-    if (wrappedObject == null) {
++    if (wrappedStream == null) {
+       reopen(0);
+     }
+   }
+@@ -90,8 +88,7 @@ private synchronized void reopen(long pos) throws IOException {
+     GetObjectRequest request = new GetObjectRequest(bucket, key);
+     request.setRange(pos, contentLength-1);
+ 
+-    wrappedObject = client.getObject(request);
+-    wrappedStream = wrappedObject.getObjectContent();
++    wrappedStream = client.getObject(request).getObjectContent();
+ 
+     if (wrappedStream == null) {
+       throw new IOException("Null IO stream");
+@@ -192,8 +189,15 @@ private void checkNotClosed() throws IOException {
+   public synchronized void close() throws IOException {
+     super.close();
+     closed = true;
+-    if (wrappedObject != null) {
+-      wrappedObject.close();
++    if (wrappedStream != null) {
++      if (contentLength - pos <= CLOSE_THRESHOLD) {
++        // Close, rather than abort, so that the http connection can be reused.
++        wrappedStream.close();
++      } else {
++        // Abort, rather than just close, the underlying stream.  Otherwise, the
++        // remaining object payload is read from S3 while closing the stream.
++        wrappedStream.abort();
++      }
+     }
+   }
+ 
+-- 
+1.7.9.5
+

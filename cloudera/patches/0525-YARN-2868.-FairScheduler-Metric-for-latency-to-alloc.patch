@@ -1,0 +1,134 @@
+From 5e8114a6fbacae9067d2b289733986b4eecf2901 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Mon, 23 Mar 2015 14:07:05 -0700
+Subject: [PATCH 525/596] YARN-2868. FairScheduler: Metric for latency to
+ allocate first container for an application. (Ray
+ Chiang via kasha)
+
+(cherry picked from commit 972f1f1ab94a26ec446a272ad030fe13f03ed442)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/SchedulerApplicationAttempt.java
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
+
+(cherry picked from commit 29034088eacf368efda329fcd11b9c7c1dd06806)
+---
+ .../resourcemanager/scheduler/QueueMetrics.java    |    8 +++++++-
+ .../scheduler/SchedulerApplicationAttempt.java     |   18 ++++++++++++++++++
+ .../scheduler/fair/FairScheduler.java              |   11 ++++++++++-
+ 3 files changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/QueueMetrics.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/QueueMetrics.java
+index 507b798..58b1ed1 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/QueueMetrics.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/QueueMetrics.java
+@@ -38,6 +38,7 @@
+ import org.apache.hadoop.metrics2.lib.MutableCounterInt;
+ import org.apache.hadoop.metrics2.lib.MutableCounterLong;
+ import org.apache.hadoop.metrics2.lib.MutableGaugeInt;
++import org.apache.hadoop.metrics2.lib.MutableRate;
+ import org.apache.hadoop.yarn.api.records.ApplicationId;
+ import org.apache.hadoop.yarn.api.records.Resource;
+ import org.apache.hadoop.yarn.conf.YarnConfiguration;
+@@ -74,6 +75,7 @@
+   @Metric("# of reserved containers") MutableGaugeInt reservedContainers;
+   @Metric("# of active users") MutableGaugeInt activeUsers;
+   @Metric("# of active applications") MutableGaugeInt activeApplications;
++  @Metric("App Attempt First Container Allocation Delay") MutableRate appAttemptFirstContainerAllocationDelay;
+   private final MutableGaugeInt[] runningTime;
+   private TimeBucketMetrics<ApplicationId> runBuckets;
+ 
+@@ -462,7 +464,11 @@ public void deactivateApp(String user) {
+       parent.deactivateApp(user);
+     }
+   }
+-  
++
++  public void addAppAttemptFirstContainerAllocationDelay(long latency) {
++    appAttemptFirstContainerAllocationDelay.add(latency);
++  }
++
+   public int getAppsSubmitted() {
+     return appsSubmitted.value();
+   }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/SchedulerApplicationAttempt.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/SchedulerApplicationAttempt.java
+index 84975b6..2d2fa00 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/SchedulerApplicationAttempt.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/SchedulerApplicationAttempt.java
+@@ -25,6 +25,7 @@
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
++import java.util.concurrent.atomic.AtomicLong;
+ 
+ import org.apache.commons.lang.time.DateUtils;
+ import org.apache.commons.logging.Log;
+@@ -93,6 +94,9 @@
+   private boolean unmanagedAM = true;
+   private boolean amRunning = false;
+   private LogAggregationContext logAggregationContext;
++  
++  private AtomicLong firstAllocationRequestSentTime = new AtomicLong(0);
++  private AtomicLong firstContainerAllocatedTime = new AtomicLong(0);
+ 
+   protected List<RMContainer> newlyAllocatedContainers = 
+       new ArrayList<RMContainer>();
+@@ -615,4 +619,18 @@ public synchronized void recoverContainer(RMContainer rmContainer) {
+     // schedulingOpportunities
+     // lastScheduledContainer
+   }
++
++  public void recordContainerRequestTime(long value) {
++    firstAllocationRequestSentTime.compareAndSet(0, value);
++  }
++
++  public void recordContainerAllocationTime(long value) {
++    if (firstContainerAllocatedTime.compareAndSet(0, value)) {
++      long timediff = firstContainerAllocatedTime.longValue() -
++          firstAllocationRequestSentTime.longValue();
++      if (timediff > 0) {
++        queue.getMetrics().addAppAttemptFirstContainerAllocationDelay(timediff);
++      }
++    }
++  }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
+index a8c45ee..b814e82 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
+@@ -889,6 +889,9 @@ public Allocation allocate(ApplicationAttemptId appAttemptId,
+         clusterResource, minimumAllocation, getMaximumResourceCapability(),
+         incrAllocation);
+ 
++    // Record container allocation start time
++    application.recordContainerRequestTime(getClock().getTime());
++
+     // Set amResource for this app
+     if (!application.getUnmanagedAM() && ask.size() == 1
+         && application.getLiveContainers().isEmpty()) {
+@@ -922,7 +925,7 @@ public Allocation allocate(ApplicationAttemptId appAttemptId,
+         LOG.debug("Preempting " + application.getPreemptionContainers().size()
+             + " container(s)");
+       }
+-      
++
+       Set<ContainerId> preemptionContainerIds = new HashSet<ContainerId>();
+       for (RMContainer container : application.getPreemptionContainers()) {
+         preemptionContainerIds.add(container.getContainerId());
+@@ -931,6 +934,12 @@ public Allocation allocate(ApplicationAttemptId appAttemptId,
+       application.updateBlacklist(blacklistAdditions, blacklistRemovals);
+       ContainersAndNMTokensAllocation allocation =
+           application.pullNewlyAllocatedContainersAndNMTokens();
++
++      // Record container allocation time
++      if (!(allocation.getContainerList().isEmpty())) {
++        application.recordContainerAllocationTime(getClock().getTime());
++      }
++
+       return new Allocation(allocation.getContainerList(),
+         application.getHeadroom(), preemptionContainerIds, null, null,
+         allocation.getNMTokenList());
+-- 
+1.7.9.5
+

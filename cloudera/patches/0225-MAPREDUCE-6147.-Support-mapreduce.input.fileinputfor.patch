@@ -1,0 +1,105 @@
+From e5b7c8c95a4fba9bc54c94adf9cfb82a16c21c28 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Mon, 3 Nov 2014 15:55:22 -0800
+Subject: [PATCH 225/596] MAPREDUCE-6147. Support
+ mapreduce.input.fileinputformat.split.maxsize.
+ (Zhihai Xu via kasha)
+
+(cherry picked from commit ebec913e20d0081e2e30e13817e9023565e0b920)
+
+Conflicts:
+	CHANGES.txt
+	src/mapred/org/apache/hadoop/mapred/lib/CombineFileInputFormat.java
+	src/test/org/apache/hadoop/mapred/lib/TestCombineFileInputFormat.java
+
+(cherry picked from commit 18f992c4e268d66704d3092bd064b1916d7948f7)
+(cherry picked from commit bc418ecfd7fd3baecf5afd1144f60f73d080a1ae)
+---
+ .../hadoop/mapred/lib/CombineFileInputFormat.java  |   23 ++++++++++++++++++--
+ .../mapred/lib/TestCombineFileInputFormat.java     |   22 +++++++++++++++++++
+ 2 files changed, 43 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/lib/CombineFileInputFormat.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/lib/CombineFileInputFormat.java
+index 9a21dce..d1d5ac7 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/lib/CombineFileInputFormat.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/lib/CombineFileInputFormat.java
+@@ -18,6 +18,8 @@
+ 
+ package org.apache.hadoop.mapred.lib;
+ 
++import com.google.common.annotations.VisibleForTesting;
++
+ import java.io.IOException;
+ import java.util.ArrayList;
+ import java.util.Collection;
+@@ -141,7 +143,24 @@ protected boolean isSplitable(FileSystem fs, Path file) {
+     }
+     return codec instanceof SplittableCompressionCodec;
+   }
+-  
++
++  /**
++   * First get "mapred.max.split.size".
++   * If "mapred.max.split.size" is not set,
++   * then get "mapreduce.input.fileinputformat.split.maxsize".
++   * If "mapreduce.input.fileinputformat.split.maxsize" is not set,
++   * then return 0.
++   */
++  @VisibleForTesting
++  long getConfiguredMaxSplitSize(JobConf job) {
++    long maxSize = job.getLong("mapred.max.split.size", -1L);
++    if (maxSize == -1L) {
++      maxSize = job.getLong("mapreduce.input.fileinputformat.split.maxsize",
++          0);
++    }
++    return maxSize;
++  }
++
+   /**
+    * default constructor
+    */
+@@ -171,7 +190,7 @@ public CombineFileInputFormat() {
+     if (maxSplitSize != 0) {
+       maxSize = maxSplitSize;
+     } else {
+-      maxSize = job.getLong("mapred.max.split.size", 0);
++      maxSize = getConfiguredMaxSplitSize(job);
+     }
+     if (minSizeNode != 0 && maxSize != 0 && minSizeNode > maxSize) {
+       throw new IOException("Minimum split size pernode " + minSizeNode +
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/lib/TestCombineFileInputFormat.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/lib/TestCombineFileInputFormat.java
+index efad5cc..b7c49ba 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/lib/TestCombineFileInputFormat.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/lib/TestCombineFileInputFormat.java
+@@ -1024,6 +1024,28 @@ public void testForNonDefaultFileSystem() throws Throwable {
+     }
+   }
+ 
++  public void testGetConfiguredMaxSplitSize() throws Throwable {
++    JobConf conf = new JobConf();
++    DummyInputFormat inFormat = new DummyInputFormat();
++    // if both mapred.max.split.size and
++    // mapreduce.input.fileinputformat.split.maxsize are not set, return 0.
++    long maxSize = inFormat.getConfiguredMaxSplitSize(conf);
++    assertEquals(maxSize, 0L);
++
++    // if only mapreduce.input.fileinputformat.split.maxsize is set,
++    // return the value of mapreduce.input.fileinputformat.split.maxsize.
++    conf.setLong("mapreduce.input.fileinputformat.split.maxsize", 100L);
++    maxSize = inFormat.getConfiguredMaxSplitSize(conf);
++    assertEquals(maxSize, 100L);
++
++    // if both mapred.max.split.size and
++    // mapreduce.input.fileinputformat.split.maxsize are set,
++    // return the value of mapred.max.split.size.
++    conf.setLong("mapred.max.split.size", 1000L);
++    maxSize = inFormat.getConfiguredMaxSplitSize(conf);
++    assertEquals(maxSize, 1000L);
++  }
++
+   static class TestFilter implements PathFilter {
+     private Path p;
+ 
+-- 
+1.7.9.5
+

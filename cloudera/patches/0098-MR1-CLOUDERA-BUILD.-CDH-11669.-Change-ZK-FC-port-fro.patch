@@ -1,0 +1,30 @@
+From 31de3ec0d80040eb163e5e35f9a3fbd04431fd11 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Mon, 12 Aug 2013 23:04:53 -0700
+Subject: [PATCH 098/596] MR1: CLOUDERA-BUILD. CDH-11669. Change ZK FC port
+ from 8019 (hdfs) to 8018 (cherry picked from commit
+ 4fb5fa6f1a0e00ebe3c0afee704de2294c7a1ae7)
+
+(cherry picked from commit a155a73eb9cf03106579cf7c58ebf03ff748a494)
+(cherry picked from commit 1f434f6bb3ce511a8af708d5b83f2975291a35d1)
+(cherry picked from commit 689b7493a08fce47d78320fcc4c072904fc2dd22)
+---
+ .../mapred/org/apache/hadoop/mapred/HAUtil.java    |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/HAUtil.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/HAUtil.java
+index a21535c..2a61de5 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/HAUtil.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/HAUtil.java
+@@ -60,7 +60,7 @@
+   public static final String  MR_HA_AUTO_FAILOVER_ENABLED_KEY = "mapred.ha.automatic-failover.enabled";
+   public static final boolean MR_HA_AUTO_FAILOVER_ENABLED_DEFAULT = false;
+   public static final String  MR_HA_ZKFC_PORT_KEY = "mapred.ha.zkfc.port";
+-  public static final int     MR_HA_ZKFC_PORT_DEFAULT = 8019;
++  public static final int     MR_HA_ZKFC_PORT_DEFAULT = 8018;
+   public static final String  MR_HA_ACTIVE_CHECK_MILLIS = "mapred.ha.jobtracker.active-check.millis";
+   public static final int     MR_HA_ACTIVE_CHECK_MILLIS_DEFAULT = 1000;
+ 
+-- 
+1.7.9.5
+

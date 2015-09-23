@@ -1,0 +1,27 @@
+From 9bfec95b20abb22d5ec8eab6608dd4ce23e034e1 Mon Sep 17 00:00:00 2001
+From: Haohui Mai <wheat9@apache.org>
+Date: Fri, 31 Oct 2014 11:47:41 -0700
+Subject: [PATCH 395/596] HDFS-7315. DFSTestUtil.readFileBuffer opens extra
+ FSDataInputStream. Contributed by Plamen Jeliazkov.
+
+(cherry picked from commit 31612ed64db9abc2b94570606f4b7e004ba38785)
+---
+ .../java/org/apache/hadoop/hdfs/DFSTestUtil.java   |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
+index f377f5e..5d60042 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
+@@ -271,7 +271,7 @@ public static String readFile(FileSystem fs, Path fileName)
+     try {
+       FSDataInputStream in = fs.open(fileName);
+       try {
+-        IOUtils.copyBytes(fs.open(fileName), os, 1024, true);
++        IOUtils.copyBytes(in, os, 1024, true);
+         return os.toByteArray();
+       } finally {
+         in.close();
+-- 
+1.7.9.5
+

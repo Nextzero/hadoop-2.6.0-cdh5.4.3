@@ -1,0 +1,52 @@
+From f81cdf2b4aa647bc3ed62308ad8ee915dd19ba81 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Tue, 12 Feb 2013 16:14:27 -0800
+Subject: [PATCH 033/596] MR1: CLOUDERA-BUILD. hadoop client must exclude
+ servlet/jsp/jetty/tomcat JARs.
+
+  Reason: bug, this creates conflicts in Oozie and HttpFS
+  Author: Alejandro Abdelnur
+  Ref: CDH-10421
+(cherry picked from commit b1e1f10e831672b16e08f7c7b5659c352613f4e0)
+
+(cherry picked from commit 2ed7bc277789f3671dee40757a72393f96ddf96c)
+(cherry picked from commit f9deb4f8b54a38e5fbde40ac56861cd039d341d6)
+(cherry picked from commit 455b4c1d90fa3d23bc8710393124ca864980f627)
+---
+ .../cloudera/maven-packaging/hadoop-client/pom.xml |   20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
+
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-client/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-client/pom.xml
+index ebc1062..b783abc 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-client/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-client/pom.xml
+@@ -135,6 +135,26 @@
+           <groupId>org.apache.avro</groupId>
+           <artifactId>avro</artifactId>
+         </exclusion>
++        <exclusion>
++          <groupId>org.mortbay.jetty</groupId>
++          <artifactId>jetty</artifactId>
++        </exclusion>
++        <exclusion>
++          <groupId>org.mortbay.jetty</groupId>
++          <artifactId>jetty-util</artifactId>
++        </exclusion>
++        <exclusion>
++          <groupId>tomcat</groupId>
++          <artifactId>jasper-runtime</artifactId>
++        </exclusion>
++        <exclusion>
++          <groupId>javax.servlet</groupId>
++          <artifactId>servlet-api</artifactId>
++        </exclusion>
++        <exclusion>
++          <groupId>javax.servlet.jsp</groupId>
++          <artifactId>jsp-api</artifactId>
++        </exclusion>
+       </exclusions>
+     </dependency>
+ 
+-- 
+1.7.9.5
+

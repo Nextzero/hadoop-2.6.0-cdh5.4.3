@@ -1,0 +1,62 @@
+From 510406bcb4688ba21eb424b12a04939409c1e7e5 Mon Sep 17 00:00:00 2001
+From: Milan Desai <milan.desai@wandisco.com>
+Date: Wed, 5 Nov 2014 20:52:01 -0800
+Subject: [PATCH 383/596] HDFS-7336. Unused member DFSInputStream.buffersize.
+ Contributed by Milan Desai. (cherry picked from
+ commit 5c8b55856b684bb1e60644402ed5134727594610)
+
+---
+ .../java/org/apache/hadoop/hdfs/DFSClient.java     |    2 +-
+ .../org/apache/hadoop/hdfs/DFSInputStream.java     |    7 ++-----
+ 2 files changed, 3 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java
+index 2786d42..02bf87b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java
+@@ -1487,7 +1487,7 @@ public DFSInputStream open(String src, int buffersize, boolean verifyChecksum)
+       throws IOException, UnresolvedLinkException {
+     checkOpen();
+     //    Get block info from namenode
+-    return new DFSInputStream(this, src, buffersize, verifyChecksum);
++    return new DFSInputStream(this, src, verifyChecksum);
+   }
+ 
+   /**
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+index 696fc19..6662cbe 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+@@ -41,7 +41,6 @@
+ import java.util.concurrent.ExecutorCompletionService;
+ import java.util.concurrent.Future;
+ import java.util.concurrent.TimeUnit;
+-import java.util.concurrent.atomic.AtomicLong;
+ 
+ import org.apache.commons.io.IOUtils;
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -217,19 +216,17 @@ void clear() {
+    * parallel accesses to DFSInputStream (through ptreads) properly */
+   private final ConcurrentHashMap<DatanodeInfo, DatanodeInfo> deadNodes =
+              new ConcurrentHashMap<DatanodeInfo, DatanodeInfo>();
+-  private int buffersize = 1;
+-  
++
+   private final byte[] oneByteBuf = new byte[1]; // used for 'int read()'
+ 
+   void addToDeadNodes(DatanodeInfo dnInfo) {
+     deadNodes.put(dnInfo, dnInfo);
+   }
+   
+-  DFSInputStream(DFSClient dfsClient, String src, int buffersize, boolean verifyChecksum
++  DFSInputStream(DFSClient dfsClient, String src, boolean verifyChecksum
+                  ) throws IOException, UnresolvedLinkException {
+     this.dfsClient = dfsClient;
+     this.verifyChecksum = verifyChecksum;
+-    this.buffersize = buffersize;
+     this.src = src;
+     this.cachingStrategy =
+         dfsClient.getDefaultReadCachingStrategy();
+-- 
+1.7.9.5
+

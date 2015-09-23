@@ -1,0 +1,63 @@
+From ab659e63217a828e62274a76a6b1155f12e5586f Mon Sep 17 00:00:00 2001
+From: Stephen Chu <schu@cloudera.com>
+Date: Tue, 27 Jan 2015 12:18:46 -0800
+Subject: [PATCH 197/596] CLOUDERA-BUILD. Fix up HDFS-6826 because
+ AuthorizationProviderProxyClientProtocol needs to
+ override getStoragePolicies and setStoragePolicy
+
+---
+ .../AuthorizationProviderProxyClientProtocol.java  |   24 ++++++++++++++++++++
+ 1 file changed, 24 insertions(+)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProviderProxyClientProtocol.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProviderProxyClientProtocol.java
+index 61bcd43..ae8988b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProviderProxyClientProtocol.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProviderProxyClientProtocol.java
+@@ -35,6 +35,7 @@
+ import org.apache.hadoop.fs.permission.FsPermission;
+ import org.apache.hadoop.hdfs.inotify.EventsList;
+ import org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException;
++import org.apache.hadoop.hdfs.protocol.BlockStoragePolicy;
+ import org.apache.hadoop.hdfs.protocol.CacheDirectiveEntry;
+ import org.apache.hadoop.hdfs.protocol.CacheDirectiveInfo;
+ import org.apache.hadoop.hdfs.protocol.CachePoolEntry;
+@@ -52,6 +53,7 @@
+ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+ import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
+ import org.apache.hadoop.hdfs.protocol.NSQuotaExceededException;
++import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
+ import org.apache.hadoop.hdfs.protocol.RollingUpgradeInfo;
+ import org.apache.hadoop.hdfs.protocol.SnapshotAccessControlException;
+ import org.apache.hadoop.hdfs.protocol.SnapshotDiffReport;
+@@ -139,6 +141,28 @@ public boolean setReplication(String src, short replication)
+   }
+ 
+   @Override
++  public BlockStoragePolicy[] getStoragePolicies() throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getStoragePolicies();
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void setStoragePolicy(String src, String policyName)
++     throws SnapshotAccessControlException, UnresolvedLinkException,
++     FileNotFoundException, QuotaExceededException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.setStoragePolicy(src, policyName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
+   public void setPermission(String src, FsPermission permission)
+       throws AccessControlException, FileNotFoundException, SafeModeException,
+              UnresolvedLinkException, SnapshotAccessControlException,
+-- 
+1.7.9.5
+

@@ -1,0 +1,247 @@
+From 9687477ac9b2280c9fa5fb99827930cfa1efaec1 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Tue, 28 Apr 2015 21:00:35 -0700
+Subject: [PATCH 550/596] YARN-3485. FairScheduler headroom calculation
+ doesn't consider maxResources for Fifo and
+ FairShare policies. (kasha)
+
+(cherry picked from commit 8f82970e0c247b37b2bf33aa21f6a39afa07efde)
+(cherry picked from commit 4cc38df7de89a361493826c057f3363f1738a7e2)
+
+Change-Id: I88bdeb28a859bb07b5260661a84a1a7f3370f1ff
+(cherry picked from commit 14abc62275ba148ffa94a570f6f6be56c4420dc5)
+---
+ .../scheduler/fair/FSAppAttempt.java               |   20 ++++--
+ .../scheduler/fair/SchedulingPolicy.java           |    4 +-
+ .../policies/DominantResourceFairnessPolicy.java   |    6 +-
+ .../scheduler/fair/policies/FairSharePolicy.java   |    6 +-
+ .../scheduler/fair/policies/FifoPolicy.java        |    6 +-
+ .../scheduler/fair/TestFSAppAttempt.java           |   66 ++++++++++++++------
+ 6 files changed, 73 insertions(+), 35 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java
+index 7d26396..091c4f5 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FSAppAttempt.java
+@@ -171,6 +171,10 @@ private synchronized void unreserveInternal(
+         + priority + "; currentReservation " + currentReservation);
+   }
+ 
++  /**
++   * Headroom depends on resources in the cluster, current usage of the
++   * queue, queue's fair-share and queue's max-resources.
++   */
+   @Override
+   public Resource getHeadroom() {
+     final FSQueue queue = (FSQueue) this.queue;
+@@ -181,18 +185,22 @@ public Resource getHeadroom() {
+     Resource clusterResource = this.scheduler.getClusterResource();
+     Resource clusterUsage = this.scheduler.getRootQueueMetrics()
+         .getAllocatedResources();
+-    Resource clusterAvailableResource = Resources.subtract(clusterResource,
+-        clusterUsage);
++
++    Resource clusterAvailableResources =
++        Resources.subtract(clusterResource, clusterUsage);
++    Resource queueMaxAvailableResources =
++        Resources.subtract(queue.getMaxShare(), queueUsage);
++    Resource maxAvailableResource = Resources.componentwiseMin(
++        clusterAvailableResources, queueMaxAvailableResources);
++
+     Resource headroom = policy.getHeadroom(queueFairShare,
+-        queueUsage, clusterAvailableResource);
++        queueUsage, maxAvailableResource);
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("Headroom calculation for " + this.getName() + ":" +
+           "Min(" +
+           "(queueFairShare=" + queueFairShare +
+           " - queueUsage=" + queueUsage + ")," +
+-          " clusterAvailableResource=" + clusterAvailableResource +
+-          "(clusterResource=" + clusterResource +
+-          " - clusterUsage=" + clusterUsage + ")" +
++          " maxAvailableResource=" + maxAvailableResource +
+           "Headroom=" + headroom);
+     }
+     return headroom;
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/SchedulingPolicy.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/SchedulingPolicy.java
+index 4f3123d..b310403 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/SchedulingPolicy.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/SchedulingPolicy.java
+@@ -184,10 +184,10 @@ public abstract boolean checkIfAMResourceUsageOverLimit(
+    *
+    * @param queueFairShare fairshare in the queue
+    * @param queueUsage resources used in the queue
+-   * @param clusterAvailable available resource in cluster
++   * @param maxAvailable available resource in cluster for this queue
+    * @return calculated headroom
+    */
+   public abstract Resource getHeadroom(Resource queueFairShare,
+-      Resource queueUsage, Resource clusterAvailable);
++      Resource queueUsage, Resource maxAvailable);
+ 
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/DominantResourceFairnessPolicy.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/DominantResourceFairnessPolicy.java
+index 3f6cbd1..86d503b 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/DominantResourceFairnessPolicy.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/DominantResourceFairnessPolicy.java
+@@ -90,15 +90,15 @@ public boolean checkIfAMResourceUsageOverLimit(Resource usage, Resource maxAMRes
+ 
+   @Override
+   public Resource getHeadroom(Resource queueFairShare, Resource queueUsage,
+-                              Resource clusterAvailable) {
++                              Resource maxAvailable) {
+     int queueAvailableMemory =
+         Math.max(queueFairShare.getMemory() - queueUsage.getMemory(), 0);
+     int queueAvailableCPU =
+         Math.max(queueFairShare.getVirtualCores() - queueUsage
+             .getVirtualCores(), 0);
+     Resource headroom = Resources.createResource(
+-        Math.min(clusterAvailable.getMemory(), queueAvailableMemory),
+-        Math.min(clusterAvailable.getVirtualCores(),
++        Math.min(maxAvailable.getMemory(), queueAvailableMemory),
++        Math.min(maxAvailable.getVirtualCores(),
+             queueAvailableCPU));
+     return headroom;
+   }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/FairSharePolicy.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/FairSharePolicy.java
+index 97669cb..918db9d 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/FairSharePolicy.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/FairSharePolicy.java
+@@ -116,12 +116,12 @@ else if (s1Needy && s2Needy)
+ 
+   @Override
+   public Resource getHeadroom(Resource queueFairShare,
+-                              Resource queueUsage, Resource clusterAvailable) {
++                              Resource queueUsage, Resource maxAvailable) {
+     int queueAvailableMemory = Math.max(
+         queueFairShare.getMemory() - queueUsage.getMemory(), 0);
+     Resource headroom = Resources.createResource(
+-        Math.min(clusterAvailable.getMemory(), queueAvailableMemory),
+-        clusterAvailable.getVirtualCores());
++        Math.min(maxAvailable.getMemory(), queueAvailableMemory),
++        maxAvailable.getVirtualCores());
+     return headroom;
+   }
+ 
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/FifoPolicy.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/FifoPolicy.java
+index a2e17ec..7d88933 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/FifoPolicy.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/policies/FifoPolicy.java
+@@ -109,12 +109,12 @@ public boolean checkIfAMResourceUsageOverLimit(Resource usage, Resource maxAMRes
+ 
+   @Override
+   public Resource getHeadroom(Resource queueFairShare,
+-                              Resource queueUsage, Resource clusterAvailable) {
++                              Resource queueUsage, Resource maxAvailable) {
+     int queueAvailableMemory = Math.max(
+         queueFairShare.getMemory() - queueUsage.getMemory(), 0);
+     Resource headroom = Resources.createResource(
+-        Math.min(clusterAvailable.getMemory(), queueAvailableMemory),
+-        clusterAvailable.getVirtualCores());
++        Math.min(maxAvailable.getMemory(), queueAvailableMemory),
++        maxAvailable.getVirtualCores());
+     return headroom;
+   }
+ 
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFSAppAttempt.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFSAppAttempt.java
+index f560690..43fe186 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFSAppAttempt.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFSAppAttempt.java
+@@ -198,18 +198,24 @@ public void testHeadroom() {
+     Mockito.when(mockScheduler.getClock()).thenReturn(scheduler.getClock());
+ 
+     final FSLeafQueue mockQueue = Mockito.mock(FSLeafQueue.class);
+-    final Resource queueFairShare = Resources.createResource(4096, 4);
+-    final Resource queueUsage = Resource.newInstance(1024, 1);
++
++    final Resource queueMaxResources = Resource.newInstance(5 * 1024, 3);
++    final Resource queueFairShare = Resources.createResource(4096, 2);
++    final Resource queueUsage = Resource.newInstance(2048, 2);
++
++    final Resource queueStarvation =
++        Resources.subtract(queueFairShare, queueUsage);
++    final Resource queueMaxResourcesAvailable =
++        Resources.subtract(queueMaxResources, queueUsage);
++
+     final Resource clusterResource = Resources.createResource(8192, 8);
+-    final Resource clusterUsage = Resources.createResource(6144, 2);
+-    final QueueMetrics fakeRootQueueMetrics = Mockito.mock(QueueMetrics.class);
++    final Resource clusterUsage = Resources.createResource(2048, 2);
++    final Resource clusterAvailable =
++        Resources.subtract(clusterResource, clusterUsage);
+ 
+-    ApplicationAttemptId applicationAttemptId = createAppAttemptId(1, 1);
+-    RMContext rmContext = resourceManager.getRMContext();
+-    FSAppAttempt schedulerApp =
+-        new FSAppAttempt(mockScheduler, applicationAttemptId, "user1", mockQueue ,
+-            null, rmContext);
++    final QueueMetrics fakeRootQueueMetrics = Mockito.mock(QueueMetrics.class);
+ 
++    Mockito.when(mockQueue.getMaxShare()).thenReturn(queueMaxResources);
+     Mockito.when(mockQueue.getFairShare()).thenReturn(queueFairShare);
+     Mockito.when(mockQueue.getResourceUsage()).thenReturn(queueUsage);
+     Mockito.when(mockScheduler.getClusterResource()).thenReturn
+@@ -219,27 +225,51 @@ public void testHeadroom() {
+     Mockito.when(mockScheduler.getRootQueueMetrics()).thenReturn
+         (fakeRootQueueMetrics);
+ 
+-    int minClusterAvailableMemory = 2048;
+-    int minClusterAvailableCPU = 6;
+-    int minQueueAvailableCPU = 3;
++    ApplicationAttemptId applicationAttemptId = createAppAttemptId(1, 1);
++    RMContext rmContext = resourceManager.getRMContext();
++    FSAppAttempt schedulerApp =
++        new FSAppAttempt(mockScheduler, applicationAttemptId, "user1", mockQueue ,
++            null, rmContext);
+ 
+     // Min of Memory and CPU across cluster and queue is used in
+     // DominantResourceFairnessPolicy
+     Mockito.when(mockQueue.getPolicy()).thenReturn(SchedulingPolicy
+         .getInstance(DominantResourceFairnessPolicy.class));
+-    verifyHeadroom(schedulerApp, minClusterAvailableMemory,
+-        minQueueAvailableCPU);
++    verifyHeadroom(schedulerApp,
++        min(queueStarvation.getMemory(),
++            clusterAvailable.getMemory(),
++            queueMaxResourcesAvailable.getMemory()),
++        min(queueStarvation.getVirtualCores(),
++            clusterAvailable.getVirtualCores(),
++            queueMaxResourcesAvailable.getVirtualCores())
++    );
+ 
+     // Fair and Fifo ignore CPU of queue, so use cluster available CPU
+     Mockito.when(mockQueue.getPolicy()).thenReturn(SchedulingPolicy
+         .getInstance(FairSharePolicy.class));
+-    verifyHeadroom(schedulerApp, minClusterAvailableMemory,
+-        minClusterAvailableCPU);
++    verifyHeadroom(schedulerApp,
++        min(queueStarvation.getMemory(),
++            clusterAvailable.getMemory(),
++            queueMaxResourcesAvailable.getMemory()),
++        Math.min(
++            clusterAvailable.getVirtualCores(),
++            queueMaxResourcesAvailable.getVirtualCores())
++    );
+ 
+     Mockito.when(mockQueue.getPolicy()).thenReturn(SchedulingPolicy
+         .getInstance(FifoPolicy.class));
+-    verifyHeadroom(schedulerApp, minClusterAvailableMemory,
+-        minClusterAvailableCPU);
++    verifyHeadroom(schedulerApp,
++        min(queueStarvation.getMemory(),
++            clusterAvailable.getMemory(),
++            queueMaxResourcesAvailable.getMemory()),
++        Math.min(
++            clusterAvailable.getVirtualCores(),
++            queueMaxResourcesAvailable.getVirtualCores())
++    );
++  }
++
++  private static int min(int value1, int value2, int value3) {
++    return Math.min(Math.min(value1, value2), value3);
+   }
+ 
+   protected void verifyHeadroom(FSAppAttempt schedulerApp,
+-- 
+1.7.9.5
+

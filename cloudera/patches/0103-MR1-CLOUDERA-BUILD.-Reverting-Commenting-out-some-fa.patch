@@ -1,0 +1,130 @@
+From 5b1d2a83d94d4c43e1f3f6579e649e2c1a4af6c4 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Wed, 2 Oct 2013 13:50:12 -0700
+Subject: [PATCH 103/596] MR1: CLOUDERA-BUILD. Reverting: "Commenting out some
+ failing MR1 tests for cdh5b1 (CDH-14666)"
+
+This reverts commit b36c566b24f6fcea46c43311276532f30b8ca5d1.
+
+(cherry picked from commit 7644b4ef6767bdf11df04afbe62e6e060796627e)
+(cherry picked from commit bd1688c56fa0ab2db642bd68241f3bab2d7e0c79)
+(cherry picked from commit ad4bb22413186bd8004c1adb9e930f90c523184a)
+---
+ .../hadoop/streaming/TestStreamingStatus.java      |    1 +
+ .../hadoop/mapred/TestHAStateTransitions.java      |    1 +
+ .../org/apache/hadoop/mapred/TestHAStress.java     |    1 +
+ .../test/org/apache/hadoop/mapred/TestHAWebUI.java |    1 +
+ .../TestJobTrackerRestartWithLostTracker.java      |    4 ++--
+ .../hadoop/mapred/TestMRZKFailoverController.java  |    1 +
+ .../hadoop/mapreduce/security/TestTokenCache.java  |    1 +
+ .../security/token/TestDelegationTokenRenewal.java |    1 +
+ 8 files changed, 9 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/contrib/streaming/src/test/org/apache/hadoop/streaming/TestStreamingStatus.java b/hadoop-mapreduce1-project/src/contrib/streaming/src/test/org/apache/hadoop/streaming/TestStreamingStatus.java
+index 7b8ba31..1269449 100644
+--- a/hadoop-mapreduce1-project/src/contrib/streaming/src/test/org/apache/hadoop/streaming/TestStreamingStatus.java
++++ b/hadoop-mapreduce1-project/src/contrib/streaming/src/test/org/apache/hadoop/streaming/TestStreamingStatus.java
+@@ -201,6 +201,7 @@ public void clean(FileSystem fs) {
+    *
+    * @throws IOException
+    */
++  @Test
+   public void testReporting() throws Exception {
+     testStreamJob(false);// nonempty input
+     testStreamJob(true);// empty input
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStateTransitions.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStateTransitions.java
+index eba0fec..3a58857 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStateTransitions.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStateTransitions.java
+@@ -153,6 +153,7 @@ public void testFailoverWhileRunningJob() throws Exception {
+     assertTrue("Job should be successful", rJob1.isSuccessful());
+   }
+   
++  @Test(timeout=60000)
+   public void testTransitionToCurrentStateIsANop() throws Exception {
+     LOG.info("Running testTransitionToCurrentStateIsANop");
+     startCluster();
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStress.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStress.java
+index 3b442f4..4f13985 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStress.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStress.java
+@@ -136,6 +136,7 @@ public void setUp() throws Exception {
+     target2 = new JobTrackerHAServiceTarget(jt2.getConf());
+   }
+   
++  @Test
+   public void test() throws Exception {
+     TestContext flippers = new TestContext();
+     flippers.addThread(new FailoverThread(flippers));
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAWebUI.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAWebUI.java
+index 97809fd..35b1c4f 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAWebUI.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAWebUI.java
+@@ -86,6 +86,7 @@ public void tearDown() throws Exception {
+     cluster.shutdown();
+   }
+   
++  @Test(timeout=60000)
+   public void testRedirect() throws Exception {
+ 
+     // both jobtracker addresses should serve up the jobtracker page
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJobTrackerRestartWithLostTracker.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJobTrackerRestartWithLostTracker.java
+index 168a39e..b2b42e1 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJobTrackerRestartWithLostTracker.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJobTrackerRestartWithLostTracker.java
+@@ -115,7 +115,7 @@ public void testRecoveryWithLostTracker(MiniDFSCluster dfs,
+     assertTrue("Job should be successful", rJob.isSuccessful());
+   }
+   
+-  public void ignoretestRestartWithLostTracker() throws Exception {
++  public void testRestartWithLostTracker() throws Exception {
+     String namenode = null;
+     MiniDFSCluster dfs = null;
+     MiniMRCluster mr = null;
+@@ -173,6 +173,6 @@ public void ignoretestRestartWithLostTracker() throws Exception {
+   }
+ 
+   public static void main(String[] args) throws Exception {
+-    //new TestJobTrackerRestartWithLostTracker().testRestartWithLostTracker();
++    new TestJobTrackerRestartWithLostTracker().testRestartWithLostTracker();
+   }
+ }
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestMRZKFailoverController.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestMRZKFailoverController.java
+index 2da9338..b11ab07 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestMRZKFailoverController.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestMRZKFailoverController.java
+@@ -123,6 +123,7 @@ public void shutdown() throws Exception {
+     }
+   }
+   
++  @Test(timeout=60000)
+   public void testFailoverWhileRunningJob() throws Exception {
+     LOG.info("Running job failover test");
+ 
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
+index 7014ae2..0afa952 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
+@@ -214,6 +214,7 @@ private static void verifySecretKeysInJSONFile() throws IOException {
+    * run a distributed job and verify that TokenCache is available
+    * @throws IOException
+    */
++  @Test
+   public void testTokenCache() throws IOException {
+     // make sure JT starts
+     jConf = mrCluster.createJobConf();
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/token/TestDelegationTokenRenewal.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/token/TestDelegationTokenRenewal.java
+index d5a2cfb..5c73ee5 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/token/TestDelegationTokenRenewal.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/token/TestDelegationTokenRenewal.java
+@@ -368,6 +368,7 @@ public void testDTRenewal () throws Exception {
+    * re-used after its been closed
+    * @throws Exception
+    */
++  @Test
+   public void testDTRenewalAfterClose() throws Exception {
+       Renewer.counter = 0;
+       testDTRenewal();
+-- 
+1.7.9.5
+

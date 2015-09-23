@@ -1,0 +1,27 @@
+From 81a313a19662a1c2308e86aea78c5450850647d6 Mon Sep 17 00:00:00 2001
+From: Lei Xu <lei@cloudera.com>
+Date: Fri, 7 Nov 2014 13:33:26 -0800
+Subject: [PATCH 190/596] CLOUDERA-BUILD: Fixed mvn site:site build introduced
+ by backporting HDFS-7278.
+
+(cherry picked from commit 166347dc708cb17bfb0379fef690784f8d0591bd)
+---
+ .../hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm   |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
+index bc872ba..01c9422 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
+@@ -201,7 +201,7 @@ HDFS Commands Guide
+           [-shutdownDatanode <datanode_host:ipc_port> [upgrade]]
+           [-getDatanodeInfo <datanode_host:ipc_port>]
+           [-triggerBlockReport [-incremental] <datanode_host:ipc_port>]
+-          [-help [cmd]]
++          [-help [cmd]]>>>
+ +------------------------------------------+
+ 
+ *-----------------+-----------------------------------------------------------+
+-- 
+1.7.9.5
+

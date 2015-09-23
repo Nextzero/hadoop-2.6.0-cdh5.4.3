@@ -1,0 +1,55 @@
+From 1b9287f5ed3d8e0bf8fcaa55c42ee09c6742f544 Mon Sep 17 00:00:00 2001
+From: Jason Lowe <jlowe@apache.org>
+Date: Mon, 1 Dec 2014 22:29:05 +0000
+Subject: [PATCH 282/596] YARN-2905. AggregatedLogsBlock page can infinitely
+ loop if the aggregated log file is corrupted.
+ Contributed by Varun Saxena (cherry picked from
+ commit 0f9528b99addbb0fd9a19d84db22a8c8e934b05f)
+ (cherry picked from commit
+ 38ea1419f60d2b8176dba4931748f1f0e52ca84e)
+
+(cherry picked from commit 688b20dd47223c7c04c4e61705fa23910d999b96)
+---
+ .../yarn/logaggregation/AggregatedLogFormat.java   |    4 ++++
+ .../yarn/webapp/log/AggregatedLogsBlock.java       |   10 ++++++++--
+ 2 files changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/logaggregation/AggregatedLogFormat.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/logaggregation/AggregatedLogFormat.java
+index a434ef5..7eebcb3 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/logaggregation/AggregatedLogFormat.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/logaggregation/AggregatedLogFormat.java
+@@ -801,6 +801,10 @@ public long skip(long n) throws IOException {
+       return currentLogData.skip(n);
+     }
+ 
++    public int read() throws IOException {
++      return currentLogData.read();
++    }
++
+     public int read(byte[] buf, int off, int len) throws IOException {
+       return currentLogData.read(buf, off, len);
+     }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/log/AggregatedLogsBlock.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/log/AggregatedLogsBlock.java
+index 3e9f7a2..620d097 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/log/AggregatedLogsBlock.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/log/AggregatedLogsBlock.java
+@@ -231,8 +231,14 @@ private boolean readContainerLogs(Block html,
+         long totalSkipped = 0;
+         while (totalSkipped < start) {
+           long ret = logReader.skip(start - totalSkipped);
+-          if (ret < 0) {
+-            throw new IOException( "Premature EOF from container log");
++          if (ret == 0) {
++            //Read one byte
++            int nextByte = logReader.read();
++            // Check if we have reached EOF
++            if (nextByte == -1) {
++              throw new IOException( "Premature EOF from container log");
++            }
++            ret = 1;
+           }
+           totalSkipped += ret;
+         }
+-- 
+1.7.9.5
+

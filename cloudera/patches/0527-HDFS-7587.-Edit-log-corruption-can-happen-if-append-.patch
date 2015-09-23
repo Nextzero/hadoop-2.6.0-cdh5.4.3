@@ -1,0 +1,235 @@
+From ce3c782e47cb002463aa7f455f54fde0a79f5a07 Mon Sep 17 00:00:00 2001
+From: Jing Zhao <jing9@apache.org>
+Date: Wed, 18 Mar 2015 18:51:14 -0700
+Subject: [PATCH 527/596] HDFS-7587. Edit log corruption can happen if append
+ fails with a quota violation. Contributed by Jing
+ Zhao.
+
+(cherry picked from commit c7c71cdba50cb7d8282622cd496cc913c80cff54)
+(cherry picked from commit 5a5b2446485531f12d37f3d4ca791672b9921872)
+(cherry picked from commit ef5246901b5da103ffdc69e1ea9909ef44460813)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DirectoryWithQuotaFeature.java
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirectory.java
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodesInPath.java
+	hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDiskspaceQuotaUpdate.java
+---
+ .../server/namenode/DirectoryWithQuotaFeature.java |    4 ++
+ .../hadoop/hdfs/server/namenode/FSDirectory.java   |    6 ++-
+ .../hadoop/hdfs/server/namenode/FSNamesystem.java  |   55 +++++++++++++++++---
+ .../server/namenode/TestDiskspaceQuotaUpdate.java  |   47 +++++++++++++++--
+ 4 files changed, 102 insertions(+), 10 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DirectoryWithQuotaFeature.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DirectoryWithQuotaFeature.java
+index 05742b2..3a8d5ab 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DirectoryWithQuotaFeature.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DirectoryWithQuotaFeature.java
+@@ -133,6 +133,10 @@ void setSpaceConsumed(long namespace, long diskspace) {
+     return Quota.Counts.newInstance(namespace, diskspace);
+   }
+ 
++  public long getDiskSpaceConsumed() {
++    return diskspace;
++  }
++
+   /** Verify if the namespace quota is violated after applying delta. */
+   private void verifyNamespaceQuota(long delta) throws NSQuotaExceededException {
+     if (Quota.isViolated(nsQuota, namespace, delta)) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirectory.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirectory.java
+index c019ff7..c62c6b5 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirectory.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirectory.java
+@@ -277,6 +277,10 @@ void disableQuotaChecks() {
+     skipQuotaCheck = true;
+   }
+ 
++  boolean shouldSkipQuotaChecks() {
++    return skipQuotaCheck;
++  }
++
+   private static INodeFile newINodeFile(long id, PermissionStatus permissions,
+       long mtime, long atime, short replication, long preferredBlockSize) {
+     return newINodeFile(id, permissions, mtime, atime, replication, preferredBlockSize,
+@@ -1904,7 +1908,7 @@ private boolean addINode(String src, INode child
+    *          Pass null if a node is not being moved.
+    * @throws QuotaExceededException if quota limit is exceeded.
+    */
+-  private static void verifyQuota(INode[] inodes, int pos, long nsDelta,
++  static void verifyQuota(INode[] inodes, int pos, long nsDelta,
+       long dsDelta, INode commonAncestor) throws QuotaExceededException {
+     if (nsDelta <= 0 && dsDelta <= 0) {
+       // if quota is being freed or not being consumed
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index 2bdbfaa..10b6f93 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -2942,6 +2942,8 @@ LocatedBlock prepareFileForWrite(String src, INodeFile file,
+                                    boolean writeToEditLog,
+                                    int latestSnapshot, boolean logRetryCache)
+       throws IOException {
++    final INodesInPath iip = dir.getINodesInPath4Write(src, true);
++    final long dsDelta = verifyQuotaForUCBlock(file, iip);
+     file.recordModification(latestSnapshot);
+     final INodeFile cons = file.toUnderConstruction(leaseHolder, clientMachine);
+ 
+@@ -2949,10 +2951,13 @@ LocatedBlock prepareFileForWrite(String src, INodeFile file,
+         .getClientName(), src);
+     
+     LocatedBlock ret = blockManager.convertLastBlockToUnderConstruction(cons);
+-    if (ret != null) {
+-      // update the quota: use the preferred block size for UC block
+-      final long diff = file.getPreferredBlockSize() - ret.getBlockSize();
+-      dir.updateSpaceConsumed(src, 0, diff * file.getBlockReplication());
++    if (ret != null && dsDelta != 0) {
++      dir.writeLock();
++      try {
++        dir.updateCountNoQuotaCheck(iip, iip.length(), 0, dsDelta);
++      } finally {
++        dir.writeUnlock();
++      }
+     }
+ 
+     if (writeToEditLog) {
+@@ -2962,6 +2967,44 @@ LocatedBlock prepareFileForWrite(String src, INodeFile file,
+   }
+ 
+   /**
++   * Verify quota when using the preferred block size for UC block. This is
++   * usually used by append and truncate
++   * @throws QuotaExceededException when violating the storage quota
++   * @return ds delta
++   */
++  private long verifyQuotaForUCBlock(INodeFile file, INodesInPath iip)
++      throws QuotaExceededException {
++    if (!isImageLoaded() || dir.shouldSkipQuotaChecks()) {
++      // Do not check quota if editlog is still being processed
++      return 0;
++    }
++    if (file.getLastBlock() != null) {
++      final long delta = computeQuotaDeltaForUCBlock(file);
++      dir.readLock();
++      try {
++        FSDirectory.verifyQuota(iip.getINodes(), iip.length() - 1, 0, delta,
++            null);
++        return delta;
++      } finally {
++        dir.readUnlock();
++      }
++    }
++    return 0;
++  }
++
++  /** Compute quota change for converting a complete block to a UC block */
++  private long computeQuotaDeltaForUCBlock(INodeFile file) {
++    final long delta = 0;
++    final BlockInfo lastBlock = file.getLastBlock();
++    if (lastBlock != null) {
++      final long diff = file.getPreferredBlockSize() - lastBlock.getNumBytes();
++      final short repl = file.getBlockReplication();
++      return (diff * repl);
++    }
++    return delta;
++  }
++
++  /**
+    * Recover lease;
+    * Immediately revoke the lease of the current lease holder and start lease
+    * recovery so that the file can be forced to be closed.
+@@ -3360,7 +3403,7 @@ FileState analyzeFileState(String src,
+       // doesn't match up with what we think is the last block. There are
+       // four possibilities:
+       // 1) This is the first block allocation of an append() pipeline
+-      //    which started appending exactly at a block boundary.
++      //    which started appending exactly at or exceeding the block boundary.
+       //    In this case, the client isn't passed the previous block,
+       //    so it makes the allocateBlock() call with previous=null.
+       //    We can distinguish this since the last block of the file
+@@ -3385,7 +3428,7 @@ FileState analyzeFileState(String src,
+       BlockInfo penultimateBlock = pendingFile.getPenultimateBlock();
+       if (previous == null &&
+           lastBlockInFile != null &&
+-          lastBlockInFile.getNumBytes() == pendingFile.getPreferredBlockSize() &&
++          lastBlockInFile.getNumBytes() >= pendingFile.getPreferredBlockSize() &&
+           lastBlockInFile.isComplete()) {
+         // Case 1
+         if (NameNode.stateChangeLog.isDebugEnabled()) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDiskspaceQuotaUpdate.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDiskspaceQuotaUpdate.java
+index fad8807..12ee6b2 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDiskspaceQuotaUpdate.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDiskspaceQuotaUpdate.java
+@@ -32,7 +32,9 @@
+ import org.apache.hadoop.hdfs.DistributedFileSystem;
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
+ import org.apache.hadoop.hdfs.client.HdfsDataOutputStream;
++import org.apache.hadoop.hdfs.protocol.DSQuotaExceededException;
+ import org.junit.After;
++import org.junit.Assert;
+ import org.junit.Before;
+ import org.junit.Test;
+ 
+@@ -148,12 +150,11 @@ public void testUpdateQuotaForFSync() throws Exception {
+     final Path foo = new Path("/foo");
+     final Path bar = new Path(foo, "bar");
+     DFSTestUtil.createFile(dfs, bar, BLOCKSIZE, REPLICATION, 0L);
+-    dfs.setQuota(foo, Long.MAX_VALUE-1, Long.MAX_VALUE-1);
++    dfs.setQuota(foo, Long.MAX_VALUE - 1, Long.MAX_VALUE - 1);
+ 
+     FSDataOutputStream out = dfs.append(bar);
+     out.write(new byte[BLOCKSIZE / 4]);
+-    ((DFSOutputStream) out.getWrappedStream()).hsync(EnumSet
+-        .of(HdfsDataOutputStream.SyncFlag.UPDATE_LENGTH));
++    ((DFSOutputStream) out.getWrappedStream()).hsync(EnumSet.of(HdfsDataOutputStream.SyncFlag.UPDATE_LENGTH));
+ 
+     INodeDirectory fooNode = fsdir.getINode4Write(foo.toString()).asDirectory();
+     Quota.Counts quota = fooNode.getDirectoryWithQuotaFeature()
+@@ -182,4 +183,44 @@ public void testUpdateQuotaForFSync() throws Exception {
+     assertEquals(2, ns); // foo and bar
+     assertEquals((BLOCKSIZE * 2 + BLOCKSIZE / 2) * REPLICATION, ds);
+   }
++
++  /**
++   * Test append over storage quota does not mark file as UC or create lease
++   */
++  @Test (timeout=60000)
++  public void testAppendOverStorageQuota() throws Exception {
++    final Path dir = new Path("/TestAppendOverQuota");
++    final Path file = new Path(dir, "file");
++
++    // create partial block file
++    dfs.mkdirs(dir);
++    DFSTestUtil.createFile(dfs, file, BLOCKSIZE/2, REPLICATION, seed);
++
++    // lower quota to cause exception when appending to partial block
++    dfs.setQuota(dir, Long.MAX_VALUE - 1, 1);
++    final INodeDirectory dirNode = fsdir.getINode4Write(dir.toString())
++        .asDirectory();
++    final long spaceUsed = dirNode.getDirectoryWithQuotaFeature()
++        .getDiskSpaceConsumed();
++    try {
++      DFSTestUtil.appendFile(dfs, file, BLOCKSIZE);
++      Assert.fail("append didn't fail");
++    } catch (DSQuotaExceededException e) {
++      // ignore
++    }
++
++    // check that the file exists, isn't UC, and has no dangling lease
++    INodeFile inode = fsdir.getINode(file.toString()).asFile();
++    Assert.assertNotNull(inode);
++    Assert.assertFalse("should not be UC", inode.isUnderConstruction());
++    Assert.assertNull("should not have a lease", cluster.getNamesystem()
++        .getLeaseManager().getLeaseByPath(file.toString()));
++    // make sure the quota usage is unchanged
++    final long newSpaceUsed = dirNode.getDirectoryWithQuotaFeature()
++        .getDiskSpaceConsumed();
++    assertEquals(spaceUsed, newSpaceUsed);
++    // make sure edits aren't corrupted
++    dfs.recoverLease(file);
++    cluster.restartNameNodes();
++  }
+ }
+-- 
+1.7.9.5
+

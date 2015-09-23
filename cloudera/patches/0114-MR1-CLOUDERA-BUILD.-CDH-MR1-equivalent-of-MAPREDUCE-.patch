@@ -1,0 +1,29 @@
+From e2eb1f6c02515bccdd7299647de10ae197477d04 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Mon, 4 Nov 2013 11:12:41 -0800
+Subject: [PATCH 114/596] MR1: CLOUDERA-BUILD. CDH MR1 equivalent of
+ MAPREDUCE-4383 (HadoopPipes.cc needs to include
+ unistd.h)
+
+(cherry picked from commit 5e65db28ddd8c985c37df737da9f3e9359ab8feb)
+(cherry picked from commit 4ed8f701bde3a253b13edbab4f32bdc121aa7327)
+(cherry picked from commit 91088fc06645418d01e45e9d65029044435bfe61)
+---
+ .../src/c++/pipes/impl/HadoopPipes.cc              |    1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hadoop-mapreduce1-project/src/c++/pipes/impl/HadoopPipes.cc b/hadoop-mapreduce1-project/src/c++/pipes/impl/HadoopPipes.cc
+index 964b025..d029083 100644
+--- a/hadoop-mapreduce1-project/src/c++/pipes/impl/HadoopPipes.cc
++++ b/hadoop-mapreduce1-project/src/c++/pipes/impl/HadoopPipes.cc
+@@ -30,6 +30,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <strings.h>
++#include <unistd.h>
+ #include <sys/socket.h>
+ #include <pthread.h>
+ #include <iostream>
+-- 
+1.7.9.5
+

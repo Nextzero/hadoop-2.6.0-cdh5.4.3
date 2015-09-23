@@ -1,0 +1,29 @@
+From c2367169c53d338e9a3f8b25fde8faf2af296629 Mon Sep 17 00:00:00 2001
+From: Chris Nauroth <cnauroth@apache.org>
+Date: Fri, 20 Jun 2014 18:30:49 +0000
+Subject: [PATCH 220/596] HADOOP-10689. InputStream is not closed in
+ AzureNativeFileSystemStore#retrieve(). Contributed
+ by Chen He.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/trunk@1604233 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit ae258aa7621e715ffb9c6f444a5fc27cb215cc4a)
+---
+ .../fs/azure/AzureNativeFileSystemStore.java       |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/AzureNativeFileSystemStore.java b/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/AzureNativeFileSystemStore.java
+index 9dcaddc..c5b9afe 100644
+--- a/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/AzureNativeFileSystemStore.java
++++ b/hadoop-tools/hadoop-azure/src/main/java/org/apache/hadoop/fs/azure/AzureNativeFileSystemStore.java
+@@ -1723,7 +1723,7 @@ public DataInputStream retrieve(String key, long startByteOffset)
+           inDataStream.close();
+         }
+         if(in != null){
+-          inDataStream.close();
++          in.close();
+         }
+         throw e;
+       }
+-- 
+1.7.9.5
+

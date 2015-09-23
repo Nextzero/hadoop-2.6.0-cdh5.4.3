@@ -1,0 +1,34 @@
+From 03a45a52377b82f5906d17c5f880f11f95250321 Mon Sep 17 00:00:00 2001
+From: Tsz-Wo Nicholas Sze <szetszwo@hortonworks.com>
+Date: Tue, 24 Mar 2015 13:49:17 +0900
+Subject: [PATCH 545/596] HDFS-7884. Fix NullPointerException in BlockSender
+ when the generation stamp provided by the client is
+ larger than the one stored in the datanode. 
+ Contributed by Brahma Reddy Battula
+
+(cherry picked from commit fe693b72dec703ecbf4ab3919d61d06ea8735a9e)
+---
+ .../hadoop/hdfs/server/datanode/BlockSender.java   |    7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockSender.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockSender.java
+index 76637d5..190fa79 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockSender.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockSender.java
+@@ -243,6 +243,13 @@
+       if (replica.getGenerationStamp() < block.getGenerationStamp()) {
+         throw new IOException("Replica gen stamp < block genstamp, block="
+             + block + ", replica=" + replica);
++      } else if (replica.getGenerationStamp() > block.getGenerationStamp()) {
++        if (DataNode.LOG.isDebugEnabled()) {
++          DataNode.LOG.debug("Bumping up the client provided"
++              + " block's genstamp to latest " + replica.getGenerationStamp()
++              + " for block " + block);
++        }
++        block.setGenerationStamp(replica.getGenerationStamp());
+       }
+       if (replicaVisibleLength < 0) {
+         throw new IOException("Replica is not readable, block="
+-- 
+1.7.9.5
+

@@ -1,0 +1,167 @@
+From e2603d5fac1b12210751d51de5f5866d5b0acd9e Mon Sep 17 00:00:00 2001
+From: Kihwal Lee <kihwal@apache.org>
+Date: Fri, 20 Feb 2015 09:09:56 -0600
+Subject: [PATCH 495/596] HDFS-7788. Post-2.6 namenode may not start up with
+ an image containing inodes created with an old
+ release. Contributed by Rushabh Shah.
+
+(cherry picked from commit 7ae5255a1613ccfb43646f33eabacf1062c86e93)
+(cherry picked from commit b9157f92fc3e008e4f3029f8feeaf6acb52eb76f)
+
+Conflicts:
+    hadoop-hdfs-project/hadoop-hdfs/src/test/resources/image-with-zero-block-size.tar.gz
+
+(cherry picked from commit 633539b644b7a5d7eee7d8639ee7b7b24f6fec15)
+---
+ .../hadoop/hdfs/server/namenode/INodeFile.java     |    3 ++
+ .../org/apache/hadoop/hdfs/util/LongBitFormat.java |    4 ++
+ .../hadoop/hdfs/server/namenode/TestFSImage.java   |   48 ++++++++++++++++++++
+ .../resources/image-with-zero-block-size.tar.gz    |  Bin 0 -> 1372 bytes
+ 4 files changed, 55 insertions(+)
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/resources/image-with-zero-block-size.tar.gz
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeFile.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeFile.java
+index 9d999a5..45005c5 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeFile.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeFile.java
+@@ -103,6 +103,9 @@ static byte getStoragePolicyID(long header) {
+     static long toLong(long preferredBlockSize, short replication,
+         byte storagePolicyID) {
+       long h = 0;
++      if (preferredBlockSize == 0) {
++        preferredBlockSize = PREFERRED_BLOCK_SIZE.BITS.getMin();
++      }
+       h = PREFERRED_BLOCK_SIZE.BITS.combine(preferredBlockSize, h);
+       h = REPLICATION.BITS.combine(replication, h);
+       h = STORAGE_POLICY_ID.BITS.combine(storagePolicyID, h);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/LongBitFormat.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/LongBitFormat.java
+index 863d9f7..9399d84 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/LongBitFormat.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/LongBitFormat.java
+@@ -64,4 +64,8 @@ public long combine(long value, long record) {
+     }
+     return (record & ~MASK) | (value << OFFSET);
+   }
++  
++  public long getMin() {
++    return MIN;
++  }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestFSImage.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestFSImage.java
+index f21834e..2d6fc5a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestFSImage.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestFSImage.java
+@@ -28,10 +28,13 @@
+ 
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataOutputStream;
++import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.FileUtil;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
+ import org.apache.hadoop.hdfs.DFSOutputStream;
+ import org.apache.hadoop.hdfs.DistributedFileSystem;
++import org.apache.hadoop.hdfs.HdfsConfiguration;
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
+ import org.apache.hadoop.hdfs.client.HdfsDataOutputStream.SyncFlag;
+ import org.apache.hadoop.hdfs.protocol.HdfsConstants;
+@@ -40,10 +43,14 @@
+ import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.BlockUCState;
+ import org.apache.hadoop.hdfs.server.namenode.LeaseManager.Lease;
+ import org.apache.hadoop.hdfs.util.MD5FileUtils;
++import org.apache.hadoop.test.GenericTestUtils;
++import org.apache.hadoop.test.PathUtils;
+ import org.junit.Test;
+ 
+ public class TestFSImage {
+ 
++  private static final String HADOOP_2_7_ZER0_BLOCK_SIZE_TGZ =
++      "image-with-zero-block-size.tar.gz";
+   @Test
+   public void testPersist() throws IOException {
+     Configuration conf = new Configuration();
+@@ -183,4 +190,45 @@ public void testLoadMtimeAtime() throws Exception {
+       }
+     }
+   }
++  
++  /**
++   * In this test case, I have created an image with a file having
++   * preferredblockSize = 0. We are trying to read this image (since file with
++   * preferredblockSize = 0 was allowed pre 2.1.0-beta version. The namenode 
++   * after 2.6 version will not be able to read this particular file.
++   * See HDFS-7788 for more information.
++   * @throws Exception
++   */
++  @Test
++  public void testZeroBlockSize() throws Exception {
++    final Configuration conf = new HdfsConfiguration();
++    String tarFile = System.getProperty("test.cache.data", "build/test/cache")
++      + "/" + HADOOP_2_7_ZER0_BLOCK_SIZE_TGZ;
++    String testDir = PathUtils.getTestDirName(getClass());
++    File dfsDir = new File(testDir, "image-with-zero-block-size");
++    if (dfsDir.exists() && !FileUtil.fullyDelete(dfsDir)) {
++      throw new IOException("Could not delete dfs directory '" + dfsDir + "'");
++    }
++    FileUtil.unTar(new File(tarFile), new File(testDir));
++    File nameDir = new File(dfsDir, "name");
++    GenericTestUtils.assertExists(nameDir);
++    conf.set(DFSConfigKeys.DFS_NAMENODE_NAME_DIR_KEY, 
++        nameDir.getAbsolutePath());
++    MiniDFSCluster cluster = new MiniDFSCluster.Builder(conf).numDataNodes(1)
++        .format(false)
++        .manageDataDfsDirs(false)
++        .manageNameDfsDirs(false)
++        .waitSafeMode(false)
++        .build();
++    try {
++      FileSystem fs = cluster.getFileSystem();
++      Path testPath = new Path("/tmp/zeroBlockFile");
++      assertTrue("File /tmp/zeroBlockFile doesn't exist ", fs.exists(testPath));
++      assertTrue("Name node didn't come up", cluster.isNameNodeUp(0));
++    } finally {
++      cluster.shutdown();
++      //Clean up
++      FileUtil.fullyDelete(dfsDir);
++    }
++  }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/image-with-zero-block-size.tar.gz b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/image-with-zero-block-size.tar.gz
+new file mode 100644
+index 0000000000000000000000000000000000000000..660f8a31289c290158e3d3bd690d471194d3a10f
+GIT binary patch
+literal 1372
+zcmV-i1*7^OiwFRhNdi>>1MQl@Puo@;$DIJhSkPLmD_#$4nrhQpDdD~6_iP7=LkJE;
+zDh^80_86I9N;E=HoT#*yu}(YhKbR(M$7<SThfO>7vg=OMH0?I2JM1uRclL9Djl_Tx
+zni>J`gNW^CKfm|<-uL@^c}{YA+1_4s>{X}XCP|86I$f>VkDbJmYI8mD%xTmUD;xF7
+zhY7d(%n?op0yIk7TcCRjCy9Uw)se0;l@bAAoe(6%woh4JU$oq&-GHjR?tQu&cTONE
+zW;d%fXBJbU5sWBGNh*p}4y6%2MUxCps8~l-I_ny92FdYapB`8lo*s0@ye-x>t$mFD
+z_k*@vI`yyV6!gyqR)Z5b(0`>?sn{#WTU^Tphdkjv=T!eE^uI4KY}&O`g@9iDAHxSF
+zZU5JGmHU4faR0yDoS=VC?gI$|z54$l{cDW-e<%d?zb^<>T8)OY+3cr`Apgh2>wkt2
+zrIayUKm=3RaQ_bh@cP;zuUCnRlT0TJV?$$757D73$62?B(;q?l-<SJq#ev@ZzeE2j
+z#oYhHpx6HQ#ep@qowba7&}413qw50wUnO1r&lp_J{XYbb^ncax+&tCxdi%t){z$+y
+z@2r7&BsdrJs{cOZ?&FaDkM@6E>(;-@!2d%L(Ixl)6&=3a8!FXSnNz_lMhe-QhATEh
+z2K3b$i`_e+=efquJ*STU56wa`m$!N;BPjmwt^axYS9PL-KM<lJ#^Zk&_`cz3<e2q8
+z++P1vx#lkvz3RUYx%&u;|3t&x`lpEU_#Xy$9yzPAtg{lsMhqD<RG&dwEK@AS2*OPA
+zhJd?eSDf7ZEM^8ZQZVr+Qe^|4n$v*9rsFm<2S-w+<hcft+-AK2!>aUj%bB&(OJ>>1
+z&zn+vXl>Q&8<1~qIf0o*)Re(gn!qTj(_{)I4Lt##Lx~Qvj}#OrZP-uit>!~`^ws+2
+zY(hiaeg?~_<G-_7ZMsKH3R%LR)<^uOI;0a##hAzcFzEgLACLbRkzV!RkKDDcGJ@hi
+zVm|#7#^Zk|?C$Qq^tKB8kMF0AJW0~8rw%1t`SH;=x6h(>oHxyzSpV-XBPjlNy#MvC
+zgMG&1e<=9Y{|QP`Lt_Ny;H0<rza2Twx;>o!7{K~}U>O1NA0r)i>7Qzh@%SGGi}TrH
+zZfODE5dZn?x4%c^SEI_S(U|bT4ls;{uZW-QMC74qF)Dw&6S*nedr$oJ`!D|Z?ykJM
+z&qvC^-frafpOL5_M8H+x`sZ-{P_wpm?|t$2&Mdo;qw=hY5g7`*IpK}NId2$ds~b){
+z56OG^mAy?&xck+9mKh}7f%<1QsxU;$R^D1lFBi=D2N|=BHC2T;LJXsfC&%DBOcKE#
+zUKYkgXvpLc)NV|C?(IRDir31?$!VzVbVupKB20|Ly~cYxf(*wo;R@6VcA{c*T#QVL
+zjh4G^udKUQ#ptBuwzizc<3_!;^>YL+dkJm47N3wttztQ6W%KfsBF4w1k({?ABL5Uo
+zZpCG3tbJ6T&lTkB%3qQAyV6uPci$|QA6WBdA(OX?rNV<uDVMk8ca%?~@oSP;w9?DP
+z#e7K~Q9h5xuS*jL32>KeRvuHnjK*(B*Y<8)FtcXCv@#~t`b9MUwsf^<W(sDhyp*=m
+z3uXZ>f6=~4CY@O{|4SWJzKzD;lE$I*oV8FcrRVOO@-5{Dc=*CEXFYH^1L4&3Ki6?K
+z%gycTYH%4r^S{Ht|7O&C|Ep5UfBzQ>eEsKg)2sgbkh_n7`5)lZKT&l){|f{Di(L+f
+e!{Kl^91e%W;cz${4u`|JnEVUi_ApuiPyhhO%GA67
+
+literal 0
+HcmV?d00001
+
+-- 
+1.7.9.5
+

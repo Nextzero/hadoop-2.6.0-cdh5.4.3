@@ -1,0 +1,55 @@
+From 20627637a1bd604aef6061a093aea115c39df209 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Mon, 28 Oct 2013 14:52:19 -0700
+Subject: [PATCH 113/596] MR1: MAPREDUCE-5206. JT can show the same job
+ multiple times in Retired Jobs section
+
+Reason: Fixes a JT pseudo-leak reported in CDH-9823
+Ref: CDH-9823
+(cherry picked from commit 1e3313c17a39c682689814391cb7b972408a4cbf)
+(cherry picked from commit 9d1fecec93e5ce13a3eb44b2fedf437147a43ab5)
+(cherry picked from commit 16275098f3eb9be386d4df7b1367075049bea24e)
+(cherry picked from commit 80fdec50f74efb22e33c93142ff482ca4de66255)
+---
+ .../org/apache/hadoop/mapred/JobTracker.java       |   20 +++++++++++++++-----
+ 1 file changed, 15 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
+index af3ae89..a8c17fe 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
+@@ -640,16 +640,26 @@ public void run() {
+               Map.Entry<String, ArrayList<JobInProgress>> entry = 
+                 userToJobsMapIt.next();
+               ArrayList<JobInProgress> userJobs = entry.getValue();
++
++              // Remove retiredJobs from userToJobsMap to ensure we don't
++              // retire them multiple times
+               Iterator<JobInProgress> it = userJobs.iterator();
+-              while (it.hasNext() && 
+-                  userJobs.size() > MAX_COMPLETE_USER_JOBS_IN_MEMORY) {
++              while (it.hasNext()) {
+                 JobInProgress jobUser = it.next();
+                 if (retiredJobs.contains(jobUser)) {
+-                  LOG.info("Removing from userToJobsMap: " + 
++                  LOG.info("Removing from userToJobsMap: " +
+                       jobUser.getJobID());
+                   it.remove();
+-                } else if (minConditionToRetire(jobUser, now)) {
+-                  LOG.info("User limit exceeded. Marking job: " + 
++                }
++              }
++
++              // Now, check for #jobs per user
++              it = userJobs.iterator();
++              while (it.hasNext() &&
++                  userJobs.size() > MAX_COMPLETE_USER_JOBS_IN_MEMORY) {
++                JobInProgress jobUser = it.next();
++                if (minConditionToRetire(jobUser, now)) {
++                  LOG.info("User limit exceeded. Marking job: " +
+                       jobUser.getJobID() + " for retire.");
+                   retiredJobs.add(jobUser);
+                   it.remove();
+-- 
+1.7.9.5
+

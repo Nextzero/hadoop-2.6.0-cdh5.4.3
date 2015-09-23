@@ -1,0 +1,45 @@
+From 7bb71a16651e394f24a2ed2755351d93472b7c90 Mon Sep 17 00:00:00 2001
+From: Harsh J <harsh@cloudera.com>
+Date: Mon, 15 Dec 2014 14:26:22 +0530
+Subject: [PATCH 460/596] MAPREDUCE-6194. Bubble up final exception in
+ failures during creation of output collectors.
+ Contributed by Varun Saxena.
+
+(cherry picked from commit 298d09c9b583088f364038adcb1edf1eb1c2c196)
+(cherry picked from commit a3fa1f0761b901740a68cdb843b0025eed34bbb4)
+
+Conflicts:
+	hadoop-mapreduce-project/CHANGES.txt
+---
+ .../java/org/apache/hadoop/mapred/MapTask.java     |    5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/MapTask.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/MapTask.java
+index 75b4141..1a4901b 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/MapTask.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/MapTask.java
+@@ -387,6 +387,7 @@ public Progress getSortPhase() {
+     Class<?>[] collectorClasses = job.getClasses(
+       JobContext.MAP_OUTPUT_COLLECTOR_CLASS_ATTR, MapOutputBuffer.class);
+     int remainingCollectors = collectorClasses.length;
++    Exception lastException = null;
+     for (Class clazz : collectorClasses) {
+       try {
+         if (!MapOutputCollector.class.isAssignableFrom(clazz)) {
+@@ -406,10 +407,12 @@ public Progress getSortPhase() {
+         if (--remainingCollectors > 0) {
+           msg += " (" + remainingCollectors + " more collector(s) to try)";
+         }
++        lastException = e;
+         LOG.warn(msg, e);
+       }
+     }
+-    throw new IOException("Unable to initialize any output collector");
++    throw new IOException("Initialization of all the collectors failed. " +
++      "Error in last collector was :" + lastException.getMessage(), lastException);
+   }
+ 
+   @SuppressWarnings("unchecked")
+-- 
+1.7.9.5
+

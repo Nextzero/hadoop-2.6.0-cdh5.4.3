@@ -1,0 +1,65 @@
+From faafe4428ca688a1803b9e7a78c2b20ee3ef1707 Mon Sep 17 00:00:00 2001
+From: "Aaron T. Myers" <atm@apache.org>
+Date: Tue, 17 Mar 2015 19:41:36 -0700
+Subject: [PATCH 505/596] HADOOP-11722. Some Instances of Services using
+ ZKDelegationTokenSecretManager go down when old
+ token cannot be deleted. Contributed by Arun
+ Suresh.
+
+(cherry picked from commit fc90bf7b27cc20486f2806670a14fd7d654b0a31)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+---
+ .../delegation/ZKDelegationTokenSecretManager.java |   21 ++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/token/delegation/ZKDelegationTokenSecretManager.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/token/delegation/ZKDelegationTokenSecretManager.java
+index ec522dcf..73c3ab8 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/token/delegation/ZKDelegationTokenSecretManager.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/token/delegation/ZKDelegationTokenSecretManager.java
+@@ -55,6 +55,7 @@
+ import org.apache.hadoop.security.token.delegation.web.DelegationTokenManager;
+ import org.apache.zookeeper.CreateMode;
+ import org.apache.zookeeper.KeeperException;
++import org.apache.zookeeper.KeeperException.NoNodeException;
+ import org.apache.zookeeper.ZooDefs.Perms;
+ import org.apache.zookeeper.client.ZooKeeperSaslClient;
+ import org.apache.zookeeper.data.ACL;
+@@ -709,7 +710,15 @@ protected void removeStoredMasterKey(DelegationKey key) {
+     try {
+       if (zkClient.checkExists().forPath(nodeRemovePath) != null) {
+         while(zkClient.checkExists().forPath(nodeRemovePath) != null){
+-          zkClient.delete().guaranteed().forPath(nodeRemovePath);
++          try {
++            zkClient.delete().guaranteed().forPath(nodeRemovePath);
++          } catch (NoNodeException nne) {
++            // It is possible that the node might be deleted between the
++            // check and the actual delete.. which might lead to an
++            // exception that can bring down the daemon running this
++            // SecretManager
++            LOG.debug("Node already deleted by peer " + nodeRemovePath);
++          }
+         }
+       } else {
+         LOG.debug("Attempted to delete a non-existing znode " + nodeRemovePath);
+@@ -761,7 +770,15 @@ protected void removeStoredToken(TokenIdent ident)
+     try {
+       if (zkClient.checkExists().forPath(nodeRemovePath) != null) {
+         while(zkClient.checkExists().forPath(nodeRemovePath) != null){
+-          zkClient.delete().guaranteed().forPath(nodeRemovePath);
++          try {
++            zkClient.delete().guaranteed().forPath(nodeRemovePath);
++          } catch (NoNodeException nne) {
++            // It is possible that the node might be deleted between the
++            // check and the actual delete.. which might lead to an
++            // exception that can bring down the daemon running this
++            // SecretManager
++            LOG.debug("Node already deleted by peer " + nodeRemovePath);
++          }
+         }
+       } else {
+         LOG.debug("Attempted to remove a non-existing znode " + nodeRemovePath);
+-- 
+1.7.9.5
+

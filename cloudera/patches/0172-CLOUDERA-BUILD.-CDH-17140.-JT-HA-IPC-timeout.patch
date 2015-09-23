@@ -1,0 +1,59 @@
+From c22cf5dcdbe23a617deb117d2ae9090ac38fe286 Mon Sep 17 00:00:00 2001
+From: bc Wong <bcwalrus@cloudera.com>
+Date: Mon, 24 Mar 2014 21:41:47 -0700
+Subject: [PATCH 172/596] CLOUDERA-BUILD. CDH-17140. JT HA IPC timeout
+
+(cherry picked from commit 6ede546173b585c10a7be90d2b44832bf7442b3d)
+(cherry picked from commit 38f3cdd2cd769c6e4ecd8c231b9f9144fa86370c)
+
+Conflicts:
+	hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java
+---
+ .../apache/hadoop/mapred/JobTrackerProxies.java    |   10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java
+index 56b8731..79284269 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java
+@@ -27,6 +27,7 @@
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
+ import org.apache.hadoop.hdfs.DFSUtil;
+ import org.apache.hadoop.io.Text;
+ import org.apache.hadoop.io.retry.FailoverProxyProvider;
+@@ -129,6 +130,11 @@ public Text getDelegationTokenService() {
+     }
+     return new ProxyAndInfo<T>(proxy, dtService);
+   }
++
++  private static int getRpcTimeout(Configuration conf) {
++    return conf.getInt(CommonConfigurationKeys.IPC_PING_INTERVAL_KEY,
++                       CommonConfigurationKeys.IPC_PING_INTERVAL_DEFAULT);
++  }
+   
+   private static JobSubmissionProtocol createJTProxyWithJobSubmissionProtocol(
+       InetSocketAddress address, Configuration conf, UserGroupInformation ugi,
+@@ -142,7 +148,7 @@ private static JobSubmissionProtocol createJTProxyWithJobSubmissionProtocol(
+ 
+     JobSubmissionProtocol proxy = RPC.getProtocolProxy(
+         JobSubmissionProtocol.class, version, address, ugi, conf,
+-        NetUtils.getDefaultSocketFactory(conf), 0, null).getProxy();
++        NetUtils.getDefaultSocketFactory(conf), getRpcTimeout(conf), null).getProxy();
+     return proxy;
+   }
+   
+@@ -153,7 +159,7 @@ private static InterTrackerProtocol createJTProxyWithInterTrackerProtocol(
+ 
+     return RPC.waitForProtocolProxy(
+         InterTrackerProtocol.class, InterTrackerProtocol.versionID, address,
+-        conf).getProxy();
++        conf, getRpcTimeout(conf), null, Long.MAX_VALUE).getProxy();
+   }
+   
+   @SuppressWarnings("unchecked")
+-- 
+1.7.9.5
+

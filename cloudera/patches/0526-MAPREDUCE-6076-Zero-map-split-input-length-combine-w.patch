@@ -1,0 +1,95 @@
+From 89f5cc010aab7b5d56771025d59d5631d83f9992 Mon Sep 17 00:00:00 2001
+From: Zhihai Xu <zxu@cloudera.com>
+Date: Wed, 1 Apr 2015 17:39:05 -0700
+Subject: [PATCH 526/596] MAPREDUCE-6076: Zero map split input length combine
+ with none zero map split input length will cause
+ MR1 job hung.
+
+(cherry picked from commit 31f8133c628e3c62c145fc91376a11a6f85f1e81)
+---
+ .../org/apache/hadoop/mapred/JobInProgress.java    |    6 +++++-
+ .../apache/hadoop/mapred/ResourceEstimator.java    |   12 ++++++++++--
+ .../hadoop/mapred/TestResourceEstimation.java      |   19 +++++++++++--------
+ 3 files changed, 26 insertions(+), 11 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+index ed97e53..5fd3ec7 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+@@ -932,7 +932,11 @@ int getNumRestarts() {
+   long getInputLength() {
+     return inputLength;
+   }
+- 
++
++  void setInputLength(long length) {
++    inputLength = length;
++  }
++
+   boolean isCleanupLaunched() {
+     return launchedCleanup;
+   }
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ResourceEstimator.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ResourceEstimator.java
+index 924011e..6a39b9a 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ResourceEstimator.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/ResourceEstimator.java
+@@ -52,8 +52,16 @@ protected synchronized void updateWithCompletedTask(TaskStatus ts,
+     //-1 indicates error, which we don't average in.
+     if(tip.isMapTask() &&  ts.getOutputSize() != -1)  {
+       completedMapsUpdates++;
+-
+-      completedMapsInputSize+=(tip.getMapInputSize()+1);
++      long inputSize = tip.getMapInputSize();
++      if (inputSize == 0) {
++        // if map input size is 0, use map output size as input size
++        // to avoid job hung.
++        inputSize = ts.getOutputSize();
++        // map input size is changed, update JobInProgress.inputLength.
++        long length = job.getInputLength() + inputSize;
++        job.setInputLength(length);
++      }
++      completedMapsInputSize+=(inputSize+1);
+       completedMapsOutputSize+=ts.getOutputSize();
+ 
+       if(LOG.isDebugEnabled()) {
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestResourceEstimation.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestResourceEstimation.java
+index a7c091b..ef91954 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestResourceEstimation.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestResourceEstimation.java
+@@ -36,12 +36,14 @@ public void testResourceEstimator() throws Exception {
+         UtilsForTests.getJobTracker());
+     //unfortunately, we can't set job input size from here.
+     ResourceEstimator re = new ResourceEstimator(jip);
+-    
+-    for(int i = 0; i < maps / 10 ; ++i) {
+ 
+-      long estOutSize = re.getEstimatedMapOutputSize();
+-      System.out.println(estOutSize);
+-      assertEquals(0, estOutSize);
++    for(int i = 0; i < maps; ++i) {
++      if (i < maps / 10) {
++        // re.thresholdToUse is maps / 10
++        long estOutSize = re.getEstimatedMapOutputSize();
++        System.out.println(estOutSize);
++        assertEquals(0, estOutSize);
++      }
+       
+       TaskStatus ts = new MapTaskStatus();
+       ts.setOutputSize(singleMapOutputSize);
+@@ -101,9 +103,10 @@ long getInputLength() {
+     TaskInProgress tip = 
+       new TaskInProgress(jid, "", split, jip.jobtracker, jc, jip, 0, 1);
+     re.updateWithCompletedTask(ts, tip);
+-    
+-    long expectedTotalMapOutSize = (singleMapOutputSize*11) * 
+-      ((maps*singleMapInputSize)+maps)/((singleMapInputSize+1)*10+1);
++    // for 0 input size, use output size as input size for calculation
++    long expectedTotalMapOutSize = (singleMapOutputSize*11) *
++        ((maps*singleMapInputSize)+maps)/((singleMapInputSize+1)*10+
++        singleMapOutputSize+1);
+     assertEquals(2* expectedTotalMapOutSize/maps, re.getEstimatedMapOutputSize());
+   }
+ 
+-- 
+1.7.9.5
+

@@ -1,0 +1,37 @@
+From 8f19e3a1772398f511cbcc796815b0a1fb81c70b Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <karthik@kambatla.com>
+Date: Tue, 11 Feb 2014 14:19:54 -0800
+Subject: [PATCH 124/596] MR1: MAPREDUCE-2324. Job should fail if a reduce
+ task can't be scheduled anywhere
+
+(cherry picked from commit f1ace2953b28b97b89779cd8d369c5b678d1f949)
+(cherry picked from commit 3fac7c42755f26952da062908dceaec8c7c65e3a)
+(cherry picked from commit 4bc41264a68eeff84cf2c5b47d8951dade481631)
+---
+ .../org/apache/hadoop/mapred/JobInProgress.java    |   10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+index 5a92909..ed97e53 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+@@ -2444,16 +2444,6 @@ private synchronized int findNewReduceTask(TaskTrackerStatus tts,
+       return -1;
+     }
+ 
+-    long outSize = resourceEstimator.getEstimatedReduceInputSize();
+-    long availSpace = tts.getResourceStatus().getAvailableSpace();
+-    if(availSpace < outSize) {
+-      LOG.warn("No room for reduce task. Node " + taskTracker + " has " +
+-                availSpace + 
+-               " bytes free; but we expect reduce input to take " + outSize);
+-
+-      return -1; //see if a different TIP might work better. 
+-    }
+-    
+     // 1. check for a never-executed reduce tip
+     // reducers don't have a cache and so pass -1 to explicitly call that out
+     tip = findTaskFromList(nonRunningReduces, tts, numUniqueHosts, false);
+-- 
+1.7.9.5
+

@@ -1,0 +1,94 @@
+From 6f1241627c9a406263547a7945d481e898378116 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@apache.org>
+Date: Fri, 19 Dec 2014 11:39:04 -0800
+Subject: [PATCH 157/596] MAPREDUCE-6198. NPE from
+ JobTracker#resolveAndAddToTopology in MR1 cause
+ initJob and heartbeat failure. (zxu via rkanter)
+
+(cherry picked from commit eb5191195ae142f6678b633af5625a4fce5c9c59)
+
+Conflicts:
+	CHANGES.txt
+	src/core/org/apache/hadoop/net/ScriptBasedMapping.java
+	src/mapred/org/apache/hadoop/mapred/JobTracker.java
+
+(cherry picked from commit 25878e690564edb7838df18b8f3e388faac53874)
+---
+ .../org/apache/hadoop/mapred/JobTracker.java       |    9 +++-
+ .../hadoop/mapred/TestJobTrackerTopology.java      |   43 ++++++++++++++++++++
+ 2 files changed, 51 insertions(+), 1 deletion(-)
+ create mode 100644 hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJobTrackerTopology.java
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
+index 1e61965..1e00017 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
+@@ -2759,7 +2759,14 @@ public Node resolveAndAddToTopology(String name) {
+     List <String> tmpList = new ArrayList<String>(1);
+     tmpList.add(name);
+     List <String> rNameList = dnsToSwitchMapping.resolve(tmpList);
+-    String rName = rNameList.get(0);
++    String rName = null;
++    if (rNameList == null || rNameList.get(0) == null) {
++      rName = NetworkTopology.DEFAULT_RACK;
++      LOG.warn("Couldn't resolve " + name + ". Falling back to "
++          + NetworkTopology.DEFAULT_RACK);
++    } else {
++      rName = rNameList.get(0);
++    }
+     String networkLoc = NodeBase.normalize(rName);
+     return addHostToNodeMapping(name, networkLoc);
+   }
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJobTrackerTopology.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJobTrackerTopology.java
+new file mode 100644
+index 0000000..4443fc5
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJobTrackerTopology.java
+@@ -0,0 +1,43 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.mapred;
++
++import junit.framework.TestCase;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
++import org.junit.Assert;
++
++/**
++ * Test {@link JobTracker} w.r.t resolveAndAddToTopology.
++ */
++public class TestJobTrackerTopology extends TestCase {
++
++  public void testJobTrackerResolveAndAddToTopology() throws Exception {
++    JobConf conf = new JobConf();
++    conf.set(CommonConfigurationKeys.NET_TOPOLOGY_SCRIPT_FILE_NAME_KEY,
++        "test.sh");
++    conf = MiniMRCluster.configureJobConf(conf, "file:///", 0, 0, null);
++
++    JobTracker jt = JobTracker.startTracker(conf);
++    try {
++      jt.resolveAndAddToTopology("test.host");
++    } catch (NullPointerException e) {
++      Assert.fail("NullPointerException should not happen");
++    }
++    jt.stopTracker();
++  }
++}
+\ No newline at end of file
+-- 
+1.7.9.5
+

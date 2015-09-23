@@ -1,0 +1,26 @@
+From 91eca48a17653232537bbff1aee162cb4a47ccd0 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Thu, 20 Nov 2014 15:36:57 -0800
+Subject: [PATCH 363/596] CLOUDERA-BUILD. Merge MR1 portions of MAPREDUCE-6169
+
+---
+ .../mapred/org/apache/hadoop/mapred/Merger.java    |    3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/Merger.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/Merger.java
+index 2a8594c..4489386 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/Merger.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/Merger.java
+@@ -358,6 +358,9 @@ private void adjustPriorityQueue(Segment<K, V> reader) throws IOException{
+     }
+ 
+     public boolean next() throws IOException {
++      key = null;
++      value = null;
++
+       if (size() == 0)
+         return false;
+ 
+-- 
+1.7.9.5
+

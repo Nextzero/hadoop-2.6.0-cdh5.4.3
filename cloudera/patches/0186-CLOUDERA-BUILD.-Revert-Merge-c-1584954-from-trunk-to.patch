@@ -1,0 +1,66 @@
+From ace2f7bc6fb18e0e0e65e7bdef648ef452599912 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Wed, 24 Sep 2014 15:54:47 -0700
+Subject: [PATCH 186/596] CLOUDERA-BUILD. Revert "Merge -c 1584954 from trunk
+ to branch-2 to fix YARN-1898. Addendum patch to
+ ensure /jmx and /metrics are re-directed to Active
+ RM."
+
+This reverts commit 8a8afe468b1e488b9d6e1736d05076df7d1ece61.
+
+(cherry picked from commit fc5d03864ee29dec432de6bf8ab184b04b1d7e58)
+---
+ .../apache/hadoop/yarn/client/TestRMFailover.java  |   16 ++++++++--------
+ .../resourcemanager/webapp/RMWebAppFilter.java     |    2 +-
+ 2 files changed, 9 insertions(+), 9 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/TestRMFailover.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/TestRMFailover.java
+index 0634cc3..4a1522d 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/TestRMFailover.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/TestRMFailover.java
+@@ -288,14 +288,8 @@ public void testRMWebAppRedirect() throws YarnException,
+     String header = getHeader("Refresh", rm2Url);
+     assertTrue(header.contains("; url=" + rm1Url));
+ 
+-    header = getHeader("Refresh", rm2Url + "/metrics");
+-    assertTrue(header.contains("; url=" + rm1Url));
+-
+-    header = getHeader("Refresh", rm2Url + "/jmx");
+-    assertTrue(header.contains("; url=" + rm1Url));
+-
+-    // standby RM links /conf, /stacks, /logLevel, /static, /logs,
+-    // /cluster/cluster as well as webService
++    // standby RM links /conf, /stacks, /logLevel, /metrics, /jmx,
++    // /static, /logs, /cluster/cluster as well as webService
+     // /ws/v1/cluster/info should not be redirected to active RM
+     header = getHeader("Refresh", rm2Url + "/cluster/cluster");
+     assertEquals(null, header);
+@@ -309,6 +303,12 @@ public void testRMWebAppRedirect() throws YarnException,
+     header = getHeader("Refresh", rm2Url + "/logLevel");
+     assertEquals(null, header);
+ 
++    header = getHeader("Refresh", rm2Url + "/metrics");
++    assertEquals(null, header);
++
++    header = getHeader("Refresh", rm2Url + "/jmx");
++    assertEquals(null, header);
++
+     header = getHeader("Refresh", rm2Url + "/static");
+     assertEquals(null, header);
+ 
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/RMWebAppFilter.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/RMWebAppFilter.java
+index 49fd1f5..653432b 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/RMWebAppFilter.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/RMWebAppFilter.java
+@@ -46,7 +46,7 @@
+ 
+   // define a set of URIs which do not need to do redirection
+   private static final Set<String> NON_REDIRECTED_URIS = Sets.newHashSet(
+-      "/conf", "/stacks", "/logLevel", "/logs");
++      "/conf", "/stacks", "/logLevel", "/metrics", "/jmx", "/logs");
+ 
+   @Inject
+   public RMWebAppFilter(Injector injector) {
+-- 
+1.7.9.5
+

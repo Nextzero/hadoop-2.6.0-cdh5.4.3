@@ -1,0 +1,31 @@
+From f4b99105069a6930cef5c6c947fba759973c7d93 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Tue, 31 Dec 2013 13:08:26 -0800
+Subject: [PATCH 118/596] MR1: Backport MAPREDUCE-5702. Remove spurious
+ closing HTML tags from TaskLogServlet. (rkanter via
+ kasha)
+
+(cherry picked from commit ee68b5ba9bddac3a89c4163a328051e3542d407b)
+(cherry picked from commit 8a38e725db090cab73ffe951dd3ae5d7cc7095ed)
+(cherry picked from commit 3e3615e32b3b50a76e8c3d4bf3af6a93611c6950)
+(cherry picked from commit 09c20486c432d0f02c0dc245f0ea08e8af7ba65f)
+---
+ .../org/apache/hadoop/mapred/TaskLogServlet.java   |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskLogServlet.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskLogServlet.java
+index 6bddb7d..09650c7 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskLogServlet.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskLogServlet.java
+@@ -108,7 +108,7 @@ private void printTaskLog(HttpServletResponse response,
+       }
+       taskLogReader.close();
+       if( !plainText ) {
+-        out.write("</pre></td></tr></table><hr><br>\n".getBytes());
++        out.write("</pre><hr><br>\n".getBytes());
+       }
+     } catch (IOException ioe) {
+       if (filter == TaskLog.LogName.DEBUGOUT) {
+-- 
+1.7.9.5
+

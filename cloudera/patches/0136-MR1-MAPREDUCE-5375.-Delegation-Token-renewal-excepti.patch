@@ -1,0 +1,28 @@
+From 33020f46b4b1a0e18272251071a29aa68a140a53 Mon Sep 17 00:00:00 2001
+From: Zhihai Xu <zxu@cloudera.com>
+Date: Fri, 20 Jun 2014 12:35:05 -0700
+Subject: [PATCH 136/596] MR1: MAPREDUCE-5375. Delegation Token renewal
+ exception in jobtracker logs
+
+(cherry picked from commit 3ebccb3d42edcfd031fea342f0975fcae2748478)
+(cherry picked from commit 89420fcfb12a8a54a368e66547f584f9bcadc6af)
+---
+ .../org/apache/hadoop/mapred/JobTracker.java       |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
+index b223359..1e61965 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
+@@ -3770,7 +3770,7 @@ public long renewDelegationToken(Token<DelegationTokenIdentifier> token
+       throw new IOException(
+           "Delegation Token can be issued only with kerberos authentication");
+     }
+-    String user = UserGroupInformation.getCurrentUser().getUserName();
++    String user = UserGroupInformation.getCurrentUser().getShortUserName();
+     return secretManager.renewToken(token, user);
+   }  
+ 
+-- 
+1.7.9.5
+

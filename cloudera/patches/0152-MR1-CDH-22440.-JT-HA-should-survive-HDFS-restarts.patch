@@ -1,0 +1,96 @@
+From 13cfd8e7391c384b72832cd970225ebcac493246 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Mon, 27 Oct 2014 14:24:16 -0700
+Subject: [PATCH 152/596] MR1: CDH-22440. JT HA should survive HDFS restarts
+
+(cherry picked from commit e4170054ec7389d3a04a85e5a13650f3ed473952)
+---
+ .../hadoop/mapred/JobTrackerHAServiceProtocol.java |   38 ++++++++++++--------
+ 1 file changed, 23 insertions(+), 15 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHAServiceProtocol.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHAServiceProtocol.java
+index bda2c4c..8f9c80e 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHAServiceProtocol.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHAServiceProtocol.java
+@@ -98,7 +98,8 @@ public void run() {
+               " no longer exists. New active has started.");
+         }
+       } catch (Throwable t) {
+-        doImmediateShutdown(t);
++        LOG.fatal("Error checking system directory.", t);
++        transitionToStandby(true);
+       }
+     }
+   }
+@@ -139,7 +140,9 @@ public void transitionToActive(StateChangeRequestInfo reqInfo)
+       
+       jtRunner.startJobTracker(jtConf);
+     } catch (Throwable t) {
+-      doImmediateShutdown(t);
++      LOG.fatal("Unable to transition to active", t);
++      transitionToStandby(true);
++      return;
+     }
+     long activeCheckMillis = conf.getLong(HAUtil.MR_HA_ACTIVE_CHECK_MILLIS,
+         HAUtil.MR_HA_ACTIVE_CHECK_MILLIS_DEFAULT);
+@@ -217,9 +220,12 @@ private String createSysDirName(long counter) {
+     return SYSTEM_DIR_SEQUENCE_PREFIX + paddedCounter;
+   }
+ 
+-  @Override
+-  public void transitionToStandby(StateChangeRequestInfo reqInfo)
+-      throws ServiceFailedException, AccessControlException, IOException {
++  /**
++   * Helper method to transition the JT to standby. This is to be invoked
++   * either by {@link #transitionToActive(StateChangeRequestInfo)},
++   * or when we encounter a FATAL issue in an HA setting.
++   */
++  private synchronized void transitionToStandby(boolean startRedirector) {
+     if (haState == HAServiceState.STANDBY) {
+       LOG.info("Already in standby state.");
+       return;
+@@ -230,7 +236,9 @@ public void transitionToStandby(StateChangeRequestInfo reqInfo)
+         sysDirMonitorExecutor.shutdownNow();
+       }
+       jtRunner.stopJobTracker();
+-      httpRedirector.start();
++      if (startRedirector) {
++        httpRedirector.start();
++      }
+     } catch (Throwable t) {
+       doImmediateShutdown(t);
+     }
+@@ -239,21 +247,21 @@ public void transitionToStandby(StateChangeRequestInfo reqInfo)
+     haState = HAServiceState.STANDBY;
+     LOG.info("Transitioned to standby");
+   }
++
++  @Override
++  public void transitionToStandby(StateChangeRequestInfo reqInfo)
++      throws ServiceFailedException, AccessControlException, IOException {
++    transitionToStandby(true);
++  }
+   
+   public void stop() {
+     LOG.info("Stopping");
++    transitionToStandby(false);
+     try {
+-      if (sysDirMonitorExecutor != null) {
+-        sysDirMonitorExecutor.shutdownNow();
+-      }
+-      jtRunner.stopJobTracker();
+       httpRedirector.stop();
+-    } catch (Throwable t) {
+-      doImmediateShutdown(t);
++    } catch (Exception e) {
++      LOG.fatal("Error stopping HTTP Redirector. Stopping anyway.", e);
+     }
+-    sysDirMonitorExecutor = null;
+-    currentSysDir = null;
+-    haState = HAServiceState.STANDBY;
+     LOG.info("Stopped");
+   }
+   
+-- 
+1.7.9.5
+

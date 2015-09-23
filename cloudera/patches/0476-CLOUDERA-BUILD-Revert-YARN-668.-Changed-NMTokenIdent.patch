@@ -1,0 +1,1883 @@
+From 598a65e96a90e5e3f727df16843b4442832f9b5c Mon Sep 17 00:00:00 2001
+From: Anubhav Dhoot <adhoot@cloudera.com>
+Date: Fri, 6 Mar 2015 16:23:26 -0800
+Subject: [PATCH 476/596] CLOUDERA-BUILD Revert "YARN-668. Changed
+ NMTokenIdentifier/AMRMTokenIdentifier/ContainerTokenIdentifier
+ to use protobuf object as the payload. Contributed
+ by Junping Du."
+
+This reverts commit cb08ed148449d4432d0006e1538d4088d3ff3806.
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/TestAMRMClient.java
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/security/TestYARNTokenIdentifier.java
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/TestContainerManagerSecurity.java
+
+(cherry picked from commit 7b6fe04e456adb617055c2d7f0b7f2a55abaf251)
+---
+ .../hadoop-yarn/hadoop-yarn-client/pom.xml         |   35 ----
+ .../api/impl/AMRMTokenIdentifierForTest.java       |  130 -------------
+ .../yarn/client/api/impl/TestAMRMClient.java       |   42 +----
+ .../src/test/proto/test_amrm_token.proto           |   31 ----
+ .../hadoop-yarn/hadoop-yarn-common/pom.xml         |   24 ---
+ .../hadoop/yarn/security/AMRMTokenIdentifier.java  |   86 ++++-----
+ .../yarn/security/ContainerTokenIdentifier.java    |  170 ++++++++---------
+ .../hadoop/yarn/security/NMTokenIdentifier.java    |   97 +++-------
+ .../main/proto/server/yarn_security_token.proto    |   53 ------
+ .../yarn/security/TestYARNTokenIdentifier.java     |  177 ------------------
+ .../containermanager/ContainerManagerImpl.java     |   10 +-
+ .../containermanager/container/TestContainer.java  |    4 +-
+ .../TestApplicationMasterService.java              |    2 +-
+ .../hadoop-yarn-server-tests/pom.xml               |   29 ---
+ .../server/ContainerTokenIdentifierForTest.java    |  195 --------------------
+ .../yarn/server/NMTokenIdentifierNewForTest.java   |  145 ---------------
+ .../yarn/server/TestContainerManagerSecurity.java  |  116 ++----------
+ .../src/test/proto/test_token.proto                |   48 -----
+ 18 files changed, 167 insertions(+), 1227 deletions(-)
+ delete mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/AMRMTokenIdentifierForTest.java
+ delete mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/proto/test_amrm_token.proto
+ delete mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/proto/server/yarn_security_token.proto
+ delete mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/security/TestYARNTokenIdentifier.java
+ delete mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/ContainerTokenIdentifierForTest.java
+ delete mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/NMTokenIdentifierNewForTest.java
+ delete mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/proto/test_token.proto
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/pom.xml b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/pom.xml
+index dd424e0..b99acdb 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/pom.xml
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/pom.xml
+@@ -149,39 +149,4 @@
+     </dependency>
+ 
+   </dependencies>
+-
+-  <build>
+-    <plugins>
+-      <plugin>
+-        <groupId>org.apache.hadoop</groupId>
+-        <artifactId>hadoop-maven-plugins</artifactId>
+-        <executions>
+-          <execution>
+-            <id>compile-protoc</id>
+-            <phase>generate-sources</phase>
+-            <goals>
+-              <goal>protoc</goal>
+-            </goals>
+-            <configuration>
+-              <protocVersion>${protobuf.version}</protocVersion>
+-              <protocCommand>${protoc.path}</protocCommand>
+-              <imports>
+-                <param>${basedir}/src/test/proto</param>
+-                <param>${basedir}/../../../hadoop-common-project/hadoop-common/src/main/proto</param>
+-                <param>${basedir}/../hadoop-yarn-api/src/main/proto</param>
+-              </imports>
+-              <source>
+-                <directory>${basedir}/src/test/proto</directory>
+-                <includes>
+-                  <include>test_amrm_token.proto</include>
+-                </includes>
+-              </source>
+-              <output>${project.build.directory}/generated-sources/java</output>
+-            </configuration>
+-          </execution>
+-        </executions>
+-      </plugin>
+-    </plugins>
+-  </build>
+-
+ </project>
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/AMRMTokenIdentifierForTest.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/AMRMTokenIdentifierForTest.java
+deleted file mode 100644
+index f94f0c8..0000000
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/AMRMTokenIdentifierForTest.java
++++ /dev/null
+@@ -1,130 +0,0 @@
+-/**
+-* Licensed to the Apache Software Foundation (ASF) under one
+-* or more contributor license agreements.  See the NOTICE file
+-* distributed with this work for additional information
+-* regarding copyright ownership.  The ASF licenses this file
+-* to you under the Apache License, Version 2.0 (the
+-* "License"); you may not use this file except in compliance
+-* with the License.  You may obtain a copy of the License at
+-*
+-*     http://www.apache.org/licenses/LICENSE-2.0
+-*
+-* Unless required by applicable law or agreed to in writing, software
+-* distributed under the License is distributed on an "AS IS" BASIS,
+-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-* See the License for the specific language governing permissions and
+-* limitations under the License.
+-*/
+-
+-package org.apache.hadoop.yarn.client.api.impl;
+-
+-import java.io.DataInput;
+-import java.io.DataInputStream;
+-import java.io.DataOutput;
+-import java.io.IOException;
+-
+-import org.apache.commons.io.IOUtils;
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+-import org.apache.hadoop.io.Text;
+-import org.apache.hadoop.security.UserGroupInformation;
+-import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
+-import org.apache.hadoop.yarn.api.records.NodeId;
+-import org.apache.hadoop.yarn.api.records.impl.pb.ApplicationAttemptIdPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.NodeIdPBImpl;
+-import org.apache.hadoop.yarn.proto.YarnSecurityTestAMRMTokenProtos.AMRMTokenIdentifierForTestProto;
+-import org.apache.hadoop.yarn.security.AMRMTokenIdentifier;
+-
+-import com.google.protobuf.TextFormat;
+-
+-public class AMRMTokenIdentifierForTest extends AMRMTokenIdentifier {
+-
+-  private static Log LOG = LogFactory.getLog(AMRMTokenIdentifierForTest.class);
+-
+-  public static final Text KIND = new Text("YARN_AM_RM_TOKEN");
+-  
+-  private AMRMTokenIdentifierForTestProto proto;
+-  private AMRMTokenIdentifierForTestProto.Builder builder;
+-  
+-  public AMRMTokenIdentifierForTest(){
+-    builder = AMRMTokenIdentifierForTestProto.newBuilder();
+-  }
+-  
+-  public AMRMTokenIdentifierForTest(AMRMTokenIdentifierForTestProto proto) {
+-    this.proto = proto;
+-  }
+-  
+-  public AMRMTokenIdentifierForTest(AMRMTokenIdentifier tokenIdentifier, 
+-      String message) {
+-    builder = AMRMTokenIdentifierForTestProto.newBuilder();
+-    builder.setAppAttemptId(tokenIdentifier.getProto().getAppAttemptId());
+-    builder.setKeyId(tokenIdentifier.getKeyId());
+-    builder.setMessage(message);
+-    proto = builder.build();
+-    builder = null;
+-  }
+-  
+-  @Override
+-  public void write(DataOutput out) throws IOException {
+-    out.write(proto.toByteArray());
+-  }
+-
+-  @Override
+-  public void readFields(DataInput in) throws IOException {
+-    DataInputStream dis = (DataInputStream)in;
+-    byte[] buffer = IOUtils.toByteArray(dis);
+-    proto = AMRMTokenIdentifierForTestProto.parseFrom(buffer);
+-  }
+-
+-  @Override
+-  public Text getKind() {
+-    return KIND;
+-  }
+-  
+-  public String getMessage() {
+-    return proto.getMessage();
+-  }
+-  
+-  public void setMessage(String message) {
+-    builder.setMessage(message);
+-  }
+-  
+-  public void build() {
+-    proto = builder.build();
+-    builder = null;
+-  }
+-  
+-  public ApplicationAttemptId getApplicationAttemptId() {
+-    return new ApplicationAttemptIdPBImpl(proto.getAppAttemptId());
+-  }
+-  
+-  public int getKeyId() {
+-    return proto.getKeyId();
+-  }
+-  
+-  public AMRMTokenIdentifierForTestProto getNewProto(){
+-    return this.proto;
+-  }
+-  
+-  @Override
+-  public int hashCode() {
+-    return this.proto.hashCode();
+-  }
+-
+-  @Override
+-  public boolean equals(Object other) {
+-    if (other == null)
+-      return false;
+-    if (other.getClass().isAssignableFrom(this.getClass())) {
+-      return this.getNewProto().equals(this.getClass().cast(other).getNewProto());
+-    }
+-    return false;
+-  }
+-  
+-  
+-  @Override
+-  public String toString() {
+-    return TextFormat.shortDebugString(this.proto);
+-  }
+-
+-}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/TestAMRMClient.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/TestAMRMClient.java
+index e24b5f6..789fdfa 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/TestAMRMClient.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/TestAMRMClient.java
+@@ -42,7 +42,6 @@
+ 
+ import org.junit.Assert;
+ import org.apache.hadoop.conf.Configuration;
+-import org.apache.hadoop.io.Text;
+ import org.apache.hadoop.security.Credentials;
+ import org.apache.hadoop.security.SecurityUtil;
+ import org.apache.hadoop.security.UserGroupInformation;
+@@ -932,38 +931,7 @@ public void testAMRMClientOnAMRMTokenRollOver() throws YarnException,
+       Assert.assertNotEquals(amrmToken_1, amrmToken_2);
+ 
+       // can do the allocate call with latest AMRMToken
+-      AllocateResponse response = amClient.allocate(0.1f);
+-      
+-      // Verify latest AMRMToken can be used to send allocation request.
+-      UserGroupInformation testUser1 =
+-          UserGroupInformation.createRemoteUser("testUser1");
+-      
+-      AMRMTokenIdentifierForTest newVersionTokenIdentifier = 
+-          new AMRMTokenIdentifierForTest(amrmToken_2.decodeIdentifier(), "message");
+-      
+-      Assert.assertEquals("Message is changed after set to newVersionTokenIdentifier",
+-          "message", newVersionTokenIdentifier.getMessage());
+-      org.apache.hadoop.security.token.Token<AMRMTokenIdentifier> newVersionToken = 
+-          new org.apache.hadoop.security.token.Token<AMRMTokenIdentifier> (
+-              newVersionTokenIdentifier.getBytes(), 
+-              amrmTokenSecretManager.retrievePassword(newVersionTokenIdentifier),
+-              newVersionTokenIdentifier.getKind(), new Text());
+-      
+-      SecurityUtil.setTokenService(newVersionToken, yarnCluster
+-        .getResourceManager().getApplicationMasterService().getBindAddress());
+-      testUser1.addToken(newVersionToken);
+-      
+-      AllocateRequest request = Records.newRecord(AllocateRequest.class);
+-      request.setResponseId(response.getResponseId());
+-      testUser1.doAs(new PrivilegedAction<ApplicationMasterProtocol>() {
+-        @Override
+-        public ApplicationMasterProtocol run() {
+-          return (ApplicationMasterProtocol) YarnRPC.create(conf).getProxy(
+-            ApplicationMasterProtocol.class,
+-            yarnCluster.getResourceManager().getApplicationMasterService()
+-                .getBindAddress(), conf);
+-        }
+-      }).allocate(request);
++      amClient.allocate(0.1f);
+ 
+       // Make sure previous token has been rolled-over
+       // and can not use this rolled-over token to make a allocate all.
+@@ -987,12 +955,12 @@ public ApplicationMasterProtocol run() {
+       }
+ 
+       try {
+-        UserGroupInformation testUser2 =
+-            UserGroupInformation.createRemoteUser("testUser2");
++        UserGroupInformation testUser =
++            UserGroupInformation.createRemoteUser("testUser");
+         SecurityUtil.setTokenService(amrmToken_2, yarnCluster
+           .getResourceManager().getApplicationMasterService().getBindAddress());
+-        testUser2.addToken(amrmToken_2);
+-        testUser2.doAs(new PrivilegedAction<ApplicationMasterProtocol>() {
++        testUser.addToken(amrmToken_2);
++        testUser.doAs(new PrivilegedAction<ApplicationMasterProtocol>() {
+           @Override
+           public ApplicationMasterProtocol run() {
+             return (ApplicationMasterProtocol) YarnRPC.create(conf).getProxy(
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/proto/test_amrm_token.proto b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/proto/test_amrm_token.proto
+deleted file mode 100644
+index 6773277..0000000
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/proto/test_amrm_token.proto
++++ /dev/null
+@@ -1,31 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-option java_package = "org.apache.hadoop.yarn.proto";
+-option java_outer_classname = "YarnSecurityTestAMRMTokenProtos";
+-option java_generic_services = true;
+-option java_generate_equals_and_hash = true;
+-package hadoop.yarn;
+-
+-import "yarn_protos.proto";
+-
+-message AMRMTokenIdentifierForTestProto {
+-  optional ApplicationAttemptIdProto appAttemptId = 1;
+-  optional int32 keyId = 2;
+-  optional string message = 3;
+-}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/pom.xml b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/pom.xml
+index e6e9ff3..4c0c8ef 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/pom.xml
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/pom.xml
+@@ -250,30 +250,6 @@
+               </source>
+             </configuration>
+           </execution>
+-          <execution>
+-            <id>compile-protoc</id>
+-            <phase>generate-sources</phase>
+-            <goals>
+-              <goal>protoc</goal>
+-            </goals>
+-            <configuration>
+-              <protocVersion>${protobuf.version}</protocVersion>
+-              <protocCommand>${protoc.path}</protocCommand>
+-              <imports>
+-                <param>${basedir}/../../../hadoop-common-project/hadoop-common/src/main/proto</param>
+-                <param>${basedir}/../hadoop-yarn-api/src/main/proto</param>
+-                <param>${basedir}/src/main/proto</param>
+-              </imports>
+-              <source>
+-                <directory>${basedir}/src/main/proto/server</directory>
+-                <includes>
+-                  <include>yarn_security_token.proto</include>
+-                </includes>
+-              </source>
+-              <output>${project.build.directory}/generated-sources/java</output>
+-            </configuration>
+-          </execution>
+-
+         </executions>
+       </plugin>
+       <plugin>
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/AMRMTokenIdentifier.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/AMRMTokenIdentifier.java
+index 84fce5e..bc2d7c5 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/AMRMTokenIdentifier.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/AMRMTokenIdentifier.java
+@@ -19,11 +19,9 @@
+ package org.apache.hadoop.yarn.security;
+ 
+ import java.io.DataInput;
+-import java.io.DataInputStream;
+ import java.io.DataOutput;
+ import java.io.IOException;
+ 
+-import org.apache.commons.io.IOUtils;
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.classification.InterfaceAudience.Public;
+@@ -34,10 +32,6 @@
+ import org.apache.hadoop.security.token.TokenIdentifier;
+ import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
+ import org.apache.hadoop.yarn.api.records.ApplicationId;
+-import org.apache.hadoop.yarn.api.records.impl.pb.ApplicationAttemptIdPBImpl;
+-import org.apache.hadoop.yarn.proto.YarnSecurityTokenProtos.AMRMTokenIdentifierProto;
+-
+-import com.google.protobuf.TextFormat;
+ 
+ /**
+  * AMRMTokenIdentifier is the TokenIdentifier to be used by
+@@ -48,41 +42,49 @@
+ public class AMRMTokenIdentifier extends TokenIdentifier {
+ 
+   public static final Text KIND_NAME = new Text("YARN_AM_RM_TOKEN");
+-  private AMRMTokenIdentifierProto proto;
++
++  private ApplicationAttemptId applicationAttemptId;
++  private int keyId = Integer.MIN_VALUE;
+ 
+   public AMRMTokenIdentifier() {
+   }
+-  
++
++  public AMRMTokenIdentifier(ApplicationAttemptId appAttemptId) {
++    this();
++    this.applicationAttemptId = appAttemptId;
++  }
++
+   public AMRMTokenIdentifier(ApplicationAttemptId appAttemptId,
+       int masterKeyId) {
+-    AMRMTokenIdentifierProto.Builder builder = 
+-        AMRMTokenIdentifierProto.newBuilder();
+-    if (appAttemptId != null) {
+-      builder.setAppAttemptId(
+-          ((ApplicationAttemptIdPBImpl)appAttemptId).getProto());
+-    }
+-    builder.setKeyId(masterKeyId);
+-    proto = builder.build();
++    this();
++    this.applicationAttemptId = appAttemptId;
++    this.keyId = masterKeyId;
+   }
+ 
+   @Private
+   public ApplicationAttemptId getApplicationAttemptId() {
+-    if (!proto.hasAppAttemptId()) {
+-      return null;
+-    }
+-    return new ApplicationAttemptIdPBImpl(proto.getAppAttemptId());
++    return this.applicationAttemptId;
+   }
+ 
+   @Override
+   public void write(DataOutput out) throws IOException {
+-    out.write(proto.toByteArray());
++    ApplicationId appId = this.applicationAttemptId.getApplicationId();
++    out.writeLong(appId.getClusterTimestamp());
++    out.writeInt(appId.getId());
++    out.writeInt(this.applicationAttemptId.getAttemptId());
++    out.writeInt(this.keyId);
+   }
+ 
+   @Override
+   public void readFields(DataInput in) throws IOException {
+-    DataInputStream dis = (DataInputStream)in;
+-    byte[] buffer = IOUtils.toByteArray(dis);
+-    proto = AMRMTokenIdentifierProto.parseFrom(buffer);
++    long clusterTimeStamp = in.readLong();
++    int appId = in.readInt();
++    int attemptId = in.readInt();
++    ApplicationId applicationId =
++        ApplicationId.newInstance(clusterTimeStamp, appId);
++    this.applicationAttemptId =
++        ApplicationAttemptId.newInstance(applicationId, attemptId);
++    this.keyId = in.readInt();
+   }
+ 
+   @Override
+@@ -92,20 +94,16 @@ public Text getKind() {
+ 
+   @Override
+   public UserGroupInformation getUser() {
+-    String appAttemptId = null;
+-    if (proto.hasAppAttemptId()) {
+-      appAttemptId = 
+-          new ApplicationAttemptIdPBImpl(proto.getAppAttemptId()).toString();
++    if (this.applicationAttemptId == null
++        || "".equals(this.applicationAttemptId.toString())) {
++      return null;
+     }
+-    return UserGroupInformation.createRemoteUser(appAttemptId);
++    return UserGroupInformation.createRemoteUser(this.applicationAttemptId
++        .toString());
+   }
+ 
+   public int getKeyId() {
+-    return proto.getKeyId();
+-  }
+-  
+-  public AMRMTokenIdentifierProto getProto() {
+-    return this.proto;
++    return this.keyId;
+   }
+ 
+   // TODO: Needed?
+@@ -116,24 +114,4 @@ protected Text getKind() {
+       return KIND_NAME;
+     }
+   }
+-  
+-  @Override
+-  public int hashCode() {
+-    return getProto().hashCode();
+-  }
+-
+-  @Override
+-  public boolean equals(Object other) {
+-    if (other == null)
+-      return false;
+-    if (other.getClass().isAssignableFrom(this.getClass())) {
+-      return this.getProto().equals(this.getClass().cast(other).getProto());
+-    }
+-    return false;
+-  }
+-
+-  @Override
+-  public String toString() {
+-    return TextFormat.shortDebugString(getProto());
+-  }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/ContainerTokenIdentifier.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/ContainerTokenIdentifier.java
+index e61f07c..bc6a764 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/ContainerTokenIdentifier.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/ContainerTokenIdentifier.java
+@@ -19,11 +19,9 @@
+ package org.apache.hadoop.yarn.security;
+ 
+ import java.io.DataInput;
+-import java.io.DataInputStream;
+ import java.io.DataOutput;
+ import java.io.IOException;
+ 
+-import org.apache.commons.io.IOUtils;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -40,14 +38,7 @@
+ import org.apache.hadoop.yarn.api.records.Priority;
+ import org.apache.hadoop.yarn.api.records.Resource;
+ import org.apache.hadoop.yarn.api.records.impl.pb.LogAggregationContextPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.ContainerIdPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.PriorityPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.ResourcePBImpl;
+ import org.apache.hadoop.yarn.proto.YarnProtos.LogAggregationContextProto;
+-import org.apache.hadoop.yarn.proto.YarnSecurityTokenProtos.ContainerTokenIdentifierProto;
+-
+-import com.google.protobuf.TextFormat;
+-
+ 
+ /**
+  * TokenIdentifier for a container. Encodes {@link ContainerId},
+@@ -62,7 +53,15 @@
+ 
+   public static final Text KIND = new Text("ContainerToken");
+ 
+-  private ContainerTokenIdentifierProto proto;
++  private ContainerId containerId;
++  private String nmHostAddr;
++  private String appSubmitter;
++  private Resource resource;
++  private long expiryTimeStamp;
++  private int masterKeyId;
++  private long rmIdentifier;
++  private Priority priority;
++  private long creationTime;
+   private LogAggregationContext logAggregationContext;
+ 
+   public ContainerTokenIdentifier(ContainerId containerID,
+@@ -76,29 +75,16 @@ public ContainerTokenIdentifier(ContainerId containerID, String hostName,
+       String appSubmitter, Resource r, long expiryTimeStamp, int masterKeyId,
+       long rmIdentifier, Priority priority, long creationTime,
+       LogAggregationContext logAggregationContext) {
+-    ContainerTokenIdentifierProto.Builder builder = 
+-        ContainerTokenIdentifierProto.newBuilder();
+-    if (containerID != null) {
+-      builder.setContainerId(((ContainerIdPBImpl)containerID).getProto());
+-    }
+-    builder.setNmHostAddr(hostName);
+-    builder.setAppSubmitter(appSubmitter);
+-    if (r != null) {
+-      builder.setResource(((ResourcePBImpl)r).getProto());
+-    }
+-    builder.setExpiryTimeStamp(expiryTimeStamp);
+-    builder.setMasterKeyId(masterKeyId);
+-    builder.setRmIdentifier(rmIdentifier);
+-    if (priority != null) {
+-      builder.setPriority(((PriorityPBImpl)priority).getProto());
+-    }
+-    builder.setCreationTime(creationTime);
+-    
+-    if (logAggregationContext != null) {
+-      builder.setLogAggregationContext(
+-          ((LogAggregationContextPBImpl)logAggregationContext).getProto());
+-    }
+-    proto = builder.build();
++    this.containerId = containerID;
++    this.nmHostAddr = hostName;
++    this.appSubmitter = appSubmitter;
++    this.resource = r;
++    this.expiryTimeStamp = expiryTimeStamp;
++    this.masterKeyId = masterKeyId;
++    this.rmIdentifier = rmIdentifier;
++    this.priority = priority;
++    this.creationTime = creationTime;
++    this.logAggregationContext = logAggregationContext;
+   }
+ 
+   /**
+@@ -108,75 +94,104 @@ public ContainerTokenIdentifier() {
+   }
+ 
+   public ContainerId getContainerID() {
+-    if (!proto.hasContainerId()) {
+-      return null;
+-    }
+-    return new ContainerIdPBImpl(proto.getContainerId());
++    return this.containerId;
+   }
+ 
+   public String getApplicationSubmitter() {
+-    return proto.getAppSubmitter();
++    return this.appSubmitter;
+   }
+ 
+   public String getNmHostAddress() {
+-    return proto.getNmHostAddr();
++    return this.nmHostAddr;
+   }
+ 
+   public Resource getResource() {
+-    if (!proto.hasResource()) {
+-      return null;
+-    }
+-    return new ResourcePBImpl(proto.getResource());
++    return this.resource;
+   }
+ 
+   public long getExpiryTimeStamp() {
+-    return proto.getExpiryTimeStamp();
++    return this.expiryTimeStamp;
+   }
+ 
+   public int getMasterKeyId() {
+-    return proto.getMasterKeyId();
++    return this.masterKeyId;
+   }
+ 
+   public Priority getPriority() {
+-    if (!proto.hasPriority()) {
+-      return null;
+-    }
+-    return new PriorityPBImpl(proto.getPriority());
++    return this.priority;
+   }
+ 
+   public long getCreationTime() {
+-    return proto.getCreationTime();
++    return this.creationTime;
+   }
+   /**
+    * Get the RMIdentifier of RM in which containers are allocated
+    * @return RMIdentifier
+    */
+-  public long getRMIdentifier() {
+-    return proto.getRmIdentifier();
+-  }
+-  
+-  public ContainerTokenIdentifierProto getProto() {
+-    return proto;
++  public long getRMIdentifer() {
++    return this.rmIdentifier;
+   }
+ 
+   public LogAggregationContext getLogAggregationContext() {
+-    if (!proto.hasLogAggregationContext()) {
+-      return null;
+-    }
+-    return new LogAggregationContextPBImpl(proto.getLogAggregationContext());
++    return this.logAggregationContext;
+   }
+ 
+   @Override
+   public void write(DataOutput out) throws IOException {
+     LOG.debug("Writing ContainerTokenIdentifier to RPC layer: " + this);
+-    out.write(proto.toByteArray());
++    ApplicationAttemptId applicationAttemptId = this.containerId
++        .getApplicationAttemptId();
++    ApplicationId applicationId = applicationAttemptId.getApplicationId();
++    out.writeLong(applicationId.getClusterTimestamp());
++    out.writeInt(applicationId.getId());
++    out.writeInt(applicationAttemptId.getAttemptId());
++    out.writeLong(this.containerId.getContainerId());
++    out.writeUTF(this.nmHostAddr);
++    out.writeUTF(this.appSubmitter);
++    out.writeInt(this.resource.getMemory());
++    out.writeInt(this.resource.getVirtualCores());
++    out.writeLong(this.expiryTimeStamp);
++    out.writeInt(this.masterKeyId);
++    out.writeLong(this.rmIdentifier);
++    out.writeInt(this.priority.getPriority());
++    out.writeLong(this.creationTime);
++    if (this.logAggregationContext == null) {
++      out.writeInt(-1);
++    } else {
++      byte[] logAggregationContext =
++          ((LogAggregationContextPBImpl) this.logAggregationContext).getProto()
++            .toByteArray();
++      out.writeInt(logAggregationContext.length);
++      out.write(logAggregationContext);
++    }
+   }
+ 
+   @Override
+   public void readFields(DataInput in) throws IOException {
+-    DataInputStream dis = (DataInputStream)in;
+-    byte[] buffer = IOUtils.toByteArray(dis);
+-    proto = ContainerTokenIdentifierProto.parseFrom(buffer);
++    ApplicationId applicationId =
++        ApplicationId.newInstance(in.readLong(), in.readInt());
++    ApplicationAttemptId applicationAttemptId =
++        ApplicationAttemptId.newInstance(applicationId, in.readInt());
++    this.containerId =
++        ContainerId.newContainerId(applicationAttemptId, in.readLong());
++    this.nmHostAddr = in.readUTF();
++    this.appSubmitter = in.readUTF();
++    int memory = in.readInt();
++    int vCores = in.readInt();
++    this.resource = Resource.newInstance(memory, vCores);
++    this.expiryTimeStamp = in.readLong();
++    this.masterKeyId = in.readInt();
++    this.rmIdentifier = in.readLong();
++    this.priority = Priority.newInstance(in.readInt());
++    this.creationTime = in.readLong();
++    int size = in.readInt();
++    if (size != -1) {
++      byte[] bytes = new byte[size];
++      in.readFully(bytes);
++      this.logAggregationContext =
++          new LogAggregationContextPBImpl(
++            LogAggregationContextProto.parseFrom(bytes));
++    }
+   }
+ 
+   @Override
+@@ -186,12 +201,7 @@ public Text getKind() {
+ 
+   @Override
+   public UserGroupInformation getUser() {
+-    String containerId = null;
+-    if (proto.hasContainerId()) {
+-      containerId = new ContainerIdPBImpl(proto.getContainerId()).toString();
+-    }
+-    return UserGroupInformation.createRemoteUser(
+-        containerId);
++    return UserGroupInformation.createRemoteUser(this.containerId.toString());
+   }
+ 
+   // TODO: Needed?
+@@ -202,24 +212,4 @@ protected Text getKind() {
+       return KIND;
+     }
+   }
+-  
+-  @Override
+-  public int hashCode() {
+-    return getProto().hashCode();
+-  }
+-
+-  @Override
+-  public boolean equals(Object other) {
+-    if (other == null)
+-      return false;
+-    if (other.getClass().isAssignableFrom(this.getClass())) {
+-      return this.getProto().equals(this.getClass().cast(other).getProto());
+-    }
+-    return false;
+-  }
+-
+-  @Override
+-  public String toString() {
+-    return TextFormat.shortDebugString(getProto());
+-  }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/NMTokenIdentifier.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/NMTokenIdentifier.java
+index 25670fa..55ddd0a 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/NMTokenIdentifier.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/NMTokenIdentifier.java
+@@ -18,13 +18,10 @@
+ 
+ package org.apache.hadoop.yarn.security;
+ 
+-import java.io.ByteArrayInputStream;
+ import java.io.DataInput;
+-import java.io.DataInputStream;
+ import java.io.DataOutput;
+ import java.io.IOException;
+ 
+-import org.apache.commons.io.IOUtils;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience.Public;
+@@ -35,12 +32,6 @@
+ import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
+ import org.apache.hadoop.yarn.api.records.ApplicationId;
+ import org.apache.hadoop.yarn.api.records.NodeId;
+-import org.apache.hadoop.yarn.api.records.impl.pb.ApplicationAttemptIdPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.NodeIdPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.NodeReportPBImpl;
+-import org.apache.hadoop.yarn.proto.YarnSecurityTokenProtos.NMTokenIdentifierProto;
+-
+-import com.google.protobuf.TextFormat;
+ 
+ @Public
+ @Evolving
+@@ -50,21 +41,17 @@
+ 
+   public static final Text KIND = new Text("NMToken");
+   
+-  private NMTokenIdentifierProto proto;
++  private ApplicationAttemptId appAttemptId;
++  private NodeId nodeId;
++  private String appSubmitter;
++  private int keyId;
+ 
+-  public NMTokenIdentifier(ApplicationAttemptId appAttemptId, 
+-      NodeId nodeId, String applicationSubmitter, int masterKeyId) {
+-    NMTokenIdentifierProto.Builder builder = NMTokenIdentifierProto.newBuilder();
+-    if (appAttemptId != null) {
+-      builder.setAppAttemptId(
+-          ((ApplicationAttemptIdPBImpl)appAttemptId).getProto());
+-    }
+-    if (nodeId != null) {
+-      builder.setNodeId(((NodeIdPBImpl)nodeId).getProto());
+-    }
+-    builder.setAppSubmitter(applicationSubmitter);
+-    builder.setKeyId(masterKeyId);
+-    proto = builder.build();
++  public NMTokenIdentifier(ApplicationAttemptId appAttemptId, NodeId nodeId,
++      String applicationSubmitter, int masterKeyId) {
++    this.appAttemptId = appAttemptId;
++    this.nodeId = nodeId;
++    this.appSubmitter = applicationSubmitter;
++    this.keyId = masterKeyId;
+   }
+   
+   /**
+@@ -74,38 +61,43 @@ public NMTokenIdentifier() {
+   }
+ 
+   public ApplicationAttemptId getApplicationAttemptId() {
+-    if (!proto.hasAppAttemptId()) {
+-      return null;
+-    }
+-    return new ApplicationAttemptIdPBImpl(proto.getAppAttemptId());
++    return appAttemptId;
+   }
+   
+   public NodeId getNodeId() {
+-    if (!proto.hasNodeId()) {
+-      return null;
+-    }
+-    return new NodeIdPBImpl(proto.getNodeId());
++    return nodeId;
+   }
+   
+   public String getApplicationSubmitter() {
+-    return proto.getAppSubmitter();
++    return appSubmitter;
+   }
+   
+   public int getKeyId() {
+-    return proto.getKeyId();
++    return keyId;
+   }
+   
+   @Override
+   public void write(DataOutput out) throws IOException {
+     LOG.debug("Writing NMTokenIdentifier to RPC layer: " + this);
+-    out.write(proto.toByteArray());
++    ApplicationId applicationId = appAttemptId.getApplicationId();
++    out.writeLong(applicationId.getClusterTimestamp());
++    out.writeInt(applicationId.getId());
++    out.writeInt(appAttemptId.getAttemptId());
++    out.writeUTF(this.nodeId.toString());
++    out.writeUTF(this.appSubmitter);
++    out.writeInt(this.keyId);
+   }
+ 
+   @Override
+   public void readFields(DataInput in) throws IOException {
+-    DataInputStream dis = (DataInputStream)in;
+-    byte[] buffer = IOUtils.toByteArray(dis);
+-    proto = NMTokenIdentifierProto.parseFrom(buffer);
++    appAttemptId =
++        ApplicationAttemptId.newInstance(
++            ApplicationId.newInstance(in.readLong(), in.readInt()),
++            in.readInt());
++    String[] hostAddr = in.readUTF().split(":");
++    nodeId = NodeId.newInstance(hostAddr[0], Integer.parseInt(hostAddr[1]));
++    appSubmitter = in.readUTF();
++    keyId = in.readInt();
+   }
+ 
+   @Override
+@@ -115,35 +107,6 @@ public Text getKind() {
+ 
+   @Override
+   public UserGroupInformation getUser() {
+-    String appAttemptId = null;
+-    if (proto.hasAppAttemptId()) {
+-      appAttemptId = new ApplicationAttemptIdPBImpl(
+-          proto.getAppAttemptId()).toString();
+-    }
+-    return UserGroupInformation.createRemoteUser(appAttemptId);
+-  }
+-  
+-  public NMTokenIdentifierProto getProto() {
+-    return proto;
+-  }
+-  
+-  @Override
+-  public int hashCode() {
+-    return getProto().hashCode();
+-  }
+-
+-  @Override
+-  public boolean equals(Object other) {
+-    if (other == null)
+-      return false;
+-    if (other.getClass().isAssignableFrom(this.getClass())) {
+-      return this.getProto().equals(this.getClass().cast(other).getProto());
+-    }
+-    return false;
+-  }
+-
+-  @Override
+-  public String toString() {
+-    return TextFormat.shortDebugString(getProto());
++    return UserGroupInformation.createRemoteUser(appAttemptId.toString());
+   }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/proto/server/yarn_security_token.proto b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/proto/server/yarn_security_token.proto
+deleted file mode 100644
+index 845873f..0000000
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/proto/server/yarn_security_token.proto
++++ /dev/null
+@@ -1,53 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-option java_package = "org.apache.hadoop.yarn.proto";
+-option java_outer_classname = "YarnSecurityTokenProtos";
+-option java_generic_services = true;
+-option java_generate_equals_and_hash = true;
+-package hadoop.yarn;
+-
+-import "yarn_protos.proto";
+-
+-// None of the following records are supposed to be exposed to users.
+-
+-message NMTokenIdentifierProto {
+-  optional ApplicationAttemptIdProto appAttemptId = 1;
+-  optional NodeIdProto nodeId = 2;
+-  optional string appSubmitter = 3;
+-  optional int32 keyId = 4 [default = -1];
+-}
+-
+-message AMRMTokenIdentifierProto {
+-  optional ApplicationAttemptIdProto appAttemptId = 1;
+-  optional int32 keyId = 2 [default = -1];
+-}
+-
+-message ContainerTokenIdentifierProto {
+-  optional ContainerIdProto containerId = 1;
+-  optional string nmHostAddr = 2;
+-  optional string appSubmitter = 3;
+-  optional ResourceProto resource = 4;
+-  optional int64 expiryTimeStamp =5;
+-  optional int32 masterKeyId = 6 [default = -1];
+-  optional int64 rmIdentifier = 7;
+-  optional PriorityProto priority = 8;
+-  optional int64 creationTime = 9;
+-  optional LogAggregationContextProto logAggregationContext = 10;
+-}
+-
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/security/TestYARNTokenIdentifier.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/security/TestYARNTokenIdentifier.java
+deleted file mode 100644
+index e6d3f49..0000000
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/security/TestYARNTokenIdentifier.java
++++ /dev/null
+@@ -1,177 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.hadoop.yarn.security;
+-
+-import java.io.IOException;
+-
+-import org.apache.hadoop.conf.Configuration;
+-import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
+-import org.apache.hadoop.io.Text;
+-import org.apache.hadoop.security.HadoopKerberosName;
+-import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
+-import org.apache.hadoop.yarn.api.records.ApplicationId;
+-import org.apache.hadoop.yarn.api.records.ContainerId;
+-import org.apache.hadoop.yarn.api.records.NodeId;
+-import org.apache.hadoop.yarn.api.records.Priority;
+-import org.apache.hadoop.yarn.api.records.Resource;
+-import org.apache.hadoop.yarn.conf.YarnConfiguration;
+-import org.apache.hadoop.yarn.security.client.TimelineDelegationTokenIdentifier;
+-import org.junit.Assert;
+-import org.junit.Test;
+-
+-public class TestYARNTokenIdentifier {
+-
+-  @Test
+-  public void testNMTokenIdentifier() {
+-    ApplicationAttemptId appAttemptId = ApplicationAttemptId.newInstance(
+-        ApplicationId.newInstance(1, 1), 1);
+-    NodeId nodeId = NodeId.newInstance("host0", 0);
+-    String applicationSubmitter = "usr0";
+-    int masterKeyId = 1;
+-    
+-    NMTokenIdentifier token = new NMTokenIdentifier(
+-        appAttemptId, nodeId, applicationSubmitter, masterKeyId);
+-    
+-    NMTokenIdentifier anotherToken = new NMTokenIdentifier(
+-        appAttemptId, nodeId, applicationSubmitter, masterKeyId);
+-    
+-    // verify the whole record equals with original record
+-    Assert.assertEquals("Token is not the same after serialization " +
+-        "and deserialization.", token, anotherToken);
+-    
+-    // verify all properties are the same as original
+-    Assert.assertEquals(
+-        "appAttemptId from proto is not the same with original token",
+-        anotherToken.getApplicationAttemptId(), appAttemptId);
+-    
+-    Assert.assertEquals(
+-        "NodeId from proto is not the same with original token",
+-        anotherToken.getNodeId(), nodeId);
+-    
+-    Assert.assertEquals(
+-        "applicationSubmitter from proto is not the same with original token",
+-        anotherToken.getApplicationSubmitter(), applicationSubmitter);
+-    
+-    Assert.assertEquals(
+-        "masterKeyId from proto is not the same with original token",
+-        anotherToken.getKeyId(), masterKeyId);
+-  }
+-
+-  @Test
+-  public void testAMRMTokenIdentifier() {
+-    ApplicationAttemptId appAttemptId = ApplicationAttemptId.newInstance(
+-        ApplicationId.newInstance(1, 1), 1);
+-    int masterKeyId = 1;
+-  
+-    AMRMTokenIdentifier token = new AMRMTokenIdentifier(appAttemptId, masterKeyId);
+-    
+-    AMRMTokenIdentifier anotherToken = new AMRMTokenIdentifier(
+-        appAttemptId, masterKeyId);
+-        
+-    // verify the whole record equals with original record
+-    Assert.assertEquals("Token is not the same after serialization " +
+-        "and deserialization.", token, anotherToken);
+-        
+-    Assert.assertEquals("ApplicationAttemptId from proto is not the same with original token",
+-        anotherToken.getApplicationAttemptId(), appAttemptId);
+-    
+-    Assert.assertEquals("masterKeyId from proto is not the same with original token",
+-        anotherToken.getKeyId(), masterKeyId);
+-  }
+-  
+-  @Test
+-  public void testContainerTokenIdentifier() {
+-    ContainerId containerID = ContainerId.newContainerId(
+-        ApplicationAttemptId.newInstance(ApplicationId.newInstance(
+-            1, 1), 1), 1);
+-    String hostName = "host0";
+-    String appSubmitter = "usr0";
+-    Resource r = Resource.newInstance(1024, 1);
+-    long expiryTimeStamp = 1000;
+-    int masterKeyId = 1;
+-    long rmIdentifier = 1;
+-    Priority priority = Priority.newInstance(1);
+-    long creationTime = 1000;
+-    
+-    ContainerTokenIdentifier token = new ContainerTokenIdentifier(
+-        containerID, hostName, appSubmitter, r, expiryTimeStamp, 
+-        masterKeyId, rmIdentifier, priority, creationTime);
+-    
+-    ContainerTokenIdentifier anotherToken = new ContainerTokenIdentifier(
+-        containerID, hostName, appSubmitter, r, expiryTimeStamp, 
+-        masterKeyId, rmIdentifier, priority, creationTime);
+-    
+-    // verify the whole record equals with original record
+-    Assert.assertEquals("Token is not the same after serialization " +
+-        "and deserialization.", token, anotherToken);
+-    
+-    Assert.assertEquals(
+-        "ContainerID from proto is not the same with original token",
+-        anotherToken.getContainerID(), containerID);
+-    
+-    Assert.assertEquals(
+-        "Hostname from proto is not the same with original token",
+-        anotherToken.getNmHostAddress(), hostName);
+-    
+-    Assert.assertEquals(
+-        "ApplicationSubmitter from proto is not the same with original token",
+-        anotherToken.getApplicationSubmitter(), appSubmitter);
+-    
+-    Assert.assertEquals(
+-        "Resource from proto is not the same with original token",
+-        anotherToken.getResource(), r);
+-    
+-    Assert.assertEquals(
+-        "expiryTimeStamp from proto is not the same with original token",
+-        anotherToken.getExpiryTimeStamp(), expiryTimeStamp);
+-    
+-    Assert.assertEquals(
+-        "KeyId from proto is not the same with original token",
+-        anotherToken.getMasterKeyId(), masterKeyId);
+-    
+-    Assert.assertEquals(
+-        "RMIdentifier from proto is not the same with original token",
+-        anotherToken.getRMIdentifier(), rmIdentifier);
+-    
+-    Assert.assertEquals(
+-        "Priority from proto is not the same with original token",
+-        anotherToken.getPriority(), priority);
+-    
+-    Assert.assertEquals(
+-        "CreationTime from proto is not the same with original token",
+-        anotherToken.getCreationTime(), creationTime);
+-    
+-    Assert.assertNull(anotherToken.getLogAggregationContext());
+-  }
+-
+-  @Test
+-  public void testParseTimelineDelegationTokenIdentifierRenewer() throws IOException {
+-    // Server side when generation a timeline DT
+-    Configuration conf = new YarnConfiguration();
+-    conf.set(CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTH_TO_LOCAL,
+-        "RULE:[2:$1@$0]([nr]m@.*EXAMPLE.COM)s/.*/yarn/");
+-    HadoopKerberosName.setConfiguration(conf);
+-    Text owner = new Text("owner");
+-    Text renewer = new Text("rm/localhost@EXAMPLE.COM");
+-    Text realUser = new Text("realUser");
+-    TimelineDelegationTokenIdentifier token =
+-        new TimelineDelegationTokenIdentifier(owner, renewer, realUser);
+-    Assert.assertEquals(new Text("yarn"), token.getRenewer());
+-  }
+-
+-}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/ContainerManagerImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/ContainerManagerImpl.java
+index 35b232f..eb06e1c 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/ContainerManagerImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/ContainerManagerImpl.java
+@@ -133,7 +133,6 @@
+ import org.apache.hadoop.yarn.server.nodemanager.recovery.NMStateStoreService.RecoveredContainerStatus;
+ import org.apache.hadoop.yarn.server.nodemanager.security.authorize.NMPolicyProvider;
+ import org.apache.hadoop.yarn.server.security.ApplicationACLsManager;
+-import org.apache.hadoop.yarn.server.security.BaseNMTokenSecretManager;
+ import org.apache.hadoop.yarn.server.utils.BuilderUtils;
+ 
+ import com.google.common.annotations.VisibleForTesting;
+@@ -651,8 +650,8 @@ protected void authorizeStartRequest(NMTokenIdentifier nmTokenIdentifier,
+     boolean unauthorized = false;
+     StringBuilder messageBuilder =
+         new StringBuilder("Unauthorized request to start container. ");
+-    if (!nmTokenIdentifier.getApplicationAttemptId().getApplicationId().
+-        equals(containerId.getApplicationAttemptId().getApplicationId())) {
++    if (!nmTokenIdentifier.getApplicationAttemptId().getApplicationId().equals(
++        containerId.getApplicationAttemptId().getApplicationId())) {
+       unauthorized = true;
+       messageBuilder.append("\nNMToken for application attempt : ")
+         .append(nmTokenIdentifier.getApplicationAttemptId())
+@@ -785,7 +784,7 @@ private void startContainerInternal(NMTokenIdentifier nmTokenIdentifier,
+      */
+     authorizeStartRequest(nmTokenIdentifier, containerTokenIdentifier);
+  
+-    if (containerTokenIdentifier.getRMIdentifier() != nodeStatusUpdater
++    if (containerTokenIdentifier.getRMIdentifer() != nodeStatusUpdater
+         .getRMIdentifier()) {
+         // Is the container coming from unknown RM
+         StringBuilder sb = new StringBuilder("\nContainer ");
+@@ -1036,10 +1035,9 @@ protected void authorizeGetAndStopContainerRequest(ContainerId containerId,
+      */
+     ApplicationId nmTokenAppId =
+         identifier.getApplicationAttemptId().getApplicationId();
+-    
+     if ((!nmTokenAppId.equals(containerId.getApplicationAttemptId().getApplicationId()))
+         || (container != null && !nmTokenAppId.equals(container
+-            .getContainerId().getApplicationAttemptId().getApplicationId()))) {
++          .getContainerId().getApplicationAttemptId().getApplicationId()))) {
+       if (stopRequest) {
+         LOG.warn(identifier.getApplicationAttemptId()
+             + " attempted to stop non-application container : "
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java
+index d76c394..a8ded3d 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainer.java
+@@ -555,7 +555,7 @@ public boolean matches(Object o) {
+           public boolean matches(Object o) {
+             ContainersLauncherEvent evt = (ContainersLauncherEvent) o;
+             return evt.getType() == ContainersLauncherEventType.LAUNCH_CONTAINER
+-              && wcf.cId.equals(evt.getContainer().getContainerId());
++              && wcf.cId == evt.getContainer().getContainerId();
+           }
+         };
+       verify(wc.launcherBus).handle(argThat(matchesLaunchReq));
+@@ -778,7 +778,7 @@ public boolean matches(Object o) {
+       String host = "127.0.0.1";
+       int port = 1234;
+       long currentTime = System.currentTimeMillis();
+-      ContainerTokenIdentifier identifier = 
++      ContainerTokenIdentifier identifier =
+           new ContainerTokenIdentifier(cId, "127.0.0.1", user, resource,
+             currentTime + 10000L, 123, currentTime, Priority.newInstance(0), 0);
+       Token token =
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestApplicationMasterService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestApplicationMasterService.java
+index d1f0ede..47a8ca5 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestApplicationMasterService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestApplicationMasterService.java
+@@ -101,7 +101,7 @@ public void testRMIdentifierOnContainerAllocation() throws Exception {
+     ContainerTokenIdentifier tokenId =
+         BuilderUtils.newContainerTokenIdentifier(allocatedContainer
+           .getContainerToken());
+-    Assert.assertEquals(MockRM.getClusterTimeStamp(), tokenId.getRMIdentifier());
++    Assert.assertEquals(MockRM.getClusterTimeStamp(), tokenId.getRMIdentifer());
+     rm.stop();
+   }
+   
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/pom.xml b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/pom.xml
+index 0f73d74..54b9674 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/pom.xml
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/pom.xml
+@@ -132,35 +132,6 @@
+   <build>
+     <plugins>
+       <plugin>
+-        <groupId>org.apache.hadoop</groupId>
+-        <artifactId>hadoop-maven-plugins</artifactId>
+-        <executions>
+-          <execution>
+-            <id>compile-protoc</id>
+-            <phase>generate-sources</phase>
+-            <goals>
+-              <goal>protoc</goal>
+-            </goals>
+-            <configuration>
+-              <protocVersion>${protobuf.version}</protocVersion>
+-              <protocCommand>${protoc.path}</protocCommand>
+-              <imports>
+-                <param>${basedir}/src/test/proto</param>
+-                <param>${basedir}/../../../../hadoop-common-project/hadoop-common/src/main/proto</param>
+-                <param>${basedir}/../../hadoop-yarn-api/src/main/proto</param>
+-              </imports>
+-              <source>
+-                <directory>${basedir}/src/test/proto</directory>
+-                <includes>
+-                  <include>test_token.proto</include>
+-                </includes>
+-              </source>
+-              <output>${project.build.directory}/generated-sources/java</output>
+-            </configuration>
+-          </execution>
+-        </executions>
+-      </plugin>
+-      <plugin>
+         <artifactId>maven-jar-plugin</artifactId>
+         <executions>
+           <execution>
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/ContainerTokenIdentifierForTest.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/ContainerTokenIdentifierForTest.java
+deleted file mode 100644
+index 7e8004d..0000000
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/ContainerTokenIdentifierForTest.java
++++ /dev/null
+@@ -1,195 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.hadoop.yarn.server;
+-
+-import java.io.DataInput;
+-import java.io.DataInputStream;
+-import java.io.DataOutput;
+-import java.io.IOException;
+-
+-import org.apache.commons.io.IOUtils;
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+-import org.apache.hadoop.io.Text;
+-import org.apache.hadoop.yarn.api.records.ContainerId;
+-import org.apache.hadoop.yarn.api.records.LogAggregationContext;
+-import org.apache.hadoop.yarn.api.records.Priority;
+-import org.apache.hadoop.yarn.api.records.Resource;
+-import org.apache.hadoop.yarn.api.records.impl.pb.ContainerIdPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.LogAggregationContextPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.PriorityPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.ResourcePBImpl;
+-import org.apache.hadoop.yarn.security.ContainerTokenIdentifier;
+-import org.apache.hadoop.yarn.proto.YarnProtos.LogAggregationContextProto;
+-import org.apache.hadoop.yarn.proto.YarnSecurityTestTokenProtos.ContainerTokenIdentifierForTestProto;
+-
+-import com.google.protobuf.TextFormat;
+-
+-public class ContainerTokenIdentifierForTest extends ContainerTokenIdentifier {
+-
+-  private static Log LOG = LogFactory.getLog(ContainerTokenIdentifier.class);
+-
+-  public static final Text KIND = new Text("ContainerToken");
+-  
+-  private ContainerTokenIdentifierForTestProto proto;
+-  
+-  public ContainerTokenIdentifierForTest(ContainerId containerID,
+-      String hostName, String appSubmitter, Resource r, long expiryTimeStamp,
+-      int masterKeyId, long rmIdentifier, Priority priority, long creationTime,
+-      LogAggregationContext logAggregationContext) {
+-    ContainerTokenIdentifierForTestProto.Builder builder =
+-        ContainerTokenIdentifierForTestProto.newBuilder();
+-    if (containerID != null) {
+-      builder.setContainerId(((ContainerIdPBImpl)containerID).getProto());
+-    }
+-    builder.setNmHostAddr(hostName);
+-    builder.setAppSubmitter(appSubmitter);
+-    if (r != null) {
+-      builder.setResource(((ResourcePBImpl)r).getProto());
+-    }
+-    builder.setExpiryTimeStamp(expiryTimeStamp);
+-    builder.setMasterKeyId(masterKeyId);
+-    builder.setRmIdentifier(rmIdentifier);
+-    if (priority != null) {
+-      builder.setPriority(((PriorityPBImpl)priority).getProto());
+-    }
+-    builder.setCreationTime(creationTime);
+-    
+-    if (logAggregationContext != null) {
+-      builder.setLogAggregationContext(
+-          ((LogAggregationContextPBImpl)logAggregationContext).getProto());
+-    }
+-    proto = builder.build();
+-  }
+-
+-  public ContainerTokenIdentifierForTest(ContainerTokenIdentifier identifier,
+-      String message) {
+-    ContainerTokenIdentifierForTestProto.Builder builder =
+-        ContainerTokenIdentifierForTestProto.newBuilder();
+-    ContainerIdPBImpl containerID = 
+-        (ContainerIdPBImpl)identifier.getContainerID();
+-    if (containerID != null) {
+-      builder.setContainerId(containerID.getProto());
+-    }
+-    builder.setNmHostAddr(identifier.getNmHostAddress());
+-    builder.setAppSubmitter(identifier.getApplicationSubmitter());
+-    
+-    ResourcePBImpl resource = (ResourcePBImpl)identifier.getResource();
+-    if (resource != null) {
+-      builder.setResource(resource.getProto());
+-    }
+-    
+-    builder.setExpiryTimeStamp(identifier.getExpiryTimeStamp());
+-    builder.setMasterKeyId(identifier.getMasterKeyId());
+-    builder.setRmIdentifier(identifier.getRMIdentifier());
+-    
+-    PriorityPBImpl priority = (PriorityPBImpl)identifier.getPriority();
+-    if (priority != null) {
+-      builder.setPriority(priority.getProto());
+-    }
+-    
+-    builder.setCreationTime(identifier.getCreationTime());
+-    builder.setMessage(message);
+-    
+-    LogAggregationContextPBImpl logAggregationContext = 
+-        (LogAggregationContextPBImpl)identifier.getLogAggregationContext();
+-    
+-    if (logAggregationContext != null) {
+-      builder.setLogAggregationContext(logAggregationContext.getProto());
+-    }
+-    
+-    proto = builder.build();
+-  }
+-
+-  public ContainerId getContainerID() {
+-    return new ContainerIdPBImpl(proto.getContainerId());
+-  }
+-
+-  public String getApplicationSubmitter() {
+-    return proto.getAppSubmitter();
+-  }
+-
+-  public String getNmHostAddress() {
+-    return proto.getNmHostAddr();
+-  }
+-
+-  public Resource getResource() {
+-    return new ResourcePBImpl(proto.getResource());
+-  }
+-
+-  public long getExpiryTimeStamp() {
+-    return proto.getExpiryTimeStamp();
+-  }
+-
+-  public int getMasterKeyId() {
+-    return proto.getMasterKeyId();
+-  }
+-
+-  public Priority getPriority() {
+-    return new PriorityPBImpl(proto.getPriority());
+-  }
+-
+-  public long getCreationTime() {
+-    return proto.getCreationTime();
+-  }
+-  /**
+-   * Get the RMIdentifier of RM in which containers are allocated
+-   * @return RMIdentifier
+-   */
+-  public long getRMIdentifier() {
+-    return proto.getRmIdentifier();
+-  }
+-  
+-  @Override
+-  public void readFields(DataInput in) throws IOException {
+-    DataInputStream dis = (DataInputStream)in;
+-    byte[] buffer = IOUtils.toByteArray(dis);
+-    proto = ContainerTokenIdentifierForTestProto.parseFrom(buffer);
+-  }
+-
+-  @Override
+-  public void write(DataOutput out) throws IOException {
+-    LOG.debug("Writing ContainerTokenIdentifierForTest to RPC layer: " + this);
+-    out.write(proto.toByteArray());
+-  }
+-  
+-  ContainerTokenIdentifierForTestProto getNewProto() {
+-    return this.proto;
+-  }
+-  
+-  @Override
+-  public int hashCode() {
+-    return this.proto.hashCode();
+-  }
+-
+-  @Override
+-  public boolean equals(Object other) {
+-    if (other == null)
+-      return false;
+-    if (other.getClass().isAssignableFrom(this.getClass())) {
+-      return this.getNewProto().equals(this.getClass().cast(other).getNewProto());
+-    }
+-    return false;
+-  }
+-  
+-  @Override
+-  public String toString() {
+-    return TextFormat.shortDebugString(this.proto);
+-  }
+-
+-}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/NMTokenIdentifierNewForTest.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/NMTokenIdentifierNewForTest.java
+deleted file mode 100644
+index 8153b44..0000000
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/NMTokenIdentifierNewForTest.java
++++ /dev/null
+@@ -1,145 +0,0 @@
+-/**
+-* Licensed to the Apache Software Foundation (ASF) under one
+-* or more contributor license agreements.  See the NOTICE file
+-* distributed with this work for additional information
+-* regarding copyright ownership.  The ASF licenses this file
+-* to you under the Apache License, Version 2.0 (the
+-* "License"); you may not use this file except in compliance
+-* with the License.  You may obtain a copy of the License at
+-*
+-*     http://www.apache.org/licenses/LICENSE-2.0
+-*
+-* Unless required by applicable law or agreed to in writing, software
+-* distributed under the License is distributed on an "AS IS" BASIS,
+-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-* See the License for the specific language governing permissions and
+-* limitations under the License.
+-*/
+-package org.apache.hadoop.yarn.server;
+-
+-import java.io.DataInput;
+-import java.io.DataInputStream;
+-import java.io.DataOutput;
+-import java.io.IOException;
+-
+-import org.apache.commons.io.IOUtils;
+-import org.apache.commons.logging.Log;
+-import org.apache.commons.logging.LogFactory;
+-import org.apache.hadoop.io.Text;
+-import org.apache.hadoop.security.UserGroupInformation;
+-import org.apache.hadoop.security.token.TokenIdentifier;
+-import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
+-import org.apache.hadoop.yarn.api.records.NodeId;
+-import org.apache.hadoop.yarn.api.records.impl.pb.ApplicationAttemptIdPBImpl;
+-import org.apache.hadoop.yarn.api.records.impl.pb.NodeIdPBImpl;
+-import org.apache.hadoop.yarn.proto.YarnSecurityTestTokenProtos.NMTokenIdentifierNewProto;
+-import org.apache.hadoop.yarn.security.NMTokenIdentifier;
+-
+-import com.google.protobuf.TextFormat;
+-
+-public class NMTokenIdentifierNewForTest extends NMTokenIdentifier {
+-
+-  private static Log LOG = LogFactory.getLog(NMTokenIdentifierNewForTest.class);
+-
+-  public static final Text KIND = new Text("NMToken");
+-  
+-  private NMTokenIdentifierNewProto proto;
+-  private NMTokenIdentifierNewProto.Builder builder;
+-  
+-  public NMTokenIdentifierNewForTest(){
+-    builder = NMTokenIdentifierNewProto.newBuilder();
+-  }
+-  
+-  public NMTokenIdentifierNewForTest(NMTokenIdentifierNewProto proto) {
+-    this.proto = proto;
+-  }
+-  
+-  public NMTokenIdentifierNewForTest(NMTokenIdentifier tokenIdentifier, 
+-      String message) {
+-    builder = NMTokenIdentifierNewProto.newBuilder();
+-    builder.setAppAttemptId(tokenIdentifier.getProto().getAppAttemptId());
+-    builder.setNodeId(tokenIdentifier.getProto().getNodeId());
+-    builder.setAppSubmitter(tokenIdentifier.getApplicationSubmitter());
+-    builder.setKeyId(tokenIdentifier.getKeyId());
+-    builder.setMessage(message);
+-    proto = builder.build();
+-    builder = null;
+-  }
+-  
+-  @Override
+-  public void write(DataOutput out) throws IOException {
+-    LOG.debug("Writing NMTokenIdentifierNewForTest to RPC layer: " + this);
+-    out.write(proto.toByteArray());
+-  }
+-
+-  @Override
+-  public void readFields(DataInput in) throws IOException {
+-    DataInputStream dis = (DataInputStream)in;
+-    byte[] buffer = IOUtils.toByteArray(dis);
+-    proto = NMTokenIdentifierNewProto.parseFrom(buffer);
+-  }
+-
+-  @Override
+-  public Text getKind() {
+-    return KIND;
+-  }
+-
+-  @Override
+-  public UserGroupInformation getUser() {
+-    return null;
+-  }
+-  
+-  public String getMessage() {
+-    return proto.getMessage();
+-  }
+-  
+-  public void setMessage(String message) {
+-    builder.setMessage(message);
+-  }
+-  
+-  public NMTokenIdentifierNewProto getNewProto() {
+-    return proto;
+-  }
+-  
+-  public void build() {
+-    proto = builder.build();
+-    builder = null;
+-  }
+-  
+-  public ApplicationAttemptId getApplicationAttemptId() {
+-    return new ApplicationAttemptIdPBImpl(proto.getAppAttemptId());
+-  }
+-  
+-  public NodeId getNodeId() {
+-    return new NodeIdPBImpl(proto.getNodeId());
+-  }
+-  
+-  public String getApplicationSubmitter() {
+-    return proto.getAppSubmitter();
+-  }
+-  
+-  public int getKeyId() {
+-    return proto.getKeyId();
+-  }
+-  
+-  @Override
+-  public int hashCode() {
+-    return this.proto.hashCode();
+-  }
+-  
+-  @Override
+-  public boolean equals(Object other) {
+-    if (other == null)
+-      return false;
+-    if (other.getClass().isAssignableFrom(this.getClass())) {
+-      return this.getNewProto().equals(this.getClass().cast(other).getNewProto());
+-    }
+-    return false;
+-  }
+-  
+-  @Override
+-  public String toString() {
+-    return TextFormat.shortDebugString(this.proto);
+-  }
+-
+-}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/TestContainerManagerSecurity.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/TestContainerManagerSecurity.java
+index f0dcb56..99ed089 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/TestContainerManagerSecurity.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/java/org/apache/hadoop/yarn/server/TestContainerManagerSecurity.java
+@@ -33,7 +33,6 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
+-import org.apache.hadoop.io.DataInputBuffer;
+ import org.apache.hadoop.minikdc.KerberosSecurityTestcase;
+ import org.apache.hadoop.net.NetUtils;
+ import org.apache.hadoop.security.UserGroupInformation;
+@@ -63,14 +62,12 @@
+ import org.apache.hadoop.yarn.factory.providers.RecordFactoryProvider;
+ import org.apache.hadoop.yarn.ipc.YarnRPC;
+ import org.apache.hadoop.yarn.security.ContainerTokenIdentifier;
+-import org.apache.hadoop.yarn.security.NMTokenIdentifier;
+ import org.apache.hadoop.yarn.server.nodemanager.Context;
+ import org.apache.hadoop.yarn.server.nodemanager.NodeManager;
+ import org.apache.hadoop.yarn.server.nodemanager.containermanager.ContainerManagerImpl;
+ import org.apache.hadoop.yarn.server.nodemanager.security.NMTokenSecretManagerInNM;
+ import org.apache.hadoop.yarn.server.resourcemanager.security.NMTokenSecretManagerInRM;
+ import org.apache.hadoop.yarn.server.resourcemanager.security.RMContainerTokenSecretManager;
+-import org.apache.hadoop.yarn.server.security.BaseNMTokenSecretManager;
+ import org.apache.hadoop.yarn.server.utils.BuilderUtils;
+ import org.apache.hadoop.yarn.util.ConverterUtils;
+ import org.apache.hadoop.yarn.util.Records;
+@@ -305,56 +302,6 @@ private void testNMTokens(Configuration conf) throws Exception {
+     Assert.assertTrue(nmTokenSecretManagerNM
+         .isAppAttemptNMTokenKeyPresent(validAppAttemptId));
+     
+-    // using a new compatible version nmtoken, expect container can be started 
+-    // successfully.
+-    ApplicationAttemptId validAppAttemptId2 =
+-        ApplicationAttemptId.newInstance(appId, 2);
+-        
+-    ContainerId validContainerId2 =
+-        ContainerId.newContainerId(validAppAttemptId2, 0);
+-
+-    org.apache.hadoop.yarn.api.records.Token validContainerToken2 =
+-        containerTokenSecretManager.createContainerToken(validContainerId2,
+-            validNode, user, r, Priority.newInstance(0), 0);
+-    
+-    org.apache.hadoop.yarn.api.records.Token validNMToken2 =
+-        nmTokenSecretManagerRM.createNMToken(validAppAttemptId2, validNode, user);
+-    // First, get a new NMTokenIdentifier.
+-    NMTokenIdentifier newIdentifier = new NMTokenIdentifier();
+-    byte[] tokenIdentifierContent = validNMToken2.getIdentifier().array();
+-    DataInputBuffer dib = new DataInputBuffer();
+-    dib.reset(tokenIdentifierContent, tokenIdentifierContent.length);
+-    newIdentifier.readFields(dib);
+-    
+-    // Then, generate a new version NMTokenIdentifier (NMTokenIdentifierNewForTest)
+-    // with additional field of message.
+-    NMTokenIdentifierNewForTest newVersionIdentifier = 
+-        new NMTokenIdentifierNewForTest(newIdentifier, "message");
+-    
+-    // check new version NMTokenIdentifier has correct info.
+-    Assert.assertEquals("The ApplicationAttemptId is changed after set to " +
+-        "newVersionIdentifier", validAppAttemptId2.getAttemptId(), 
+-        newVersionIdentifier.getApplicationAttemptId().getAttemptId()
+-    );
+-    
+-    Assert.assertEquals("The message is changed after set to newVersionIdentifier",
+-        "message", newVersionIdentifier.getMessage());
+-    
+-    Assert.assertEquals("The NodeId is changed after set to newVersionIdentifier", 
+-        validNode, newVersionIdentifier.getNodeId());
+-    
+-    // create new Token based on new version NMTokenIdentifier.
+-    org.apache.hadoop.yarn.api.records.Token newVersionedNMToken =
+-        BaseNMTokenSecretManager.newInstance(
+-            nmTokenSecretManagerRM.retrievePassword(newVersionIdentifier), 
+-            newVersionIdentifier);
+-    
+-    // Verify startContainer is successful and no exception is thrown.
+-    Assert.assertTrue(testStartContainer(rpc, validAppAttemptId2, validNode,
+-        validContainerToken2, newVersionedNMToken, false).isEmpty());
+-    Assert.assertTrue(nmTokenSecretManagerNM
+-        .isAppAttemptNMTokenKeyPresent(validAppAttemptId2));
+-    
+     //Now lets wait till container finishes and is removed from node manager.
+     waitForContainerToFinishOnNM(validContainerId);
+     sb = new StringBuilder("Attempt to relaunch the same container with id ");
+@@ -652,36 +599,11 @@ private void testContainerToken(Configuration conf) throws IOException,
+     Assert.assertEquals(nmTokenSecretManagerInNM.getCurrentKey().getKeyId(),
+         nmTokenSecretManagerInRM.getCurrentKey().getKeyId());
+     
+-    
++    // Creating a tampered Container Token
+     RMContainerTokenSecretManager containerTokenSecretManager =
+         yarnCluster.getResourceManager().getRMContext().
+             getContainerTokenSecretManager();
+     
+-    Resource r = Resource.newInstance(1230, 2);
+-    
+-    Token containerToken = 
+-        containerTokenSecretManager.createContainerToken(
+-            cId, nodeId, user, r, Priority.newInstance(0), 0);
+-    
+-    ContainerTokenIdentifier containerTokenIdentifier = 
+-        getContainerTokenIdentifierFromToken(containerToken);
+-    
+-    // Verify new compatible version ContainerTokenIdentifier can work successfully.
+-    ContainerTokenIdentifierForTest newVersionTokenIdentifier = 
+-        new ContainerTokenIdentifierForTest(containerTokenIdentifier, "message");
+-    byte[] password = 
+-        containerTokenSecretManager.createPassword(newVersionTokenIdentifier);
+-    
+-    Token newContainerToken = BuilderUtils.newContainerToken(
+-        nodeId, password, newVersionTokenIdentifier);
+-    
+-    Token nmToken =
+-            nmTokenSecretManagerInRM.createNMToken(appAttemptId, nodeId, user);
+-    YarnRPC rpc = YarnRPC.create(conf);
+-    Assert.assertTrue(testStartContainer(rpc, appAttemptId, nodeId,
+-        newContainerToken, nmToken, false).isEmpty());
+-    
+-    // Creating a tampered Container Token
+     RMContainerTokenSecretManager tamperedContainerTokenSecretManager =
+         new RMContainerTokenSecretManager(conf);
+     tamperedContainerTokenSecretManager.rollMasterKey();
+@@ -691,28 +613,19 @@ private void testContainerToken(Configuration conf) throws IOException,
+     } while (containerTokenSecretManager.getCurrentKey().getKeyId()
+         == tamperedContainerTokenSecretManager.getCurrentKey().getKeyId());
+     
+-    ContainerId cId2 = ContainerId.newContainerId(appAttemptId, 1);
++    Resource r = Resource.newInstance(1230, 2);
+     // Creating modified containerToken
+-    Token containerToken2 =
+-        tamperedContainerTokenSecretManager.createContainerToken(cId2, nodeId,
++    Token containerToken =
++        tamperedContainerTokenSecretManager.createContainerToken(cId, nodeId,
+             user, r, Priority.newInstance(0), 0);
+-    
++    Token nmToken =
++        nmTokenSecretManagerInRM.createNMToken(appAttemptId, nodeId, user);
++    YarnRPC rpc = YarnRPC.create(conf);
+     StringBuilder sb = new StringBuilder("Given Container ");
+-    sb.append(cId2);
++    sb.append(cId);
+     sb.append(" seems to have an illegally generated token.");
+     Assert.assertTrue(testStartContainer(rpc, appAttemptId, nodeId,
+-        containerToken2, nmToken, true).contains(sb.toString()));
+-  }
+-
+-  private ContainerTokenIdentifier getContainerTokenIdentifierFromToken(
+-      Token containerToken) throws IOException {
+-    ContainerTokenIdentifier containerTokenIdentifier;
+-    containerTokenIdentifier = new ContainerTokenIdentifier();
+-    byte[] tokenIdentifierContent = containerToken.getIdentifier().array();
+-    DataInputBuffer dib = new DataInputBuffer();
+-    dib.reset(tokenIdentifierContent, tokenIdentifierContent.length);
+-    containerTokenIdentifier.readFields(dib);
+-    return containerTokenIdentifier;
++        containerToken, nmToken, true).contains(sb.toString()));
+   }
+ 
+   /**
+@@ -755,15 +668,12 @@ private void testContainerTokenWithEpoch(Configuration conf)
+     Token containerToken =
+         containerTokenSecretManager.createContainerToken(cId, nodeId, user, r,
+             Priority.newInstance(0), 0);
+-    
++
++    ByteArrayDataInput input = ByteStreams.newDataInput(
++        containerToken.getIdentifier().array());
+     ContainerTokenIdentifier containerTokenIdentifier =
+         new ContainerTokenIdentifier();
+-    byte[] tokenIdentifierContent = containerToken.getIdentifier().array();
+-    DataInputBuffer dib = new DataInputBuffer();
+-    dib.reset(tokenIdentifierContent, tokenIdentifierContent.length);
+-    containerTokenIdentifier.readFields(dib);
+-    
+-    
++    containerTokenIdentifier.readFields(input);
+     Assert.assertEquals(cId, containerTokenIdentifier.getContainerID());
+     Assert.assertEquals(
+         cId.toString(), containerTokenIdentifier.getContainerID().toString());
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/proto/test_token.proto b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/proto/test_token.proto
+deleted file mode 100644
+index 853f477..0000000
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-tests/src/test/proto/test_token.proto
++++ /dev/null
+@@ -1,48 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-option java_package = "org.apache.hadoop.yarn.proto";
+-option java_outer_classname = "YarnSecurityTestTokenProtos";
+-option java_generic_services = true;
+-option java_generate_equals_and_hash = true;
+-package hadoop.yarn;
+-
+-import "yarn_protos.proto";
+-
+-message NMTokenIdentifierNewProto {
+-  optional ApplicationAttemptIdProto appAttemptId = 1;
+-  optional NodeIdProto nodeId = 2;
+-  optional string appSubmitter = 3;
+-  optional int32 keyId = 4;
+-  optional string message = 5;
+-}
+-
+-message ContainerTokenIdentifierForTestProto {
+-  optional ContainerIdProto containerId = 1;
+-  optional string nmHostAddr = 2;
+-  optional string appSubmitter = 3;
+-  optional ResourceProto resource = 4;
+-  optional int64 expiryTimeStamp = 5;
+-  optional int32 masterKeyId = 6;
+-  optional int64 rmIdentifier = 7;
+-  optional PriorityProto priority = 8;
+-  optional int64 creationTime = 9;
+-  optional LogAggregationContextProto logAggregationContext = 10;
+-  optional string message = 11;
+-}
+-
+-- 
+1.7.9.5
+

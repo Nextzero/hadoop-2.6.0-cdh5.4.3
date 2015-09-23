@@ -1,0 +1,475 @@
+From 23bbde77b0749684893c80e5d688a9f3faa82ed3 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Tue, 26 May 2015 12:15:46 -0700
+Subject: [PATCH 581/596] HADOOP-11969. ThreadLocal initialization in several
+ classes is not thread safe (Sean Busbey via Colin
+ P. McCabe)
+
+(cherry picked from commit 7dba7005b79994106321b0f86bc8f4ea51a3c185)
+---
+ .../main/java/org/apache/hadoop/io/MD5Hash.java    |    3 ++-
+ .../src/main/java/org/apache/hadoop/io/Text.java   |    4 ++--
+ .../apache/hadoop/record/BinaryRecordInput.java    |    7 ++++---
+ .../apache/hadoop/record/BinaryRecordOutput.java   |   17 +++++++++--------
+ .../org/apache/hadoop/util/ReflectionUtils.java    |    6 +++---
+ .../hadoop/crypto/key/kms/server/KMSMDCFilter.java |    2 +-
+ .../apache/hadoop/lib/servlet/ServerWebApp.java    |    3 ++-
+ .../java/org/apache/hadoop/test/TestDirHelper.java |    2 +-
+ .../org/apache/hadoop/test/TestHdfsHelper.java     |    4 ++--
+ .../org/apache/hadoop/test/TestJettyHelper.java    |    2 +-
+ .../java/org/apache/hadoop/mapred/lib/Chain.java   |    2 +-
+ .../hadoop/mapred/pipes/PipesPartitioner.java      |    6 +++---
+ .../task/reduce/ShuffleSchedulerImpl.java          |    7 ++++---
+ .../org/apache/hadoop/tools/util/DistCpUtils.java  |    2 +-
+ .../apache/hadoop/typedbytes/TypedBytesInput.java  |    8 +++++---
+ .../apache/hadoop/typedbytes/TypedBytesOutput.java |    8 +++++---
+ .../hadoop/typedbytes/TypedBytesRecordInput.java   |    8 +++++---
+ .../hadoop/typedbytes/TypedBytesRecordOutput.java  |    8 +++++---
+ .../hadoop/typedbytes/TypedBytesWritableInput.java |    8 +++++---
+ .../typedbytes/TypedBytesWritableOutput.java       |    8 +++++---
+ 20 files changed, 66 insertions(+), 49 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/MD5Hash.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/MD5Hash.java
+index 87c8982..822e089 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/MD5Hash.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/MD5Hash.java
+@@ -35,7 +35,8 @@
+ public class MD5Hash implements WritableComparable<MD5Hash> {
+   public static final int MD5_LEN = 16;
+ 
+-  private static ThreadLocal<MessageDigest> DIGESTER_FACTORY = new ThreadLocal<MessageDigest>() {
++  private static final ThreadLocal<MessageDigest> DIGESTER_FACTORY =
++      new ThreadLocal<MessageDigest>() {
+     @Override
+     protected MessageDigest initialValue() {
+       try {
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/Text.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/Text.java
+index 3dc5076..9b63af2 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/Text.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/Text.java
+@@ -53,7 +53,7 @@
+ public class Text extends BinaryComparable
+     implements WritableComparable<BinaryComparable> {
+   
+-  private static ThreadLocal<CharsetEncoder> ENCODER_FACTORY =
++  private static final ThreadLocal<CharsetEncoder> ENCODER_FACTORY =
+     new ThreadLocal<CharsetEncoder>() {
+       @Override
+       protected CharsetEncoder initialValue() {
+@@ -63,7 +63,7 @@ protected CharsetEncoder initialValue() {
+     }
+   };
+   
+-  private static ThreadLocal<CharsetDecoder> DECODER_FACTORY =
++  private static final ThreadLocal<CharsetDecoder> DECODER_FACTORY =
+     new ThreadLocal<CharsetDecoder>() {
+     @Override
+     protected CharsetDecoder initialValue() {
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/record/BinaryRecordInput.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/record/BinaryRecordInput.java
+index 5c302e5..f923a80 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/record/BinaryRecordInput.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/record/BinaryRecordInput.java
+@@ -57,9 +57,10 @@ private void setDataInput(DataInput inp) {
+     this.in = inp;
+   }
+     
+-  private static ThreadLocal bIn = new ThreadLocal() {
++  private static final ThreadLocal<BinaryRecordInput> B_IN =
++      new ThreadLocal<BinaryRecordInput>() {
+       @Override
+-      protected synchronized Object initialValue() {
++      protected BinaryRecordInput initialValue() {
+         return new BinaryRecordInput();
+       }
+     };
+@@ -70,7 +71,7 @@ protected synchronized Object initialValue() {
+    * @return binary record input corresponding to the supplied DataInput.
+    */
+   public static BinaryRecordInput get(DataInput inp) {
+-    BinaryRecordInput bin = (BinaryRecordInput) bIn.get();
++    BinaryRecordInput bin = B_IN.get();
+     bin.setDataInput(inp);
+     return bin;
+   }
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/record/BinaryRecordOutput.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/record/BinaryRecordOutput.java
+index aa6b8e9..adc01f3 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/record/BinaryRecordOutput.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/record/BinaryRecordOutput.java
+@@ -44,20 +44,21 @@ private void setDataOutput(DataOutput out) {
+     this.out = out;
+   }
+     
+-  private static ThreadLocal bOut = new ThreadLocal() {
+-      @Override
+-      protected synchronized Object initialValue() {
+-        return new BinaryRecordOutput();
+-      }
+-    };
+-    
++  private static final ThreadLocal<BinaryRecordOutput> B_OUT =
++      new ThreadLocal<BinaryRecordOutput>() {
++    @Override
++    protected BinaryRecordOutput initialValue() {
++      return new BinaryRecordOutput();
++    }
++  };
++
+   /**
+    * Get a thread-local record output for the supplied DataOutput.
+    * @param out data output stream
+    * @return binary record output corresponding to the supplied DataOutput.
+    */
+   public static BinaryRecordOutput get(DataOutput out) {
+-    BinaryRecordOutput bout = (BinaryRecordOutput) bOut.get();
++    BinaryRecordOutput bout = B_OUT.get();
+     bout.setDataOutput(out);
+     return bout;
+   }
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/util/ReflectionUtils.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/util/ReflectionUtils.java
+index 3977e60..2f86c09 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/util/ReflectionUtils.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/util/ReflectionUtils.java
+@@ -258,7 +258,7 @@ void moveData() {
+   /**
+    * Allocate a buffer for each thread that tries to clone objects.
+    */
+-  private static ThreadLocal<CopyInCopyOutBuffer> cloneBuffers
++  private static final ThreadLocal<CopyInCopyOutBuffer> CLONE_BUFFERS
+       = new ThreadLocal<CopyInCopyOutBuffer>() {
+       @Override
+       protected synchronized CopyInCopyOutBuffer initialValue() {
+@@ -283,7 +283,7 @@ private static SerializationFactory getFactory(Configuration conf) {
+   @SuppressWarnings("unchecked")
+   public static <T> T copy(Configuration conf, 
+                                 T src, T dst) throws IOException {
+-    CopyInCopyOutBuffer buffer = cloneBuffers.get();
++    CopyInCopyOutBuffer buffer = CLONE_BUFFERS.get();
+     buffer.outBuffer.reset();
+     SerializationFactory factory = getFactory(conf);
+     Class<T> cls = (Class<T>) src.getClass();
+@@ -300,7 +300,7 @@ private static SerializationFactory getFactory(Configuration conf) {
+   @Deprecated
+   public static void cloneWritableInto(Writable dst, 
+                                        Writable src) throws IOException {
+-    CopyInCopyOutBuffer buffer = cloneBuffers.get();
++    CopyInCopyOutBuffer buffer = CLONE_BUFFERS.get();
+     buffer.outBuffer.reset();
+     src.write(buffer.outBuffer);
+     buffer.moveData();
+diff --git a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSMDCFilter.java b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSMDCFilter.java
+index 2a3c149..81591e5 100644
+--- a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSMDCFilter.java
++++ b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSMDCFilter.java
+@@ -49,7 +49,7 @@ private Data(UserGroupInformation ugi, String method, StringBuffer url) {
+     }
+   }
+ 
+-  private static ThreadLocal<Data> DATA_TL = new ThreadLocal<Data>();
++  private static final ThreadLocal<Data> DATA_TL = new ThreadLocal<Data>();
+ 
+   public static UserGroupInformation getUgi() {
+     return DATA_TL.get().ugi;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/main/java/org/apache/hadoop/lib/servlet/ServerWebApp.java b/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/main/java/org/apache/hadoop/lib/servlet/ServerWebApp.java
+index 9b0ea2a..bfc49da 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/main/java/org/apache/hadoop/lib/servlet/ServerWebApp.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/main/java/org/apache/hadoop/lib/servlet/ServerWebApp.java
+@@ -46,7 +46,8 @@
+   private static final String HTTP_PORT = ".http.port";
+   public static final String SSL_ENABLED = ".ssl.enabled";
+ 
+-  private static ThreadLocal<String> HOME_DIR_TL = new ThreadLocal<String>();
++  private static final ThreadLocal<String> HOME_DIR_TL =
++      new ThreadLocal<String>();
+ 
+   private InetSocketAddress authority;
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestDirHelper.java b/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestDirHelper.java
+index d20658f..8eafbf8 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestDirHelper.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestDirHelper.java
+@@ -89,7 +89,7 @@ private static void delete(File file) throws IOException {
+     }
+   }
+ 
+-  private static ThreadLocal<File> TEST_DIR_TL = new InheritableThreadLocal<File>();
++  private static final ThreadLocal<File> TEST_DIR_TL = new InheritableThreadLocal<File>();
+ 
+   @Override
+   public Statement apply(final Statement statement, final FrameworkMethod frameworkMethod, final Object o) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestHdfsHelper.java b/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestHdfsHelper.java
+index 50a1af2..85cf48d 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestHdfsHelper.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestHdfsHelper.java
+@@ -39,9 +39,9 @@ public void dummy() {
+ 
+   public static final String HADOOP_MINI_HDFS = "test.hadoop.hdfs";
+ 
+-  private static ThreadLocal<Configuration> HDFS_CONF_TL = new InheritableThreadLocal<Configuration>();
++  private static final ThreadLocal<Configuration> HDFS_CONF_TL = new InheritableThreadLocal<Configuration>();
+ 
+-  private static ThreadLocal<Path> HDFS_TEST_DIR_TL = new InheritableThreadLocal<Path>();
++  private static final ThreadLocal<Path> HDFS_TEST_DIR_TL = new InheritableThreadLocal<Path>();
+ 
+   @Override
+   public Statement apply(Statement statement, FrameworkMethod frameworkMethod, Object o) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestJettyHelper.java b/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestJettyHelper.java
+index c90bd6a..177563d 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestJettyHelper.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-httpfs/src/test/java/org/apache/hadoop/test/TestJettyHelper.java
+@@ -52,7 +52,7 @@ public TestJettyHelper(String keyStoreType, String keyStore,
+     this.keyStorePassword = keyStorePassword;
+   }
+ 
+-  private static ThreadLocal<TestJettyHelper> TEST_JETTY_TL =
++  private static final ThreadLocal<TestJettyHelper> TEST_JETTY_TL =
+       new InheritableThreadLocal<TestJettyHelper>();
+ 
+   @Override
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/lib/Chain.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/lib/Chain.java
+index 57841f0..c1d3f9f 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/lib/Chain.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/lib/Chain.java
+@@ -290,7 +290,7 @@ public void close() throws IOException {
+   // using a ThreadLocal to reuse the ByteArrayOutputStream used for ser/deser
+   // it has to be a thread local because if not it would break if used from a
+   // MultiThreadedMapRunner.
+-  private ThreadLocal<DataOutputBuffer> threadLocalDataOutputBuffer =
++  private final ThreadLocal<DataOutputBuffer> threadLocalDataOutputBuffer =
+     new ThreadLocal<DataOutputBuffer>() {
+       protected DataOutputBuffer initialValue() {
+         return new DataOutputBuffer(1024);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/pipes/PipesPartitioner.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/pipes/PipesPartitioner.java
+index ef9da0b..3a10420 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/pipes/PipesPartitioner.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/pipes/PipesPartitioner.java
+@@ -32,7 +32,7 @@
+                        V extends Writable>
+   implements Partitioner<K, V> {
+   
+-  private static ThreadLocal<Integer> cache = new ThreadLocal<Integer>();
++  private static final ThreadLocal<Integer> CACHE = new ThreadLocal<Integer>();
+   private Partitioner<K, V> part = null;
+   
+   @SuppressWarnings("unchecked")
+@@ -46,7 +46,7 @@ public void configure(JobConf conf) {
+    * @param newValue the next partition value
+    */
+   static void setNextPartition(int newValue) {
+-    cache.set(newValue);
++    CACHE.set(newValue);
+   }
+ 
+   /**
+@@ -58,7 +58,7 @@ static void setNextPartition(int newValue) {
+    */
+   public int getPartition(K key, V value, 
+                           int numPartitions) {
+-    Integer result = cache.get();
++    Integer result = CACHE.get();
+     if (result == null) {
+       return part.getPartition(key, value, numPartitions);
+     } else {
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/task/reduce/ShuffleSchedulerImpl.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/task/reduce/ShuffleSchedulerImpl.java
+index 985a1e1..aa06239 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/task/reduce/ShuffleSchedulerImpl.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/task/reduce/ShuffleSchedulerImpl.java
+@@ -54,7 +54,8 @@
+ @InterfaceAudience.Private
+ @InterfaceStability.Unstable
+ public class ShuffleSchedulerImpl<K,V> implements ShuffleScheduler<K,V> {
+-  static ThreadLocal<Long> shuffleStart = new ThreadLocal<Long>() {
++  private static final ThreadLocal<Long> SHUFFLE_START =
++      new ThreadLocal<Long>() {
+     protected Long initialValue() {
+       return 0L;
+     }
+@@ -414,7 +415,7 @@ public synchronized MapHost getHost() throws InterruptedException {
+ 
+       LOG.info("Assigning " + host + " with " + host.getNumKnownMapOutputs() +
+                " to " + Thread.currentThread().getName());
+-      shuffleStart.set(Time.monotonicNow());
++      SHUFFLE_START.set(Time.monotonicNow());
+ 
+       return host;
+   }
+@@ -455,7 +456,7 @@ public synchronized void freeHost(MapHost host) {
+       }
+     }
+     LOG.info(host + " freed by " + Thread.currentThread().getName() + " in " +
+-             (Time.monotonicNow()-shuffleStart.get()) + "ms");
++             (Time.monotonicNow()-SHUFFLE_START.get()) + "ms");
+   }
+ 
+   public synchronized void resetKnownMaps() {
+diff --git a/hadoop-tools/hadoop-distcp/src/main/java/org/apache/hadoop/tools/util/DistCpUtils.java b/hadoop-tools/hadoop-distcp/src/main/java/org/apache/hadoop/tools/util/DistCpUtils.java
+index 71e84a1..d2511c9 100644
+--- a/hadoop-tools/hadoop-distcp/src/main/java/org/apache/hadoop/tools/util/DistCpUtils.java
++++ b/hadoop-tools/hadoop-distcp/src/main/java/org/apache/hadoop/tools/util/DistCpUtils.java
+@@ -402,7 +402,7 @@ public static void checkFileSystemXAttrSupport(FileSystem fs)
+   /**
+    * String utility to convert a number-of-bytes to human readable format.
+    */
+-  private static ThreadLocal<DecimalFormat> FORMATTER
++  private static final ThreadLocal<DecimalFormat> FORMATTER
+                         = new ThreadLocal<DecimalFormat>() {
+     @Override
+     protected DecimalFormat initialValue() {
+diff --git a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesInput.java b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesInput.java
+index b964d73..cff0be2 100644
+--- a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesInput.java
++++ b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesInput.java
+@@ -41,8 +41,10 @@ private void setDataInput(DataInput in) {
+     this.in = in;
+   }
+ 
+-  private static ThreadLocal tbIn = new ThreadLocal() {
+-    protected synchronized Object initialValue() {
++  private static final ThreadLocal<TypedBytesInput> TB_IN =
++      new ThreadLocal<TypedBytesInput>() {
++    @Override
++    protected TypedBytesInput initialValue() {
+       return new TypedBytesInput();
+     }
+   };
+@@ -53,7 +55,7 @@ protected synchronized Object initialValue() {
+    * @return typed bytes input corresponding to the supplied {@link DataInput}.
+    */
+   public static TypedBytesInput get(DataInput in) {
+-    TypedBytesInput bin = (TypedBytesInput) tbIn.get();
++    TypedBytesInput bin = TB_IN.get();
+     bin.setDataInput(in);
+     return bin;
+   }
+diff --git a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesOutput.java b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesOutput.java
+index 243ad45..ecb3565 100644
+--- a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesOutput.java
++++ b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesOutput.java
+@@ -42,8 +42,10 @@ private void setDataOutput(DataOutput out) {
+     this.out = out;
+   }
+ 
+-  private static ThreadLocal tbOut = new ThreadLocal() {
+-    protected synchronized Object initialValue() {
++  private static final ThreadLocal<TypedBytesOutput> TB_OUT =
++      new ThreadLocal<TypedBytesOutput>() {
++    @Override
++    protected TypedBytesOutput initialValue() {
+       return new TypedBytesOutput();
+     }
+   };
+@@ -56,7 +58,7 @@ protected synchronized Object initialValue() {
+    * {@link DataOutput}.
+    */
+   public static TypedBytesOutput get(DataOutput out) {
+-    TypedBytesOutput bout = (TypedBytesOutput) tbOut.get();
++    TypedBytesOutput bout = TB_OUT.get();
+     bout.setDataOutput(out);
+     return bout;
+   }
+diff --git a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesRecordInput.java b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesRecordInput.java
+index 999017f..e5e918c 100644
+--- a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesRecordInput.java
++++ b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesRecordInput.java
+@@ -38,8 +38,10 @@ private void setTypedBytesInput(TypedBytesInput in) {
+     this.in = in;
+   }
+ 
+-  private static ThreadLocal tbIn = new ThreadLocal() {
+-    protected synchronized Object initialValue() {
++  private static final ThreadLocal<TypedBytesRecordInput> TB_IN =
++      new ThreadLocal<TypedBytesRecordInput>() {
++    @Override
++    protected TypedBytesRecordInput initialValue() {
+       return new TypedBytesRecordInput();
+     }
+   };
+@@ -53,7 +55,7 @@ protected synchronized Object initialValue() {
+    *         {@link TypedBytesInput}.
+    */
+   public static TypedBytesRecordInput get(TypedBytesInput in) {
+-    TypedBytesRecordInput bin = (TypedBytesRecordInput) tbIn.get();
++    TypedBytesRecordInput bin = TB_IN.get();
+     bin.setTypedBytesInput(in);
+     return bin;
+   }
+diff --git a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesRecordOutput.java b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesRecordOutput.java
+index 59012bc..8f55206 100644
+--- a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesRecordOutput.java
++++ b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesRecordOutput.java
+@@ -40,8 +40,10 @@ private void setTypedBytesOutput(TypedBytesOutput out) {
+     this.out = out;
+   }
+ 
+-  private static ThreadLocal tbOut = new ThreadLocal() {
+-    protected synchronized Object initialValue() {
++  private static final ThreadLocal<TypedBytesRecordOutput> TB_OUT =
++      new ThreadLocal<TypedBytesRecordOutput>() {
++    @Override
++    protected TypedBytesRecordOutput initialValue() {
+       return new TypedBytesRecordOutput();
+     }
+   };
+@@ -55,7 +57,7 @@ protected synchronized Object initialValue() {
+    *         {@link TypedBytesOutput}.
+    */
+   public static TypedBytesRecordOutput get(TypedBytesOutput out) {
+-    TypedBytesRecordOutput bout = (TypedBytesRecordOutput) tbOut.get();
++    TypedBytesRecordOutput bout = TB_OUT.get();
+     bout.setTypedBytesOutput(out);
+     return bout;
+   }
+diff --git a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesWritableInput.java b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesWritableInput.java
+index f15ae26..a7ca12c 100644
+--- a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesWritableInput.java
++++ b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesWritableInput.java
+@@ -61,8 +61,10 @@ private void setTypedBytesInput(TypedBytesInput in) {
+     this.in = in;
+   }
+ 
+-  private static ThreadLocal tbIn = new ThreadLocal() {
+-    protected synchronized Object initialValue() {
++  private static final ThreadLocal<TypedBytesWritableInput> TB_IN =
++      new ThreadLocal<TypedBytesWritableInput>() {
++    @Override
++    protected TypedBytesWritableInput initialValue() {
+       return new TypedBytesWritableInput();
+     }
+   };
+@@ -76,7 +78,7 @@ protected synchronized Object initialValue() {
+    *         {@link TypedBytesInput}.
+    */
+   public static TypedBytesWritableInput get(TypedBytesInput in) {
+-    TypedBytesWritableInput bin = (TypedBytesWritableInput) tbIn.get();
++    TypedBytesWritableInput bin = TB_IN.get();
+     bin.setTypedBytesInput(in);
+     return bin;
+   }
+diff --git a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesWritableOutput.java b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesWritableOutput.java
+index 3fb11cc..8dd0472 100644
+--- a/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesWritableOutput.java
++++ b/hadoop-tools/hadoop-streaming/src/main/java/org/apache/hadoop/typedbytes/TypedBytesWritableOutput.java
+@@ -58,8 +58,10 @@ private void setTypedBytesOutput(TypedBytesOutput out) {
+     this.out = out;
+   }
+ 
+-  private static ThreadLocal tbOut = new ThreadLocal() {
+-    protected synchronized Object initialValue() {
++  private static final ThreadLocal<TypedBytesWritableOutput> TB_OUT =
++      new ThreadLocal<TypedBytesWritableOutput>() {
++    @Override
++    protected TypedBytesWritableOutput initialValue() {
+       return new TypedBytesWritableOutput();
+     }
+   };
+@@ -73,7 +75,7 @@ protected synchronized Object initialValue() {
+    *         {@link TypedBytesOutput}.
+    */
+   public static TypedBytesWritableOutput get(TypedBytesOutput out) {
+-    TypedBytesWritableOutput bout = (TypedBytesWritableOutput) tbOut.get();
++    TypedBytesWritableOutput bout = TB_OUT.get();
+     bout.setTypedBytesOutput(out);
+     return bout;
+   }
+-- 
+1.7.9.5
+

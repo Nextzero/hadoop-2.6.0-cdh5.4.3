@@ -1,0 +1,31 @@
+From d434a93e7b1ef7a771ee356ea0a45d0cae6bca5b Mon Sep 17 00:00:00 2001
+From: Dave Wang <dsw@cloudera.com>
+Date: Tue, 23 Sep 2014 22:11:22 -0700
+Subject: [PATCH 201/596] CDH-21785 CLOUDERA.BUILD Add hadoop-aws dependency
+ to hadoop-client
+
+(cherry picked from commit 2a5a3d6afe7a03fdbbd13b1d80a17d91cdcd6dbd)
+---
+ hadoop-client/pom.xml |    6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/hadoop-client/pom.xml b/hadoop-client/pom.xml
+index 3c7c1d0..7980d48 100644
+--- a/hadoop-client/pom.xml
++++ b/hadoop-client/pom.xml
+@@ -328,6 +328,12 @@
+ 
+     <dependency>
+       <groupId>org.apache.hadoop</groupId>
++      <artifactId>hadoop-aws</artifactId>
++      <scope>compile</scope>
++    </dependency>
++
++    <dependency>
++      <groupId>org.apache.hadoop</groupId>
+       <artifactId>hadoop-annotations</artifactId>
+       <scope>compile</scope>
+       <exclusions>
+-- 
+1.7.9.5
+

@@ -1,0 +1,324 @@
+From b5a9aeddbdb54140768660e3ec0498987684e66d Mon Sep 17 00:00:00 2001
+From: Jason Lowe <jlowe@apache.org>
+Date: Thu, 18 Dec 2014 23:28:18 +0000
+Subject: [PATCH 354/596] YARN-2964. RM prematurely cancels tokens for jobs
+ that submit jobs (oozie). Contributed by Jian He
+
+(cherry picked from commit 0402bada1989258ecbfdc437cb339322a1f55a97)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../security/DelegationTokenRenewer.java           |   42 +++++++++++--
+ .../hadoop/yarn/server/resourcemanager/MockRM.java |   13 ++--
+ .../security/TestDelegationTokenRenewer.java       |   62 ++++++++++++++++++--
+ 3 files changed, 100 insertions(+), 17 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java
+index 108e81a..5459fda 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java
+@@ -70,7 +70,6 @@
+ 
+ import com.google.common.annotations.VisibleForTesting;
+ import com.google.common.util.concurrent.ThreadFactoryBuilder;
+-
+ /**
+  * Service to renew application delegation tokens.
+  */
+@@ -95,6 +94,9 @@
+   private ConcurrentMap<ApplicationId, Set<DelegationTokenToRenew>> appTokens =
+       new ConcurrentHashMap<ApplicationId, Set<DelegationTokenToRenew>>();
+ 
++  private ConcurrentMap<Token<?>, DelegationTokenToRenew> allTokens =
++      new ConcurrentHashMap<Token<?>, DelegationTokenToRenew>();
++
+   private final ConcurrentMap<ApplicationId, Long> delayedRemovalMap =
+       new ConcurrentHashMap<ApplicationId, Long>();
+ 
+@@ -203,6 +205,7 @@ protected void serviceStop() {
+       renewalTimer.cancel();
+     }
+     appTokens.clear();
++    allTokens.clear();
+     this.renewerService.shutdown();
+     dtCancelThread.interrupt();
+     try {
+@@ -231,7 +234,7 @@ protected void serviceStop() {
+     public final Configuration conf;
+     public long expirationDate;
+     public TimerTask timerTask;
+-    public final boolean shouldCancelAtEnd;
++    public volatile boolean shouldCancelAtEnd;
+     public long maxDate;
+     public String user;
+ 
+@@ -408,12 +411,25 @@ private void handleAppSubmitEvent(DelegationTokenRenewerAppSubmitEvent evt)
+     boolean hasHdfsToken = false;
+     for (Token<?> token : tokens) {
+       if (token.isManaged()) {
+-        tokenList.add(new DelegationTokenToRenew(applicationId,
+-            token, getConfig(), now, shouldCancelAtEnd, evt.getUser()));
+         if (token.getKind().equals(new Text("HDFS_DELEGATION_TOKEN"))) {
+           LOG.info(applicationId + " found existing hdfs token " + token);
+           hasHdfsToken = true;
+         }
++
++        DelegationTokenToRenew dttr = allTokens.get(token);
++        if (dttr != null) {
++          // If any of the jobs sharing the same token doesn't want to cancel
++          // the token, we should not cancel the token.
++          if (!evt.shouldCancelAtEnd) {
++            dttr.shouldCancelAtEnd = evt.shouldCancelAtEnd;
++            LOG.info("Set shouldCancelAtEnd=" + shouldCancelAtEnd
++                + " for token " + dttr.token);
++          }
++          continue;
++        }
++
++        tokenList.add(new DelegationTokenToRenew(applicationId, token,
++          getConfig(), now, shouldCancelAtEnd, evt.getUser()));
+       }
+     }
+ 
+@@ -430,6 +446,7 @@ private void handleAppSubmitEvent(DelegationTokenRenewerAppSubmitEvent evt)
+       }
+       for (DelegationTokenToRenew dtr : tokenList) {
+         appTokens.get(applicationId).add(dtr);
++        allTokens.put(dtr.token, dtr);
+         setTimerForTokenRenewal(dtr);
+       }
+     }
+@@ -497,7 +514,6 @@ protected void setTimerForTokenRenewal(DelegationTokenToRenew token)
+     token.setTimerTask(tTask); // keep reference to the timer
+ 
+     renewalTimer.schedule(token.timerTask, new Date(renewIn));
+-
+     LOG.info("Renew " + token + " in " + expiresIn + " ms, appId = "
+         + token.applicationId);
+   }
+@@ -560,6 +576,10 @@ private void requestNewHdfsDelegationTokenIfNeeded(
+   private void requestNewHdfsDelegationToken(ApplicationId applicationId,
+       String user, boolean shouldCancelAtEnd) throws IOException,
+       InterruptedException {
++    if (!hasProxyUserPrivileges) {
++      LOG.info("RM proxy-user privilege is not enabled. Skip requesting hdfs tokens.");
++      return;
++    }
+     // Get new hdfs tokens for this user
+     Credentials credentials = new Credentials();
+     Token<?>[] newTokens = obtainSystemTokensForUser(user, credentials);
+@@ -622,6 +642,8 @@ private void removeFailedDelegationToken(DelegationTokenToRenew t) {
+     LOG.error("removing failed delegation token for appid=" + applicationId
+         + ";t=" + t.token.getService());
+     appTokens.get(applicationId).remove(t);
++    allTokens.remove(t.token);
++
+     // cancel the timer
+     if (t.timerTask != null) {
+       t.timerTask.cancel();
+@@ -686,9 +708,14 @@ private void removeApplicationFromRenewal(ApplicationId applicationId) {
+           cancelToken(dttr);
+ 
+           it.remove();
++          allTokens.remove(dttr.token);
+         }
+       }
+     }
++
++    if(tokens != null && tokens.isEmpty()) {
++      appTokens.remove(applicationId);
++    }
+   }
+ 
+   /**
+@@ -843,4 +870,9 @@ public ApplicationId getApplicationId() {
+       return appId;
+     }
+   }
++
++  // only for testing
++  protected ConcurrentMap<Token<?>, DelegationTokenToRenew> getAllTokens() {
++    return allTokens;
++  }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/MockRM.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/MockRM.java
+index 9d0ac27..5794b43 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/MockRM.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/MockRM.java
+@@ -313,7 +313,7 @@ public RMApp submitApp(int masterMemory, String name, String user,
+       boolean waitForAccepted, boolean keepContainers) throws Exception {
+     return submitApp(masterMemory, name, user, acls, unmanaged, queue,
+         maxAppAttempts, ts, appType, waitForAccepted, keepContainers,
+-        false, null, 0, null);
++        false, null, 0, null, true);
+   }
+ 
+   public RMApp submitApp(int masterMemory, long attemptFailuresValidityInterval)
+@@ -322,7 +322,7 @@ public RMApp submitApp(int masterMemory, long attemptFailuresValidityInterval)
+       .getShortUserName(), null, false, null,
+       super.getConfig().getInt(YarnConfiguration.RM_AM_MAX_ATTEMPTS,
+       YarnConfiguration.DEFAULT_RM_AM_MAX_ATTEMPTS), null, null, true, false,
+-      false, null, attemptFailuresValidityInterval, null);
++      false, null, attemptFailuresValidityInterval, null, true);
+   }
+ 
+   public RMApp submitApp(int masterMemory, String name, String user,
+@@ -332,26 +332,24 @@ public RMApp submitApp(int masterMemory, String name, String user,
+       ApplicationId applicationId) throws Exception {
+     return submitApp(masterMemory, name, user, acls, unmanaged, queue,
+       maxAppAttempts, ts, appType, waitForAccepted, keepContainers,
+-      isAppIdProvided, applicationId, 0, null);
++      isAppIdProvided, applicationId, 0, null, true);
+   }
+ 
+-  @SuppressWarnings("deprecation")
+   public RMApp submitApp(int masterMemory,
+       LogAggregationContext logAggregationContext) throws Exception {
+     return submitApp(masterMemory, "", UserGroupInformation.getCurrentUser()
+       .getShortUserName(), null, false, null,
+       super.getConfig().getInt(YarnConfiguration.RM_AM_MAX_ATTEMPTS,
+       YarnConfiguration.DEFAULT_RM_AM_MAX_ATTEMPTS), null, null, true, false,
+-      false, null, 0, logAggregationContext);
++      false, null, 0, logAggregationContext, true);
+    }
+ 
+-  @SuppressWarnings("deprecation")
+   public RMApp submitApp(int masterMemory, String name, String user,
+       Map<ApplicationAccessType, String> acls, boolean unmanaged, String queue,
+       int maxAppAttempts, Credentials ts, String appType,
+       boolean waitForAccepted, boolean keepContainers, boolean isAppIdProvided,
+       ApplicationId applicationId, long attemptFailuresValidityInterval,
+-      LogAggregationContext logAggregationContext)
++      LogAggregationContext logAggregationContext, boolean cancelTokensWhenComplete)
+       throws Exception {
+     ApplicationId appId = isAppIdProvided ? applicationId : null;
+     ApplicationClientProtocol client = getClientRMService();
+@@ -392,6 +390,7 @@ public RMApp submitApp(int masterMemory, String name, String user,
+     if (logAggregationContext != null) {
+       sub.setLogAggregationContext(logAggregationContext);
+     }
++    sub.setCancelTokensWhenComplete(cancelTokensWhenComplete);
+     req.setApplicationSubmissionContext(sub);
+     UserGroupInformation fakeUser =
+       UserGroupInformation.createUserForTesting(user, new String[] {"someGroup"});
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/security/TestDelegationTokenRenewer.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/security/TestDelegationTokenRenewer.java
+index 7275089..5d31404 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/security/TestDelegationTokenRenewer.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/security/TestDelegationTokenRenewer.java
+@@ -79,6 +79,7 @@
+ import org.apache.hadoop.yarn.exceptions.YarnException;
+ import org.apache.hadoop.yarn.server.api.protocolrecords.NodeHeartbeatResponse;
+ import org.apache.hadoop.yarn.server.resourcemanager.ClientRMService;
++import org.apache.hadoop.yarn.server.resourcemanager.MockAM;
+ import org.apache.hadoop.yarn.server.resourcemanager.MockNM;
+ import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
+ import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
+@@ -86,6 +87,7 @@
+ import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMApp;
+ import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppEvent;
+ import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppEventType;
++import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppState;
+ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity.TestUtils;
+ import org.apache.hadoop.yarn.server.utils.BuilderUtils;
+ import org.junit.After;
+@@ -116,11 +118,12 @@
+     private static int counter = 0;
+     private static Token<?> lastRenewed = null;
+     private static Token<?> tokenToRenewIn2Sec = null;
+-
++    private static boolean cancelled = false; 
+     private static void reset() {
+       counter = 0;
+       lastRenewed = null;
+       tokenToRenewIn2Sec = null;
++
+     }
+ 
+     @Override
+@@ -136,7 +139,8 @@ public boolean isManaged(Token<?> token) throws IOException {
+     @Override
+     public long renew(Token<?> t, Configuration conf) throws IOException {
+       if ( !(t instanceof MyToken)) {
+-        return DFSConfigKeys.DFS_NAMENODE_DELEGATION_TOKEN_RENEW_INTERVAL_DEFAULT;
++        // renew in 3 seconds
++        return System.currentTimeMillis() + 3000;
+       }
+       MyToken token = (MyToken)t;
+       if(token.isCanceled()) {
+@@ -158,9 +162,12 @@ public long renew(Token<?> t, Configuration conf) throws IOException {
+ 
+     @Override
+     public void cancel(Token<?> t, Configuration conf) {
+-      MyToken token = (MyToken)t;
+-      LOG.info("Cancel token " + token);
+-      token.cancelToken();
++      cancelled = true;
++      if (t instanceof MyToken) {
++        MyToken token = (MyToken) t;
++        LOG.info("Cancel token " + token);
++        token.cancelToken();
++      }
+    }
+     
+   }
+@@ -921,6 +928,7 @@ public Boolean get() {
+   // YARN will get the token for the app submitted without the delegation token.
+   @Test
+   public void testAppSubmissionWithoutDelegationToken() throws Exception {
++    conf.setBoolean(YarnConfiguration.RM_PROXY_USER_PRIVILEGES_ENABLED, true);
+     // create token2
+     Text userText2 = new Text("user2");
+     DelegationTokenIdentifier dtId2 =
+@@ -970,4 +978,48 @@ public Boolean get() {
+     appCredentials.readTokenStorageStream(buf);
+     Assert.assertTrue(appCredentials.getAllTokens().contains(token2));
+   }
++
++  // Test submitting an application with the token obtained by a previously
++  // submitted application.
++  @Test (timeout = 30000)
++  public void testAppSubmissionWithPreviousToken() throws Exception{
++    MockRM rm = new TestSecurityMockRM(conf, null);
++    rm.start();
++    final MockNM nm1 =
++        new MockNM("127.0.0.1:1234", 15120, rm.getResourceTrackerService());
++    nm1.registerNode();
++
++    // create Token1:
++    Text userText1 = new Text("user");
++    DelegationTokenIdentifier dtId1 =
++        new DelegationTokenIdentifier(userText1, new Text("renewer1"),
++          userText1);
++    final Token<DelegationTokenIdentifier> token1 =
++        new Token<DelegationTokenIdentifier>(dtId1.getBytes(),
++          "password1".getBytes(), dtId1.getKind(), new Text("service1"));
++
++    Credentials credentials = new Credentials();
++    credentials.addToken(userText1, token1);
++
++    // submit app1 with a token, set cancelTokenWhenComplete to false;
++    RMApp app1 =
++        rm.submitApp(200, "name", "user", null, false, null, 2, credentials,
++          null, true, false, false, null, 0, null, false);
++    MockAM am1 = MockRM.launchAndRegisterAM(app1, rm, nm1);
++    rm.waitForState(app1.getApplicationId(), RMAppState.RUNNING);
++
++    // submit app2 with the same token, set cancelTokenWhenComplete to true;
++    RMApp app2 =
++        rm.submitApp(200, "name", "user", null, false, null, 2, credentials,
++          null, true, false, false, null, 0, null, true);
++    MockAM am2 = MockRM.launchAndRegisterAM(app2, rm, nm1);
++    rm.waitForState(app2.getApplicationId(), RMAppState.RUNNING);
++    MockRM.finishAMAndVerifyAppState(app2, rm, nm1, am2);
++    Assert.assertTrue(rm.getRMContext().getDelegationTokenRenewer()
++      .getAllTokens().containsKey(token1));
++
++    MockRM.finishAMAndVerifyAppState(app1, rm, nm1, am1);
++    // app2 completes, app1 is still running, check the token is not cancelled
++    Assert.assertFalse(Renewer.cancelled);
++  }
+ }
+-- 
+1.7.9.5
+

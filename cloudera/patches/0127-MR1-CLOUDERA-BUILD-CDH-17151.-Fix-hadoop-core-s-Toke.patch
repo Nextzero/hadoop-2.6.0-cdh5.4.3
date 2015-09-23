@@ -1,0 +1,29 @@
+From 3b50d1fe3c0632c427d06e140a4571de32e448e1 Mon Sep 17 00:00:00 2001
+From: bc Wong <bcwalrus@cloudera.com>
+Date: Mon, 3 Feb 2014 21:58:25 -0800
+Subject: [PATCH 127/596] MR1: CLOUDERA-BUILD: CDH-17151. Fix hadoop-core's
+ TokenRenewer provider list
+
+(cherry picked from commit 8a3986348c0f8cde7c14c011dc2fb50c88f65d0e)
+(cherry picked from commit 781f933cb87c2cc1269993f4649205e66e457747)
+(cherry picked from commit c9093f6b9277841f28e0db42061bb4a822eb466d)
+---
+ hadoop-mapreduce1-project/build.xml |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index 3f33a7d..ae10ce5 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -663,7 +663,7 @@
+         <provider classname="org.apache.hadoop.mapred.JobClient$Renewer"/>
+         <provider classname="org.apache.hadoop.hdfs.security.token.block.BlockTokenIdentifier$Renewer"/>
+         <provider classname="org.apache.hadoop.mapreduce.security.token.JobTokenIdentifier$Renewer"/>
+-        <provider classname="org.apache.hadoop.hdfs.HftpFileSystem$TokenManager"/>
++        <provider classname="org.apache.hadoop.hdfs.web.TokenAspect$TokenManager"/>
+       </service>
+       <service type="org.apache.hadoop.security.token.TokenIdentifier">
+         <provider classname="org.apache.hadoop.mapreduce.security.token.JobTokenIdentifier"/>
+-- 
+1.7.9.5
+

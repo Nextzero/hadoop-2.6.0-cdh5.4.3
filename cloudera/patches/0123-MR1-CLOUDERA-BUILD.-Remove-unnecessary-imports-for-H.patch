@@ -1,0 +1,41 @@
+From e5bceeae44cc7ccbf30f46f13d5573b7cb79c4db Mon Sep 17 00:00:00 2001
+From: Andrew Wang <andrew.wang@cloudera.com>
+Date: Mon, 20 Jan 2014 15:12:02 -0800
+Subject: [PATCH 123/596] MR1: CLOUDERA-BUILD. Remove unnecessary imports for
+ HftpFileSystem causing compile errors.
+
+(cherry picked from commit fcb10c34d32cdb65b9e48e2c7ac1433293cb180d)
+(cherry picked from commit da36dfd0afe994ce1abfe775e3a10263231f89ad)
+(cherry picked from commit 1f81a2f0fe9566d8d710dabb6f960749ab267a2d)
+---
+ .../hadoop/mapreduce/security/TokenCache.java      |    1 -
+ .../src/tools/org/apache/hadoop/tools/DistCp.java  |    1 -
+ 2 files changed, 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java
+index 62c3d67..cebc2b8 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java
+@@ -30,7 +30,6 @@
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.DistributedFileSystem;
+-import org.apache.hadoop.hdfs.HftpFileSystem;
+ import org.apache.hadoop.hdfs.security.token.delegation.DelegationTokenIdentifier;
+ import org.apache.hadoop.hdfs.server.namenode.NameNode;
+ import org.apache.hadoop.io.Text;
+diff --git a/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java b/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
+index db2b0e5..0d92a07 100644
+--- a/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
++++ b/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
+@@ -43,7 +43,6 @@
+ import org.apache.hadoop.fs.FsShell;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.fs.permission.FsPermission;
+-import org.apache.hadoop.hdfs.HftpFileSystem;
+ import org.apache.hadoop.hdfs.protocol.QuotaExceededException;
+ import org.apache.hadoop.io.LongWritable;
+ import org.apache.hadoop.io.SequenceFile;
+-- 
+1.7.9.5
+

@@ -1,0 +1,49 @@
+From e2286cba9fad619c657baac8564bd9e6d5e529b2 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Wed, 4 Mar 2015 15:35:36 -0800
+Subject: [PATCH 450/596] MR1: CLOUDERA-BUILD. Bump up source and target java
+ versions to 1.7
+
+---
+ hadoop-mapreduce1-project/build.xml                |    4 ++--
+ .../content/xdocs/single_node_setup.xml            |    2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index 09a38bf..7711ab1 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -169,7 +169,7 @@
+   <property name="javac.debug" value="on"/>
+   <property name="javac.optimize" value="on"/>
+   <property name="javac.deprecation" value="off"/>
+-  <property name="javac.version" value="1.6"/>
++  <property name="javac.version" value="1.7"/>
+   <property name="javac.args" value=""/>
+   <property name="javac.args.warnings" value="-Xlint:unchecked"/>
+ 
+@@ -375,7 +375,7 @@
+ 
+   <target name="jvm-check">
+     <property name="javaVersion" value="1.7"/>
+-    <property name="targetJavaVersion" value="1.6"/>
++    <property name="targetJavaVersion" value="1.7"/>
+ 
+     <property name="requiredJavaVersion" value="xx${javaVersion}"/>
+     <property name="currentJavaVersion" value="xx${java.version}"/>
+diff --git a/hadoop-mapreduce1-project/src/docs/src/documentation/content/xdocs/single_node_setup.xml b/hadoop-mapreduce1-project/src/docs/src/documentation/content/xdocs/single_node_setup.xml
+index 5cc5810..6493828 100644
+--- a/hadoop-mapreduce1-project/src/docs/src/documentation/content/xdocs/single_node_setup.xml
++++ b/hadoop-mapreduce1-project/src/docs/src/documentation/content/xdocs/single_node_setup.xml
+@@ -59,7 +59,7 @@
+         <p>Required software for Linux and Windows include:</p>
+         <ol>
+           <li>
+-            Java<sup>TM</sup> 1.6.x, preferably from Sun, must be installed.
++            Java<sup>TM</sup> 1.7.x, preferably from Sun, must be installed.
+           </li>
+           <li>
+             <strong>ssh</strong> must be installed and <strong>sshd</strong> must 
+-- 
+1.7.9.5
+

@@ -1,0 +1,30 @@
+From 94505057de6a8900697659e80f499a97171f7a87 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Tue, 27 Aug 2013 17:23:59 +0200
+Subject: [PATCH 162/596] CLOUDERA-BUILD. Use cdh.protobuf.version variable to
+ specify the version of protobuf/protoc to use
+
+(cherry picked from commit 76571165ee0d3cec98f19acb488ad164e9d1af14)
+(cherry picked from commit 4db3c1e2e4b1ff00ef4d2d9359c0e834a290b706)
+(cherry picked from commit a1f699dd662b212d25785b5ee85c643f78a32f09)
+(cherry picked from commit 24d05a5e0917177e6153fc8a57c443e65728add7)
+---
+ hadoop-project/pom.xml |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index a7d0236..75b66af 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -67,7 +67,7 @@
+ 
+     <!-- ProtocolBuffer version, used to verify the protoc version and -->
+     <!-- define the protobuf JAR version                               -->
+-    <protobuf.version>2.5.0</protobuf.version>
++    <protobuf.version>${cdh.protobuf.version}</protobuf.version>
+     <protoc.path>${env.HADOOP_PROTOC_CDH5_PATH}</protoc.path>
+ 
+     <zookeeper.version>3.4.6</zookeeper.version>
+-- 
+1.7.9.5
+

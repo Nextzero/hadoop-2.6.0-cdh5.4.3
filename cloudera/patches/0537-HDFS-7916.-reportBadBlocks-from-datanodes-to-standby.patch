@@ -1,0 +1,42 @@
+From 2b3a3e98ada2ec24de01cd21c65b97f7418d0946 Mon Sep 17 00:00:00 2001
+From: Vinayakumar B <vinayakumarb@apache.org>
+Date: Thu, 2 Apr 2015 08:12:00 +0530
+Subject: [PATCH 537/596] HDFS-7916. 'reportBadBlocks' from datanodes to
+ standby Node BPServiceActor goes for infinite loop
+ (Contributed by Vinayakumar B)
+
+(cherry picked from commit 867d5d2675b8fb73c40fac1e581b02b005459d95)
+(cherry picked from commit beb0fd0d601aff0ba993c2d48b83fe52edfb9065)
+---
+ .../hdfs/server/datanode/ReportBadBlockAction.java |    8 ++++++--
+ 1 file changed, 6 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ReportBadBlockAction.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ReportBadBlockAction.java
+index 07f99f6..0a07858 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ReportBadBlockAction.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ReportBadBlockAction.java
+@@ -26,6 +26,7 @@
+ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+ import org.apache.hadoop.hdfs.protocolPB.DatanodeProtocolClientSideTranslatorPB;
+ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
++import org.apache.hadoop.ipc.StandbyException;
+ 
+ /**
+  * ReportBadBlockAction is an instruction issued by {{BPOfferService}} to
+@@ -58,8 +59,11 @@ public void reportTo(DatanodeProtocolClientSideTranslatorPB bpNamenode,
+         dnArr, uuids, types) };
+ 
+     try {
+-      bpNamenode.reportBadBlocks(locatedBlock);  
+-    } catch (IOException e){
++      bpNamenode.reportBadBlocks(locatedBlock);
++    } catch (StandbyException e) {
++      DataNode.LOG.warn("Failed to report bad block " + block
++          + " to standby namenode");
++    } catch (IOException e) {
+       throw new BPServiceActorActionException("Failed to report bad block "
+           + block + " to namenode: ");
+     }
+-- 
+1.7.9.5
+

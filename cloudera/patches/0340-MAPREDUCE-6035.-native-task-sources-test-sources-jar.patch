@@ -1,0 +1,44 @@
+From 8c83b87b641ff02074f31434d4a53a87bc95b03b Mon Sep 17 00:00:00 2001
+From: Todd Lipcon <todd@apache.org>
+Date: Thu, 14 Aug 2014 04:56:43 +0000
+Subject: [PATCH 340/596] MAPREDUCE-6035. native-task: sources/test-sources
+ jar distribution. Contributed by Manu Zhang.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/MR-2841@1617879 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit eace4dd50b1214a8842e47c522da258e1746386a)
+(cherry picked from commit 9e1d6acd4b540e916fbec5f58bb611ce70f970a2)
+---
+ .../resources/assemblies/hadoop-mapreduce-dist.xml |    7 +++++++
+ .../CHANGES.MAPREDUCE-2841.txt                     |    1 +
+ 2 files changed, 8 insertions(+)
+
+diff --git a/hadoop-assemblies/src/main/resources/assemblies/hadoop-mapreduce-dist.xml b/hadoop-assemblies/src/main/resources/assemblies/hadoop-mapreduce-dist.xml
+index 0cb01ea..749e16a 100644
+--- a/hadoop-assemblies/src/main/resources/assemblies/hadoop-mapreduce-dist.xml
++++ b/hadoop-assemblies/src/main/resources/assemblies/hadoop-mapreduce-dist.xml
+@@ -136,6 +136,13 @@
+       </includes>
+     </fileSet>
+     <fileSet>
++      <directory>hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/target</directory>
++      <outputDirectory>/share/hadoop/${hadoop.component}/sources</outputDirectory>
++      <includes>
++        <include>*-sources.jar</include>
++      </includes>
++    </fileSet>
++    <fileSet>
+       <directory>hadoop-mapreduce-client/hadoop-mapreduce-client-shuffle/target</directory>
+       <outputDirectory>/share/hadoop/${hadoop.component}/sources</outputDirectory>
+       <includes>
+diff --git a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+index 123eb6d..95f7858 100644
+--- a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
++++ b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+@@ -14,3 +14,4 @@ MAPREDUCE-5976. native-task: should not fail to build if snappy is missing (Manu
+ MAPREDUCE-5978. native-task: remove test case for not supported codec Bzip2Codec and DefaultCodec (Manu Zhang)
+ MAPREDUCE-6006. native-task: add native tests to maven and fix bug in pom.xml (Binglin Chang via todd)
+ MAPREDUCE-6026. native-task: fix logging (Manu Zhang via todd)
++MAPREDUCE-6035. native-task: sources/test-sources jar distribution (Manu Zhang via todd)
+-- 
+1.7.9.5
+

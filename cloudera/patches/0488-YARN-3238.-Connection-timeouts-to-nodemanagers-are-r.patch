@@ -1,0 +1,31 @@
+From c5b80b7828b462ac6074bb5b90cdcb31141e3066 Mon Sep 17 00:00:00 2001
+From: Xuan <xgong@apache.org>
+Date: Sat, 21 Feb 2015 16:06:12 -0800
+Subject: [PATCH 488/596] YARN-3238. Connection timeouts to nodemanagers are
+ retried at multiple levels. Contributed by Jason
+ Lowe
+
+(cherry picked from commit 92d67ace3248930c0c0335070cc71a480c566a36)
+(cherry picked from commit fefeba4ac8bed44ce2dd0d3c4f0a99953ff8d4df)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../org/apache/hadoop/yarn/client/ServerProxy.java |    1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/client/ServerProxy.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/client/ServerProxy.java
+index b6fea62..6024560 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/client/ServerProxy.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/client/ServerProxy.java
+@@ -72,7 +72,6 @@ protected static RetryPolicy createRetryPolicy(Configuration conf,
+     exceptionToPolicyMap.put(ConnectException.class, retryPolicy);
+     exceptionToPolicyMap.put(NoRouteToHostException.class, retryPolicy);
+     exceptionToPolicyMap.put(UnknownHostException.class, retryPolicy);
+-    exceptionToPolicyMap.put(ConnectTimeoutException.class, retryPolicy);
+     exceptionToPolicyMap.put(RetriableException.class, retryPolicy);
+     exceptionToPolicyMap.put(SocketException.class, retryPolicy);
+ 
+-- 
+1.7.9.5
+

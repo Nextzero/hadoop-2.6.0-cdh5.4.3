@@ -1,0 +1,56 @@
+From 971b67a7da47039f020140ce60288ba78ed99d97 Mon Sep 17 00:00:00 2001
+From: Jian He <jianhe@apache.org>
+Date: Mon, 22 Dec 2014 21:53:22 -0800
+Subject: [PATCH 471/596] YARN-2340. Fixed NPE when queue is stopped during RM
+ restart. Contributed by Rohith Sharmaks (cherry
+ picked from commit
+ 0d89859b51157078cc504ac81dc8aa75ce6b1782) (cherry
+ picked from commit
+ 8b398a66ca3728f47363fc8b2fcf7e556e6bbf5a)
+
+(cherry picked from commit 20dd990f077c6fff7eda04874306c73bab7367cb)
+---
+ .../scheduler/capacity/CapacityScheduler.java      |   13 ++++++++-----
+ .../TestWorkPreservingRMRestart.java               |    2 ++
+ 2 files changed, 10 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/CapacityScheduler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/CapacityScheduler.java
+index 28158c1..0a85a4b 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/CapacityScheduler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/CapacityScheduler.java
+@@ -701,11 +701,14 @@ private synchronized void addApplication(ApplicationId applicationId,
+     try {
+       queue.submitApplication(applicationId, user, queueName);
+     } catch (AccessControlException ace) {
+-      LOG.info("Failed to submit application " + applicationId + " to queue "
+-          + queueName + " from user " + user, ace);
+-      this.rmContext.getDispatcher().getEventHandler()
+-          .handle(new RMAppRejectedEvent(applicationId, ace.toString()));
+-      return;
++      // Ignore the exception for recovered app as the app was previously accepted
++      if (!isAppRecovering) {
++        LOG.info("Failed to submit application " + applicationId + " to queue "
++            + queueName + " from user " + user, ace);
++        this.rmContext.getDispatcher().getEventHandler()
++            .handle(new RMAppRejectedEvent(applicationId, ace.toString()));
++        return;
++      }
+     }
+     // update the metrics
+     queue.getMetrics().submitApp(user);
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestWorkPreservingRMRestart.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestWorkPreservingRMRestart.java
+index 73bbd81..8d0c7a7 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestWorkPreservingRMRestart.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestWorkPreservingRMRestart.java
+@@ -417,6 +417,8 @@ public void testCapacitySchedulerRecovery() throws Exception {
+     rm1.clearQueueMetrics(app1_2);
+     rm1.clearQueueMetrics(app2);
+ 
++    csConf.set("yarn.scheduler.capacity.root.Default.QueueB.state", "STOPPED");
++
+     // Re-start RM
+     rm2 = new MockRM(csConf, memStore);
+     rm2.start();
+-- 
+1.7.9.5
+

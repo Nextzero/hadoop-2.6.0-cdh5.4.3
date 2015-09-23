@@ -1,0 +1,40 @@
+From 6c7ed5277fd60216fa3c854653d4296dd810231f Mon Sep 17 00:00:00 2001
+From: Lei Xu <lei@cloudera.com>
+Date: Mon, 1 Jun 2015 13:32:13 -0700
+Subject: [PATCH 584/596] CLOUDERA-BUILD: Enables the shell warnings by
+ default. (CDH-28256)
+
+---
+ .../hadoop/fs/CommonConfigurationKeysPublic.java   |    3 ++-
+ .../src/main/resources/core-default.xml            |    2 +-
+ 2 files changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/CommonConfigurationKeysPublic.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/CommonConfigurationKeysPublic.java
+index c0da29a..01a732b 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/CommonConfigurationKeysPublic.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/CommonConfigurationKeysPublic.java
+@@ -371,7 +371,8 @@
+   /** See <a href="{@docRoot}/../core-default.html">core-default.xml</a> */
+   public static final String HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_KEY =
+       "hadoop.shell.missing.defaultFs.warning";
++  // CLOUDERA-BUILD: enable the shell warnings by default.
+   public static final boolean HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_DEFAULT =
+-      false;
++      true;
+ }
+ 
+diff --git a/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml b/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml
+index 6d96845..bda0c74 100644
+--- a/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml
++++ b/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml
+@@ -1741,6 +1741,6 @@ for ldap providers in the same way as above does.
+       is not set.
+     </description>
+     <name>hadoop.shell.missing.defaultFs.warning</name>
+-    <value>false</value>
++    <value>true</value>
+   </property>
+ </configuration>
+-- 
+1.7.9.5
+

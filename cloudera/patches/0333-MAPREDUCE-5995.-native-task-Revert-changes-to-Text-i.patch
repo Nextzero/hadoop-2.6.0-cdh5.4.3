@@ -1,0 +1,70 @@
+From ce33fb5a1ccc70540510e10b04406d438d08b105 Mon Sep 17 00:00:00 2001
+From: Todd Lipcon <todd@apache.org>
+Date: Sun, 27 Jul 2014 19:04:14 +0000
+Subject: [PATCH 333/596] MAPREDUCE-5995. native-task: Revert changes to Text
+ internals. Contributed by Todd Lipcon.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/MR-2841@1613828 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 78d86a983960f231f51e47579c0b1ae73f9645fd)
+(cherry picked from commit a66271c9a225515d3a246a37e1c4f2a4829337d0)
+---
+ .../src/main/java/org/apache/hadoop/io/Text.java   |    6 +-----
+ .../CHANGES.MAPREDUCE-2841.txt                     |    1 +
+ .../mapred/nativetask/serde/TextSerializer.java    |    9 +--------
+ 3 files changed, 3 insertions(+), 13 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/Text.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/Text.java
+index 73cd1e6..3dc5076 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/Text.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/Text.java
+@@ -226,10 +226,6 @@ public void set(byte[] utf8, int start, int len) {
+     this.length = len;
+   }
+ 
+-  public void setLength(int len) {
+-    this.length = len;
+-  }
+-
+   /**
+    * Append a range of bytes to the end of the given text
+    * @param utf8 the data to copy from
+@@ -264,7 +260,7 @@ public void clear() {
+    * @param len the number of bytes we need
+    * @param keepData should the old data be kept
+    */
+-  public void setCapacity(int len, boolean keepData) {
++  private void setCapacity(int len, boolean keepData) {
+     if (bytes == null || bytes.length < len) {
+       if (bytes != null && keepData) {
+         bytes = Arrays.copyOf(bytes, Math.max(len,length << 1));
+diff --git a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+index 92c94a8..42e0af3 100644
+--- a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
++++ b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+@@ -7,3 +7,4 @@ MAPREDUCE-5996. native-task: Rename system tests into standard directory layout
+ MAPREDUCE-5997. native-task: Use DirectBufferPool from Hadoop Common (todd)
+ MAPREDUCE-6000. native-task: Simplify ByteBufferDataReader/Writer (todd)
+ MAPREDUCE-5991. native-task should not run unit tests if native profile is not enabled. (Binglin Chang)
++MAPREDUCE-5995. native-task: Revert changes to Text internals (todd)
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/serde/TextSerializer.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/serde/TextSerializer.java
+index 63a64de..cde4c7b 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/serde/TextSerializer.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/serde/TextSerializer.java
+@@ -42,13 +42,6 @@ public void serialize(Text w, DataOutput out) throws IOException {
+ 
+   @Override
+   public void deserialize(DataInput in, int length, Text w) throws IOException {
+-    try {
+-      w.setCapacity(length, true);
+-      w.setLength(length);
+-    } catch (final Exception e) {
+-      throw new IOException(e);
+-    }
+-    final byte[] bytes = w.getBytes();
+-    in.readFully(bytes, 0, length);
++    w.readWithKnownLength(in, length);
+   }
+ }
+-- 
+1.7.9.5
+

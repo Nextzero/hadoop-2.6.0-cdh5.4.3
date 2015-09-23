@@ -1,0 +1,29 @@
+From 747d40aa7d7403649c1eabfcedb38c3bad87a74c Mon Sep 17 00:00:00 2001
+From: Mark Grover <grover.markgrover@gmail.com>
+Date: Wed, 19 Dec 2012 17:54:39 -0800
+Subject: [PATCH 139/596] MR1: CLOUDERA-BUILD. CDH-8545: Package Job Tracker
+ High Availability
+
+(cherry picked from commit 8fca711ea5add34ca61c08579beb62959ab4504b)
+(cherry picked from commit fe42ed33cbcee884839d91ca91d3d44cb4adf7da)
+(cherry picked from commit 080682f0cbc5a621ede9fda80dc257208ef092c2)
+---
+ .../hadoop-common/src/main/bin/hadoop              |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/bin/hadoop b/hadoop-common-project/hadoop-common/src/main/bin/hadoop
+index d0597e6..eeab027 100755
+--- a/hadoop-common-project/hadoop-common/src/main/bin/hadoop
++++ b/hadoop-common-project/hadoop-common/src/main/bin/hadoop
+@@ -76,7 +76,7 @@ case $COMMAND in
+     ;;
+ 
+   #mapred commands for backwards compatibility
+-  pipes|job|queue|mrgroups|mradmin|jobtracker|tasktracker)
++  pipes|job|queue|mrgroups|mradmin|jobtracker|tasktracker|mrhaadmin|mrzkfc|jobtrackerha)
+     echo "DEPRECATED: Use of this script to execute mapred command is deprecated." 1>&2
+     echo "Instead use the mapred command for it." 1>&2
+     echo "" 1>&2
+-- 
+1.7.9.5
+

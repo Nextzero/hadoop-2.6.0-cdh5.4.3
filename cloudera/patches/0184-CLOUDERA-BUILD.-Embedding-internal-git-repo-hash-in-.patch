@@ -1,0 +1,70 @@
+From 23c838336694ed8fc6d0cd110e6deaca6bf015f5 Mon Sep 17 00:00:00 2001
+From: Sean Mackrory <sean@cloudera.com>
+Date: Fri, 25 Jul 2014 15:51:09 -0700
+Subject: [PATCH 184/596] CLOUDERA-BUILD. Embedding internal git repo hash in
+ Hadoop
+
+(cherry picked from commit ceb206ce879a7154a4dc80b7f16033fb9df54109)
+---
+ .../maven/plugin/versioninfo/VersionInfoMojo.java  |   17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/hadoop-maven-plugins/src/main/java/org/apache/hadoop/maven/plugin/versioninfo/VersionInfoMojo.java b/hadoop-maven-plugins/src/main/java/org/apache/hadoop/maven/plugin/versioninfo/VersionInfoMojo.java
+index 563bd59..d4d5650 100644
+--- a/hadoop-maven-plugins/src/main/java/org/apache/hadoop/maven/plugin/versioninfo/VersionInfoMojo.java
++++ b/hadoop-maven-plugins/src/main/java/org/apache/hadoop/maven/plugin/versioninfo/VersionInfoMojo.java
+@@ -36,6 +36,7 @@
+ import java.util.Comparator;
+ import java.util.Date;
+ import java.util.List;
++import java.util.Map;
+ import java.util.TimeZone;
+ 
+ /**
+@@ -110,6 +111,10 @@ private String getBuildTime() {
+    * @throws Exception if any error occurs attempting to determine SCM
+    */
+   private SCM determineSCM() throws Exception {
++    Map<String, String> env = System.getenv();
++    if (env.containsKey("COMPONENT_HASH")) {
++        return SCM.GIT;
++    }
+     Exec exec = new Exec(this);
+     SCM scm = SCM.NONE;
+     scmOut = new ArrayList<String>();
+@@ -181,6 +186,10 @@ private SCM determineSCM() throws Exception {
+    * @return String URI of SCM
+    */
+   private String getSCMUri(SCM scm) {
++    Map<String, String> env = System.getenv();
++    if (env.containsKey("COMPONENT_HASH")) {
++        return "http://github.com/cloudera/hadoop";
++    }
+     String uri = "Unknown";
+     switch (scm) {
+       case SVN:
+@@ -212,6 +221,10 @@ private String getSCMUri(SCM scm) {
+    * @return String commit of SCM
+    */
+   private String getSCMCommit(SCM scm) {
++    Map<String, String> env = System.getenv();
++    if (env.containsKey("COMPONENT_HASH")) {
++        return env.get("COMPONENT_HASH");
++    }
+     String commit = "Unknown";
+     switch (scm) {
+       case SVN:
+@@ -241,6 +254,10 @@ private String getSCMCommit(SCM scm) {
+    * @return String branch of SCM
+    */
+   private String getSCMBranch(SCM scm) {
++    Map<String, String> env = System.getenv();
++    if (env.containsKey("COMPONENT_HASH")) {
++        return "Unknown";
++    }
+     String branch = "Unknown";
+     switch (scm) {
+       case SVN:
+-- 
+1.7.9.5
+

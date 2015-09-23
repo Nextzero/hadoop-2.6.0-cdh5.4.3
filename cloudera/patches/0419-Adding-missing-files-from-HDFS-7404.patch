@@ -1,0 +1,302 @@
+From 706fc22443442dbcbdfa1f9eb937b75aea6b6bb7 Mon Sep 17 00:00:00 2001
+From: Kihwal Lee <kihwal@apache.org>
+Date: Thu, 12 Feb 2015 11:18:41 -0600
+Subject: [PATCH 419/596] Adding missing files from HDFS-7404 (cherry picked
+ from commit
+ 8d7215d40fb206bff7558527b1aef7bd40d427ff)
+
+(cherry picked from commit 146f55909772e0f09f445225531e3b78a8fe8856)
+---
+ .../hdfs/server/datanode/BPServiceActorAction.java |   32 ++++++
+ .../datanode/BPServiceActorActionException.java    |   33 ++++++
+ .../hdfs/server/datanode/ErrorReportAction.java    |   83 +++++++++++++++
+ .../hdfs/server/datanode/ReportBadBlockAction.java |  108 ++++++++++++++++++++
+ 4 files changed, 256 insertions(+)
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActorAction.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActorActionException.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ErrorReportAction.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ReportBadBlockAction.java
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActorAction.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActorAction.java
+new file mode 100644
+index 0000000..5448102
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActorAction.java
+@@ -0,0 +1,32 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.hdfs.server.datanode;
++
++import org.apache.hadoop.hdfs.protocolPB.DatanodeProtocolClientSideTranslatorPB;
++import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
++
++/**
++ * Base class for BPServiceActor class
++ * Issued by BPOfferSerivce class to tell BPServiceActor 
++ * to take several actions.
++ */
++public interface BPServiceActorAction {
++  public void reportTo(DatanodeProtocolClientSideTranslatorPB bpNamenode,
++    DatanodeRegistration bpRegistration) throws BPServiceActorActionException;
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActorActionException.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActorActionException.java
+new file mode 100644
+index 0000000..2028252
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BPServiceActorActionException.java
+@@ -0,0 +1,33 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.hdfs.server.datanode;
++
++import java.io.IOException;
++
++public class BPServiceActorActionException extends IOException {
++
++/**
++ * An exception for BPSerivceActor call related issues
++ */
++  private static final long serialVersionUID = 1L;
++
++  public BPServiceActorActionException(String message) {
++    super(message);
++  }
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ErrorReportAction.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ErrorReportAction.java
+new file mode 100644
+index 0000000..331822a
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ErrorReportAction.java
+@@ -0,0 +1,83 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.hdfs.server.datanode;
++
++import java.io.IOException;
++
++import org.apache.hadoop.hdfs.protocolPB.DatanodeProtocolClientSideTranslatorPB;
++import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
++
++
++/**
++ * A ErrorReportAction is an instruction issued by BPOfferService to 
++ * BPServiceActor about a particular block encapsulated in errorMessage.
++ */
++public class ErrorReportAction implements BPServiceActorAction {
++
++  final int errorCode;
++  final String errorMessage;
++  
++  public ErrorReportAction(int errorCode, String errorMessage) {
++    this.errorCode = errorCode;
++    this.errorMessage = errorMessage;
++  }
++  
++  @Override
++  public void reportTo(DatanodeProtocolClientSideTranslatorPB bpNamenode, 
++    DatanodeRegistration bpRegistration) throws BPServiceActorActionException {
++    try {
++      bpNamenode.errorReport(bpRegistration, errorCode, errorMessage);
++    } catch(IOException e) {
++      throw new BPServiceActorActionException("Error reporting "
++          + "an error to namenode: ");
++    }
++  }
++
++  @Override
++  public int hashCode() {
++    final int prime = 31;
++    int result = 1;
++    result = prime * result + errorCode;
++    result = prime * result
++        + ((errorMessage == null) ? 0 : errorMessage.hashCode());
++    return result;
++  }
++
++  @Override
++  public boolean equals(Object obj) {
++    if (this == obj) {
++      return true;
++    }
++    if (obj == null || !(obj instanceof ErrorReportAction)) {
++      return false;
++    }
++    ErrorReportAction other = (ErrorReportAction) obj;
++    if (errorCode != other.errorCode) {
++      return false;
++    }
++    if (errorMessage == null) {
++      if (other.errorMessage != null) {
++        return false;
++      }
++    } else if (!errorMessage.equals(other.errorMessage)) {
++      return false;
++    }
++    return true;
++  }
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ReportBadBlockAction.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ReportBadBlockAction.java
+new file mode 100644
+index 0000000..07f99f6
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/ReportBadBlockAction.java
+@@ -0,0 +1,108 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.hdfs.server.datanode;
++
++import java.io.IOException;
++
++import org.apache.hadoop.hdfs.StorageType;
++import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
++import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
++import org.apache.hadoop.hdfs.protocol.LocatedBlock;
++import org.apache.hadoop.hdfs.protocolPB.DatanodeProtocolClientSideTranslatorPB;
++import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
++
++/**
++ * ReportBadBlockAction is an instruction issued by {{BPOfferService}} to
++ * {{BPServiceActor}} to report bad block to namenode
++ *
++ */
++public class ReportBadBlockAction implements BPServiceActorAction {
++
++  private final ExtendedBlock block;
++  private final String storageUuid;
++  private final StorageType storageType;
++
++  public ReportBadBlockAction(ExtendedBlock block, String storageUuid, 
++      StorageType storageType) {
++    this.block = block;
++    this.storageUuid = storageUuid;
++    this.storageType = storageType;
++  }
++
++  @Override
++  public void reportTo(DatanodeProtocolClientSideTranslatorPB bpNamenode, 
++    DatanodeRegistration bpRegistration) throws BPServiceActorActionException {
++    if (bpRegistration == null) {
++      return;
++    }
++    DatanodeInfo[] dnArr = { new DatanodeInfo(bpRegistration) };
++    String[] uuids = { storageUuid };
++    StorageType[] types = { storageType };
++    LocatedBlock[] locatedBlock = { new LocatedBlock(block,
++        dnArr, uuids, types) };
++
++    try {
++      bpNamenode.reportBadBlocks(locatedBlock);  
++    } catch (IOException e){
++      throw new BPServiceActorActionException("Failed to report bad block "
++          + block + " to namenode: ");
++    }
++  }
++
++  @Override
++  public int hashCode() {
++    final int prime = 31;
++    int result = 1;
++    result = prime * result + ((block == null) ? 0 : block.hashCode());
++    result = prime * result
++        + ((storageType == null) ? 0 : storageType.hashCode());
++    result = prime * result
++        + ((storageUuid == null) ? 0 : storageUuid.hashCode());
++    return result;
++  }
++
++  @Override
++  public boolean equals(Object obj) {
++    if (this == obj) {
++      return true;
++    }
++    if (obj == null || !(obj instanceof ReportBadBlockAction)) {
++      return false;
++    }
++    ReportBadBlockAction other = (ReportBadBlockAction) obj;
++    if (block == null) {
++      if (other.block != null) {
++        return false;
++      }
++    } else if (!block.equals(other.block)) {
++      return false;
++    }
++    if (storageType != other.storageType) {
++      return false;
++    }
++    if (storageUuid == null) {
++      if (other.storageUuid != null) {
++        return false;
++      }
++    } else if (!storageUuid.equals(other.storageUuid)) {
++      return false;
++    }
++    return true;
++  }
++}
+-- 
+1.7.9.5
+

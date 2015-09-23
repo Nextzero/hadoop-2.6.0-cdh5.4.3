@@ -1,0 +1,2361 @@
+From 073fffec79bc0271bd1631057a585f9ef08fbd0a Mon Sep 17 00:00:00 2001
+From: Gilad Wolff <gilad@cloudera.com>
+Date: Tue, 21 Jan 2014 14:35:48 -0800
+Subject: [PATCH 135/596] MR1: CLOUDERA-BUILD. Preliminary version of
+ MAPREDUCE-5707.
+ ApplicationClientProtocolPBClientImpl (and
+ JobClient) does not allow to set rpcTimeout
+
+This commit adds the ability to enable rpc timeout for the job client.
+The approach taken was to add a new configuration parameter
+"mapreduce.jobclient.rpc.timeout". By default it is set to -1 (no
+timeout) to maintain backword compatibility. If set to some positive
+integer it will be used as the rpcTimeout in the underlying ipc Client.
+
+Testing done: New unit-tests. TestRpcTimeout hanged forever before
+this commit and now passes.
+(cherry-picked from commit 3167c63e253e502b16cfb27079d3bd825e96f4be)
+
+(cherry picked from commit 7901f25f833a93b17fb079e94f4f8ac57ee060d8)
+(cherry picked from commit 731cc2c0543f8182f8f834db01e2a8af3bc99c99)
+
+Conflicts:
+	hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java
+---
+ .../src/mapred/mapred-default.xml                  |  281 ++++++------
+ .../mapred/org/apache/hadoop/mapred/JobClient.java |  484 +++++++++++---------
+ .../apache/hadoop/mapred/JobTrackerProxies.java    |    6 +-
+ .../test/org/apache/hadoop/conf/TestJobConf.java   |   40 +-
+ .../org/apache/hadoop/mapred/TestRpcTimeout.java   |   97 ++++
+ 5 files changed, 530 insertions(+), 378 deletions(-)
+ create mode 100644 hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestRpcTimeout.java
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/mapred-default.xml b/hadoop-mapreduce1-project/src/mapred/mapred-default.xml
+index da64c89..9990f1f 100644
+--- a/hadoop-mapreduce1-project/src/mapred/mapred-default.xml
++++ b/hadoop-mapreduce1-project/src/mapred/mapred-default.xml
+@@ -10,7 +10,7 @@
+ <property>
+   <name>hadoop.job.history.location</name>
+   <value></value>
+-  <description> If job tracker is static the history files are stored 
++  <description> If job tracker is static the history files are stored
+   in this single well known place. If No value is set here, by default,
+   it is in the local file system at ${hadoop.log.dir}/history.
+   </description>
+@@ -19,18 +19,18 @@
+ <property>
+   <name>hadoop.job.history.user.location</name>
+   <value></value>
+-  <description> User can specify a location to store the history files of 
+-  a particular job. If nothing is specified, the logs are stored in 
++  <description> User can specify a location to store the history files of
++  a particular job. If nothing is specified, the logs are stored in
+   output directory. The files are stored in "_logs/history/" in the directory.
+-  User can stop logging by giving the value "none". 
++  User can stop logging by giving the value "none".
+   </description>
+ </property>
+ 
+ <property>
+   <name>mapred.job.tracker.history.completed.location</name>
+   <value></value>
+-  <description> The completed job history files are stored at this single well 
+-  known location. If nothing is specified, the files are stored at 
++  <description> The completed job history files are stored at this single well
++  known location. If nothing is specified, the files are stored at
+   ${hadoop.job.history.location}/done.
+   </description>
+ </property>
+@@ -47,7 +47,7 @@
+ <property>
+   <name>mapreduce.jobhistory.cleaner.interval-ms</name>
+   <value>86400000</value>
+-  <description> How often the job history cleaner checks for files to delete, 
++  <description> How often the job history cleaner checks for files to delete,
+   in milliseconds. Defaults to 86400000 (one day). Files are only deleted if
+   they are older than mapreduce.jobhistory.max-age-ms.
+   </description>
+@@ -65,7 +65,7 @@
+ <property>
+   <name>io.sort.mb</name>
+   <value>100</value>
+-  <description>The total amount of buffer memory to use while sorting 
++  <description>The total amount of buffer memory to use while sorting
+   files, in megabytes.  By default, gives each merge stream 1MB, which
+   should minimize seeks.</description>
+ </property>
+@@ -126,9 +126,9 @@
+ <property>
+   <name>mapred.task.tracker.report.address</name>
+   <value>127.0.0.1:0</value>
+-  <description>The interface and port that task tracker server listens on. 
++  <description>The interface and port that task tracker server listens on.
+   Since it is only connected to by the tasks, it uses the local interface.
+-  EXPERT ONLY. Should only be changed if your host does not have the loopback 
++  EXPERT ONLY. Should only be changed if your host does not have the loopback
+   interface.</description>
+ </property>
+ 
+@@ -153,7 +153,7 @@
+   <name>mapreduce.jobtracker.staging.root.dir</name>
+   <value>${hadoop.tmp.dir}/mapred/staging</value>
+   <description>The root of the staging area for users' job files
+-  In practice, this should be the directory where users' home 
++  In practice, this should be the directory where users' home
+   directories are located (usually /user)
+   </description>
+ </property>
+@@ -168,7 +168,7 @@
+ <property>
+   <name>mapred.local.dir.minspacestart</name>
+   <value>0</value>
+-  <description>If the space in mapred.local.dir drops under this, 
++  <description>If the space in mapred.local.dir drops under this,
+   do not ask for more tasks.
+   Value in bytes.
+   </description>
+@@ -177,9 +177,9 @@
+ <property>
+   <name>mapred.local.dir.minspacekill</name>
+   <value>0</value>
+-  <description>If the space in mapred.local.dir drops under this, 
+-    do not ask more tasks until all the current ones have finished and 
+-    cleaned up. Also, to save the rest of the tasks we have running, 
++  <description>If the space in mapred.local.dir drops under this,
++    do not ask more tasks until all the current ones have finished and
++    cleaned up. Also, to save the rest of the tasks we have running,
+     kill one of them, to clean up some space. Start with the reduce tasks,
+     then go with the ones that have finished the least.
+     Value in bytes.
+@@ -228,10 +228,10 @@
+   <description>
+    Name of the class whose instance will be used to query resource information
+    on the tasktracker.
+-   
+-   The class must be an instance of 
++  
++   The class must be an instance of
+    org.apache.hadoop.util.ResourceCalculatorPlugin. If the value is null, the
+-   tasktracker attempts to use a class appropriate to the platform. 
++   tasktracker attempts to use a class appropriate to the platform.
+    Currently, the only platform supported is Linux.
+   </description>
+ </property>
+@@ -256,7 +256,7 @@
+   <name>mapred.map.tasks</name>
+   <value>2</value>
+   <description>The default number of map tasks per job.
+-  Ignored when mapred.job.tracker is "local".  
++  Ignored when mapred.job.tracker is "local". 
+   </description>
+ </property>
+ 
+@@ -264,7 +264,7 @@
+   <name>mapred.reduce.tasks</name>
+   <value>1</value>
+   <description>The default number of reduce tasks per job. Typically set to 99%
+-  of the cluster's reduce capacity, so that if a node fails the reduces can 
++  of the cluster's reduce capacity, so that if a node fails the reduces can
+   still be executed in a single wave.
+   Ignored when mapred.job.tracker is "local".
+   </description>
+@@ -273,7 +273,7 @@
+ <property>
+   <name>mapreduce.tasktracker.outofband.heartbeat</name>
+   <value>false</value>
+-  <description>Expert: Set this to true to let the tasktracker send an 
++  <description>Expert: Set this to true to let the tasktracker send an
+   out-of-band heartbeat on task-completion for better latency.
+   </description>
+ </property>
+@@ -301,7 +301,7 @@
+   <name>mapred.jobtracker.job.history.block.size</name>
+   <value>3145728</value>
+   <description>The block size of the job history file. Since the job recovery
+-               uses job history, its important to dump job history to disk as 
++               uses job history, its important to dump job history to disk as
+                soon as possible. Note that this is an expert level parameter.
+                The default value is set to 3 MB.
+   </description>
+@@ -409,7 +409,7 @@
+ <property>
+   <name>mapred.jobtracker.completeuserjobs.maximum</name>
+   <value>100</value>
+-  <description>The maximum number of complete jobs per user to keep around 
++  <description>The maximum number of complete jobs per user to keep around
+   before delegating them to the job history.</description>
+ </property>
+ 
+@@ -431,7 +431,7 @@
+ <property>
+   <name>mapred.job.tracker.jobhistory.lru.cache.size</name>
+   <value>5</value>
+-  <description>The number of job history files loaded in memory. The jobs are 
++  <description>The number of job history files loaded in memory. The jobs are
+   loaded when they are first accessed. The cache is cleared based on LRU.
+   </description>
+ </property>
+@@ -453,50 +453,50 @@
+ <property>
+   <name>mapred.child.java.opts</name>
+   <value>-Xmx200m</value>
+-  <description>Java opts for the task tracker child processes.  
+-  The following symbol, if present, will be interpolated: @taskid@ is replaced 
++  <description>Java opts for the task tracker child processes. 
++  The following symbol, if present, will be interpolated: @taskid@ is replaced
+   by current TaskID. Any other occurrences of '@' will go unchanged.
+   For example, to enable verbose gc logging to a file named for the taskid in
+   /tmp and to set the heap maximum to be a gigabyte, pass a 'value' of:
+         -Xmx1024m -verbose:gc -Xloggc:/tmp/@taskid@.gc
+-  
++ 
+   The configuration variable mapred.child.ulimit can be used to control the
+-  maximum virtual memory of the child processes. 
++  maximum virtual memory of the child processes.
+   </description>
+ </property>
+ 
+ <property>
+   <name>mapred.child.env</name>
+   <value></value>
+-  <description>User added environment variables for the task tracker child 
++  <description>User added environment variables for the task tracker child
+   processes. Example :
+   1) A=foo  This will set the env variable A to foo
+-  2) B=$B:c This is inherit tasktracker's B env variable.  
++  2) B=$B:c This is inherit tasktracker's B env variable. 
+   </description>
+ </property>
+ 
+ <property>
+   <name>mapred.child.ulimit</name>
+   <value></value>
+-  <description>The maximum virtual memory, in KB, of a process launched by the 
+-  Map-Reduce framework. This can be used to control both the Mapper/Reducer 
+-  tasks and applications using Hadoop Pipes, Hadoop Streaming etc. 
+-  By default it is left unspecified to let cluster admins control it via 
++  <description>The maximum virtual memory, in KB, of a process launched by the
++  Map-Reduce framework. This can be used to control both the Mapper/Reducer
++  tasks and applications using Hadoop Pipes, Hadoop Streaming etc.
++  By default it is left unspecified to let cluster admins control it via
+   limits.conf and other such relevant mechanisms.
+-  
++ 
+   Note: mapred.child.ulimit must be greater than or equal to the -Xmx passed to
+-  JavaVM, else the VM might not start. 
++  JavaVM, else the VM might not start.
+   </description>
+ </property>
+ 
+ <property>
+   <name>mapred.cluster.map.memory.mb</name>
+   <value>-1</value>
+-  <description>The size, in terms of virtual memory, of a single map slot 
+-  in the Map-Reduce framework, used by the scheduler. 
+-  A job can ask for multiple slots for a single map task via 
+-  mapred.job.map.memory.mb, upto the limit specified by 
+-  mapred.cluster.max.map.memory.mb, if the scheduler supports the feature. 
++  <description>The size, in terms of virtual memory, of a single map slot
++  in the Map-Reduce framework, used by the scheduler.
++  A job can ask for multiple slots for a single map task via
++  mapred.job.map.memory.mb, upto the limit specified by
++  mapred.cluster.max.map.memory.mb, if the scheduler supports the feature.
+   The value of -1 indicates that this feature is turned off.
+   </description>
+ </property>
+@@ -504,11 +504,11 @@
+ <property>
+   <name>mapred.cluster.reduce.memory.mb</name>
+   <value>-1</value>
+-  <description>The size, in terms of virtual memory, of a single reduce slot 
+-  in the Map-Reduce framework, used by the scheduler. 
+-  A job can ask for multiple slots for a single reduce task via 
+-  mapred.job.reduce.memory.mb, upto the limit specified by 
+-  mapred.cluster.max.reduce.memory.mb, if the scheduler supports the feature. 
++  <description>The size, in terms of virtual memory, of a single reduce slot
++  in the Map-Reduce framework, used by the scheduler.
++  A job can ask for multiple slots for a single reduce task via
++  mapred.job.reduce.memory.mb, upto the limit specified by
++  mapred.cluster.max.reduce.memory.mb, if the scheduler supports the feature.
+   The value of -1 indicates that this feature is turned off.
+   </description>
+ </property>
+@@ -516,11 +516,11 @@
+ <property>
+   <name>mapred.cluster.max.map.memory.mb</name>
+   <value>-1</value>
+-  <description>The maximum size, in terms of virtual memory, of a single map 
+-  task launched by the Map-Reduce framework, used by the scheduler. 
+-  A job can ask for multiple slots for a single map task via 
+-  mapred.job.map.memory.mb, upto the limit specified by 
+-  mapred.cluster.max.map.memory.mb, if the scheduler supports the feature. 
++  <description>The maximum size, in terms of virtual memory, of a single map
++  task launched by the Map-Reduce framework, used by the scheduler.
++  A job can ask for multiple slots for a single map task via
++  mapred.job.map.memory.mb, upto the limit specified by
++  mapred.cluster.max.map.memory.mb, if the scheduler supports the feature.
+   The value of -1 indicates that this feature is turned off.
+   </description>
+ </property>
+@@ -528,11 +528,11 @@
+ <property>
+   <name>mapred.cluster.max.reduce.memory.mb</name>
+   <value>-1</value>
+-  <description>The maximum size, in terms of virtual memory, of a single reduce 
+-  task launched by the Map-Reduce framework, used by the scheduler. 
+-  A job can ask for multiple slots for a single reduce task via 
+-  mapred.job.reduce.memory.mb, upto the limit specified by 
+-  mapred.cluster.max.reduce.memory.mb, if the scheduler supports the feature. 
++  <description>The maximum size, in terms of virtual memory, of a single reduce
++  task launched by the Map-Reduce framework, used by the scheduler.
++  A job can ask for multiple slots for a single reduce task via
++  mapred.job.reduce.memory.mb, upto the limit specified by
++  mapred.cluster.max.reduce.memory.mb, if the scheduler supports the feature.
+   The value of -1 indicates that this feature is turned off.
+   </description>
+ </property>
+@@ -540,13 +540,13 @@
+ <property>
+   <name>mapred.job.map.memory.mb</name>
+   <value>-1</value>
+-  <description>The size, in terms of virtual memory, of a single map task 
++  <description>The size, in terms of virtual memory, of a single map task
+   for the job.
+-  A job can ask for multiple slots for a single map task, rounded up to the 
+-  next multiple of mapred.cluster.map.memory.mb and upto the limit 
+-  specified by mapred.cluster.max.map.memory.mb, if the scheduler supports 
+-  the feature. 
+-  The value of -1 indicates that this feature is turned off iff 
++  A job can ask for multiple slots for a single map task, rounded up to the
++  next multiple of mapred.cluster.map.memory.mb and upto the limit
++  specified by mapred.cluster.max.map.memory.mb, if the scheduler supports
++  the feature.
++  The value of -1 indicates that this feature is turned off iff
+   mapred.cluster.map.memory.mb is also turned off (-1).
+   </description>
+ </property>
+@@ -554,14 +554,14 @@
+ <property>
+   <name>mapred.job.reduce.memory.mb</name>
+   <value>-1</value>
+-  <description>The size, in terms of virtual memory, of a single reduce task 
++  <description>The size, in terms of virtual memory, of a single reduce task
+   for the job.
+-  A job can ask for multiple slots for a single map task, rounded up to the 
+-  next multiple of mapred.cluster.reduce.memory.mb and upto the limit 
+-  specified by mapred.cluster.max.reduce.memory.mb, if the scheduler supports 
+-  the feature. 
++  A job can ask for multiple slots for a single map task, rounded up to the
++  next multiple of mapred.cluster.reduce.memory.mb and upto the limit
++  specified by mapred.cluster.max.reduce.memory.mb, if the scheduler supports
++  the feature.
+   The value of -1 indicates that this feature is turned off iff
+-  mapred.cluster.reduce.memory.mb is also turned off (-1).  
++  mapred.cluster.reduce.memory.mb is also turned off (-1). 
+   </description>
+ </property>
+ 
+@@ -596,7 +596,7 @@
+ <property>
+   <name>mapred.inmem.merge.threshold</name>
+   <value>1000</value>
+-  <description>The threshold, in terms of the number of files 
++  <description>The threshold, in terms of the number of files
+   for the in-memory merge process. When we accumulate threshold number of files
+   we initiate the in-memory merge and spill to disk. A value of 0 or less than
+   0 indicates we want to DON'T have any threshold and instead depend only on
+@@ -635,14 +635,14 @@
+ <property>
+   <name>mapred.map.tasks.speculative.execution</name>
+   <value>true</value>
+-  <description>If true, then multiple instances of some map tasks 
++  <description>If true, then multiple instances of some map tasks
+                may be executed in parallel.</description>
+ </property>
+ 
+ <property>
+   <name>mapred.reduce.tasks.speculative.execution</name>
+   <value>true</value>
+-  <description>If true, then multiple instances of some reduce tasks 
++  <description>If true, then multiple instances of some reduce tasks
+                may be executed in parallel.</description>
+ </property>
+ 
+@@ -650,7 +650,7 @@
+   <name>mapred.job.reuse.jvm.num.tasks</name>
+   <value>1</value>
+   <description>How many tasks to run per jvm. If set to -1, there is
+-  no limit. 
++  no limit.
+   </description>
+ </property>
+ 
+@@ -685,7 +685,7 @@
+   tracker should report its IP address.
+   </description>
+  </property>
+- 
++
+ <property>
+   <name>mapred.tasktracker.dns.nameserver</name>
+   <value>default</value>
+@@ -694,7 +694,7 @@
+   the JobTracker for communication and display purposes.
+   </description>
+  </property>
+- 
++
+ <property>
+   <name>tasktracker.http.threads</name>
+   <value>40</value>
+@@ -715,14 +715,14 @@
+ <property>
+   <name>keep.failed.task.files</name>
+   <value>false</value>
+-  <description>Should the files for failed tasks be kept. This should only be 
++  <description>Should the files for failed tasks be kept. This should only be
+                used on jobs that are failing, because the storage is never
+                reclaimed. It also prevents the map outputs from being erased
+                from the reduce directory as they are consumed.</description>
+ </property>
+ 
+ 
+-<!-- 
++<!--
+   <property>
+   <name>keep.task.files.pattern</name>
+   <value>.*_m_123456_0</value>
+@@ -764,7 +764,7 @@
+ <property>
+   <name>mapred.map.output.compression.codec</name>
+   <value>org.apache.hadoop.io.compress.DefaultCodec</value>
+-  <description>If the map outputs are compressed, how should they be 
++  <description>If the map outputs are compressed, how should they be
+                compressed?
+   </description>
+ </property>
+@@ -786,7 +786,7 @@
+ <property>
+   <name>mapred.userlog.retain.hours</name>
+   <value>24</value>
+-  <description>The maximum time, in hours, for which the user-logs are to be 
++  <description>The maximum time, in hours, for which the user-logs are to be
+                retained after the job completion.
+   </description>
+ </property>
+@@ -794,7 +794,7 @@
+ <property>
+   <name>mapred.user.jobconf.limit</name>
+   <value>5242880</value>
+-  <description>The maximum allowed size of the user jobconf. The 
++  <description>The maximum allowed size of the user jobconf. The
+   default is set to 5 MB</description>
+ </property>
+ 
+@@ -817,11 +817,11 @@
+ <property>
+   <name>mapred.heartbeats.in.second</name>
+   <value>100</value>
+-  <description>Expert: Approximate number of heart-beats that could arrive 
+-               at JobTracker in a second. Assuming each RPC can be processed 
++  <description>Expert: Approximate number of heart-beats that could arrive
++               at JobTracker in a second. Assuming each RPC can be processed
+                in 10msec, the default value is made 100 RPCs in a second.
+   </description>
+-</property> 
++</property>
+ 
+ <property>
+   <name>mapred.max.tracker.blacklists</name>
+@@ -832,12 +832,12 @@
+                (after a day). The tracker will become a healthy
+                tracker after a restart.
+   </description>
+-</property> 
++</property>
+ 
+ <property>
+   <name>mapred.max.tracker.failures</name>
+   <value>4</value>
+-  <description>The number of task-failures on a tasktracker of a given job 
++  <description>The number of task-failures on a tasktracker of a given job
+                after which new tasks of that job aren't assigned to it.
+   </description>
+ </property>
+@@ -846,8 +846,8 @@
+   <name>jobclient.output.filter</name>
+   <value>FAILED</value>
+   <description>The filter for controlling the output of the task's userlogs sent
+-               to the console of the JobClient. 
+-               The permissible options are: NONE, KILLED, FAILED, SUCCEEDED and 
++               to the console of the JobClient.
++               The permissible options are: NONE, KILLED, FAILED, SUCCEEDED and
+                ALL.
+   </description>
+ </property>
+@@ -954,78 +954,78 @@
+     <description> Number of lines per split in NLineInputFormat.
+     </description>
+   </property>
+-  
++ 
+   <property>
+     <name>mapred.skip.attempts.to.start.skipping</name>
+     <value>2</value>
+-    <description> The number of Task attempts AFTER which skip mode 
+-    will be kicked off. When skip mode is kicked off, the 
+-    tasks reports the range of records which it will process 
+-    next, to the TaskTracker. So that on failures, TT knows which 
+-    ones are possibly the bad records. On further executions, 
++    <description> The number of Task attempts AFTER which skip mode
++    will be kicked off. When skip mode is kicked off, the
++    tasks reports the range of records which it will process
++    next, to the TaskTracker. So that on failures, TT knows which
++    ones are possibly the bad records. On further executions,
+     those are skipped.
+     </description>
+   </property>
+-  
++ 
+   <property>
+     <name>mapred.skip.map.auto.incr.proc.count</name>
+     <value>true</value>
+-    <description> The flag which if set to true, 
+-    SkipBadRecords.COUNTER_MAP_PROCESSED_RECORDS is incremented 
+-    by MapRunner after invoking the map function. This value must be set to 
+-    false for applications which process the records asynchronously 
+-    or buffer the input records. For example streaming. 
++    <description> The flag which if set to true,
++    SkipBadRecords.COUNTER_MAP_PROCESSED_RECORDS is incremented
++    by MapRunner after invoking the map function. This value must be set to
++    false for applications which process the records asynchronously
++    or buffer the input records. For example streaming.
+     In such cases applications should increment this counter on their own.
+     </description>
+   </property>
+-  
++ 
+   <property>
+     <name>mapred.skip.reduce.auto.incr.proc.count</name>
+     <value>true</value>
+-    <description> The flag which if set to true, 
+-    SkipBadRecords.COUNTER_REDUCE_PROCESSED_GROUPS is incremented 
+-    by framework after invoking the reduce function. This value must be set to 
+-    false for applications which process the records asynchronously 
+-    or buffer the input records. For example streaming. 
++    <description> The flag which if set to true,
++    SkipBadRecords.COUNTER_REDUCE_PROCESSED_GROUPS is incremented
++    by framework after invoking the reduce function. This value must be set to
++    false for applications which process the records asynchronously
++    or buffer the input records. For example streaming.
+     In such cases applications should increment this counter on their own.
+     </description>
+   </property>
+-  
++ 
+   <property>
+     <name>mapred.skip.out.dir</name>
+     <value></value>
+-    <description> If no value is specified here, the skipped records are 
++    <description> If no value is specified here, the skipped records are
+     written to the output directory at _logs/skip.
+-    User can stop writing skipped records by giving the value "none". 
++    User can stop writing skipped records by giving the value "none".
+     </description>
+   </property>
+ 
+   <property>
+     <name>mapred.skip.map.max.skip.records</name>
+     <value>0</value>
+-    <description> The number of acceptable skip records surrounding the bad 
++    <description> The number of acceptable skip records surrounding the bad
+     record PER bad record in mapper. The number includes the bad record as well.
+-    To turn the feature of detection/skipping of bad records off, set the 
++    To turn the feature of detection/skipping of bad records off, set the
+     value to 0.
+-    The framework tries to narrow down the skipped range by retrying  
+-    until this threshold is met OR all attempts get exhausted for this task. 
+-    Set the value to Long.MAX_VALUE to indicate that framework need not try to 
+-    narrow down. Whatever records(depends on application) get skipped are 
++    The framework tries to narrow down the skipped range by retrying 
++    until this threshold is met OR all attempts get exhausted for this task.
++    Set the value to Long.MAX_VALUE to indicate that framework need not try to
++    narrow down. Whatever records(depends on application) get skipped are
+     acceptable.
+     </description>
+   </property>
+-  
++ 
+   <property>
+     <name>mapred.skip.reduce.max.skip.groups</name>
+     <value>0</value>
+-    <description> The number of acceptable skip groups surrounding the bad 
++    <description> The number of acceptable skip groups surrounding the bad
+     group PER bad group in reducer. The number includes the bad group as well.
+-    To turn the feature of detection/skipping of bad groups off, set the 
++    To turn the feature of detection/skipping of bad groups off, set the
+     value to 0.
+-    The framework tries to narrow down the skipped range by retrying  
+-    until this threshold is met OR all attempts get exhausted for this task. 
+-    Set the value to Long.MAX_VALUE to indicate that framework need not try to 
+-    narrow down. Whatever groups(depends on application) get skipped are 
++    The framework tries to narrow down the skipped range by retrying 
++    until this threshold is met OR all attempts get exhausted for this task.
++    Set the value to Long.MAX_VALUE to indicate that framework need not try to
++    narrow down. Whatever groups(depends on application) get skipped are
+     acceptable.
+     </description>
+   </property>
+@@ -1072,7 +1072,7 @@
+    <description>Indicates time in milliseconds between notification URL retry
+                 calls</description>
+ </property>
+-  
++ 
+ <!-- Proxy Configuration -->
+ <property>
+   <name>hadoop.rpc.socket.factory.class.JobSubmissionProtocol</name>
+@@ -1095,14 +1095,14 @@
+   <name>mapred.queue.names</name>
+   <value>default</value>
+   <description> Comma separated list of queues configured for this jobtracker.
+-    Jobs are added to queues and schedulers can configure different 
+-    scheduling properties for the various queues. To configure a property 
+-    for a queue, the name of the queue must match the name specified in this 
+-    value. Queue properties that are common to all schedulers are configured 
++    Jobs are added to queues and schedulers can configure different
++    scheduling properties for the various queues. To configure a property
++    for a queue, the name of the queue must match the name specified in this
++    value. Queue properties that are common to all schedulers are configured
+     here with the naming convention, mapred.queue.$QUEUE-NAME.$PROPERTY-NAME,
+     for e.g. mapred.queue.default.submit-job-acl.
+     The number of queues configured in this parameter could depend on the
+-    type of scheduler being used, as specified in 
++    type of scheduler being used, as specified in
+     mapred.jobtracker.taskScheduler. For example, the JobQueueTaskScheduler
+     supports only a single queue, which is the default configured here.
+     Before adding more queues, ensure that the scheduler you've configured
+@@ -1140,7 +1140,7 @@
+   <description> Queue to which a job is submitted. This must match one of the
+     queues defined in mapred.queue.names for the system. Also, the ACL setup
+     for the queue must allow the current user to submit a job to the queue.
+-    Before specifying a queue, ensure that the system is configured with 
++    Before specifying a queue, ensure that the system is configured with
+     the queue, and access is allowed for submitting jobs to the queue.
+   </description>
+ </property>
+@@ -1198,14 +1198,14 @@
+       o job.xml showed by the JobTracker's web-UI
+     Every other piece of information of jobs is still accessible by any other
+     user, for e.g., JobStatus, JobProfile, list of jobs in the queue, etc.
+-    
++   
+     Irrespective of this ACL configuration, job-owner, the user who started the
+     cluster, cluster administrators configured via
+     mapreduce.cluster.administrators and queue administrators of the queue to
+     which this job is submitted to configured via
+     mapred.queue.queue-name.acl-administer-jobs in mapred-queue-acls.xml can do
+     all the view operations on a job.
+-    
++   
+     By default, nobody else besides job-owner, the user who started the
+     cluster, cluster administrators and queue administrators can perform
+     view operations on a job.
+@@ -1215,7 +1215,7 @@
+ <property>
+   <name>mapred.tasktracker.indexcache.mb</name>
+   <value>10</value>
+-  <description> The maximum memory that a task tracker allows for the 
++  <description> The maximum memory that a task tracker allows for the
+     index cache that is used when serving map outputs to reducers.
+   </description>
+ </property>
+@@ -1239,15 +1239,15 @@
+ <property>
+   <name>mapred.reduce.slowstart.completed.maps</name>
+   <value>0.05</value>
+-  <description>Fraction of the number of maps in the job which should be 
+-  complete before reduces are scheduled for the job. 
++  <description>Fraction of the number of maps in the job which should be
++  complete before reduces are scheduled for the job.
+   </description>
+ </property>
+ 
+ <property>
+   <name>mapred.task.tracker.task-controller</name>
+   <value>org.apache.hadoop.mapred.DefaultTaskController</value>
+-  <description>TaskController which is used to launch and manage task execution 
++  <description>TaskController which is used to launch and manage task execution
+   </description>
+ </property>
+ 
+@@ -1292,14 +1292,14 @@
+ <property>
+   <name>mapred.healthChecker.script.timeout</name>
+   <value>600000</value>
+-  <description>Time after node health script should be killed if 
++  <description>Time after node health script should be killed if
+   unresponsive and considered that the script has failed.</description>
+ </property>
+ 
+ <property>
+   <name>mapred.healthChecker.script.args</name>
+   <value></value>
+-  <description>List of arguments which are to be passed to 
++  <description>List of arguments which are to be passed to
+   node health script when it is being launched comma seperated.
+   </description>
+ </property>
+@@ -1384,5 +1384,14 @@
+    Each class in the list must be an instance of org.apache.hadoop.mapred.ShuffleProviderPlugin.
+   </description>
+ </property>
+-  
++
++<property>
++  <name>mapreduce.jobclient.rpc.timeout</name>
++  <value>-1</value>
++  <description>
++    The rpc timeout, in milliseconds, to use for the job client. Defaults to
++    '-1' or no timeout.
++  </description>
++</property>
++
+ </configuration>
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+index f800eb3..12d21d7 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+@@ -95,11 +95,11 @@
+ /**
+  * <code>JobClient</code> is the primary interface for the user-job to interact
+  * with the {@link JobTracker}.
+- * 
+- * <code>JobClient</code> provides facilities to submit jobs, track their 
++ *
++ * <code>JobClient</code> provides facilities to submit jobs, track their
+  * progress, access component-tasks' reports/logs, get the Map-Reduce cluster
+  * status information etc.
+- * 
++ *
+  * <p>The job submission process involves:
+  * <ol>
+  *   <li>
+@@ -109,59 +109,59 @@
+  *   Computing the {@link InputSplit}s for the job.
+  *   </li>
+  *   <li>
+- *   Setup the requisite accounting information for the {@link DistributedCache} 
++ *   Setup the requisite accounting information for the {@link DistributedCache}
+  *   of the job, if necessary.
+  *   </li>
+  *   <li>
+- *   Copying the job's jar and configuration to the map-reduce system directory 
+- *   on the distributed file-system. 
++ *   Copying the job's jar and configuration to the map-reduce system directory
++ *   on the distributed file-system.
+  *   </li>
+  *   <li>
+  *   Submitting the job to the <code>JobTracker</code> and optionally monitoring
+  *   it's status.
+  *   </li>
+  * </ol></p>
+- *  
++ *
+  * Normally the user creates the application, describes various facets of the
+- * job via {@link JobConf} and then uses the <code>JobClient</code> to submit 
++ * job via {@link JobConf} and then uses the <code>JobClient</code> to submit
+  * the job and monitor its progress.
+- * 
++ *
+  * <p>Here is an example on how to use <code>JobClient</code>:</p>
+  * <p><blockquote><pre>
+  *     // Create a new JobConf
+  *     JobConf job = new JobConf(new Configuration(), MyJob.class);
+- *     
+- *     // Specify various job-specific parameters     
++ *
++ *     // Specify various job-specific parameters
+  *     job.setJobName("myjob");
+- *     
++ *
+  *     job.setInputPath(new Path("in"));
+  *     job.setOutputPath(new Path("out"));
+- *     
++ *
+  *     job.setMapperClass(MyJob.MyMapper.class);
+  *     job.setReducerClass(MyJob.MyReducer.class);
+  *
+  *     // Submit the job, then poll for progress until the job is complete
+  *     JobClient.runJob(job);
+  * </pre></blockquote></p>
+- * 
++ *
+  * <h4 id="JobControl">Job Control</h4>
+- * 
+- * <p>At times clients would chain map-reduce jobs to accomplish complex tasks 
+- * which cannot be done via a single map-reduce job. This is fairly easy since 
+- * the output of the job, typically, goes to distributed file-system and that 
++ *
++ * <p>At times clients would chain map-reduce jobs to accomplish complex tasks
++ * which cannot be done via a single map-reduce job. This is fairly easy since
++ * the output of the job, typically, goes to distributed file-system and that
+  * can be used as the input for the next job.</p>
+- * 
+- * <p>However, this also means that the onus on ensuring jobs are complete 
+- * (success/failure) lies squarely on the clients. In such situations the 
++ *
++ * <p>However, this also means that the onus on ensuring jobs are complete
++ * (success/failure) lies squarely on the clients. In such situations the
+  * various job-control options are:
+  * <ol>
+  *   <li>
+- *   {@link #runJob(JobConf)} : submits the job and returns only after 
++ *   {@link #runJob(JobConf)} : submits the job and returns only after
+  *   the job has completed.
+  *   </li>
+  *   <li>
+- *   {@link #submitJob(JobConf)} : only submits the job, then poll the 
+- *   returned handle to the {@link RunningJob} to query status and make 
++ *   {@link #submitJob(JobConf)} : only submits the job, then poll the
++ *   returned handle to the {@link RunningJob} to query status and make
+  *   scheduling decisions.
+  *   </li>
+  *   <li>
+@@ -169,7 +169,7 @@
+  *   on job-completion, thus avoiding polling.
+  *   </li>
+  * </ol></p>
+- * 
++ *
+  * @see JobConf
+  * @see ClusterStatus
+  * @see Tool
+@@ -178,7 +178,7 @@
+ public class JobClient extends Configured implements MRConstants, Tool  {
+   private static final Log LOG = LogFactory.getLog(JobClient.class);
+   public static enum TaskStatusFilter { NONE, KILLED, FAILED, SUCCEEDED, ALL }
+-  private TaskStatusFilter taskOutputFilter = TaskStatusFilter.FAILED; 
++  private TaskStatusFilter taskOutputFilter = TaskStatusFilter.FAILED;
+   private static final long MAX_JOBPROFILE_AGE = 1000 * 2;
+ 
+   static{
+@@ -196,6 +196,17 @@
+   static final String PROGRESS_MONITOR_POLL_INTERVAL_KEY =
+       "jobclient.progress.monitor.poll.interval";
+ 
++  /**
++   * Key in mapred-*.xml that determines what is the rpc timeout to use
++   * for the JobClient, in milliseconds.
++   */
++  @InterfaceAudience.Private
++  public static final String MAPREDUCE_CLIENT_RPC_TIMEOUT_KEY =
++      "mapreduce.jobclient.rpc.timeout";
++
++  /** Default rpc timeout for the JobClient is -1, or no timeout */
++  @InterfaceAudience.Private
++  public static final int MAPREDUCE_CLIENT_RPC_TIMEOUT_DEFAULT = -1;
+ 
+   /**
+    * A NetworkedJob is an implementation of RunningJob.  It holds
+@@ -249,7 +260,7 @@ synchronized void ensureFreshStatus() throws IOException {
+         updateStatus();
+       }
+     }
+-    
++
+     /** Some methods need to update status immediately. So, refresh
+      * immediately
+      * @throws IOException
+@@ -268,14 +279,14 @@ synchronized void updateStatus() throws IOException {
+     public JobID getID() {
+       return profile.getJobID();
+     }
+-    
+-    /** @deprecated This method is deprecated and will be removed. Applications should 
++
++    /** @deprecated This method is deprecated and will be removed. Applications should
+      * rather use {@link #getID()}.*/
+     @Deprecated
+     public String getJobID() {
+       return profile.getJobID().toString();
+     }
+-    
++
+     /**
+      * The user-specified job name
+      */
+@@ -391,23 +402,23 @@ public synchronized int getJobState() throws IOException {
+       }
+       return status.getRunState();
+     }
+-    
++
+     /**
+      * Tells the service to terminate the current job.
+      */
+     public synchronized void killJob() throws IOException {
+       jobSubmitClient.killJob(getID());
+     }
+-   
+-    
++
++
+     /** Set the priority of the job.
+-    * @param priority new priority of the job. 
++    * @param priority new priority of the job.
+     */
+-    public synchronized void setJobPriority(String priority) 
++    public synchronized void setJobPriority(String priority)
+                                                 throws IOException {
+       jobSubmitClient.setJobPriority(getID(), priority);
+     }
+-    
++
+     /**
+      * Kill indicated task attempt.
+      * @param taskId the id of the task to kill.
+@@ -423,14 +434,14 @@ public synchronized void killTask(TaskAttemptID taskId, boolean shouldFail) thro
+     public synchronized void killTask(String taskId, boolean shouldFail) throws IOException {
+       killTask(TaskAttemptID.forName(taskId), shouldFail);
+     }
+-    
++
+     /**
+-     * Fetch task completion events from jobtracker for this job. 
++     * Fetch task completion events from jobtracker for this job.
+      */
+     public synchronized TaskCompletionEvent[] getTaskCompletionEvents(
+                                                                       int startFrom) throws IOException{
+       return jobSubmitClient.getTaskCompletionEvents(
+-                                                     getID(), startFrom, 10); 
++                                                     getID(), startFrom, 10);
+     }
+ 
+     /**
+@@ -442,20 +453,20 @@ public String toString() {
+         updateStatus();
+       } catch (IOException e) {
+       }
+-      return "Job: " + profile.getJobID() + "\n" + 
+-        "file: " + profile.getJobFile() + "\n" + 
+-        "tracking URL: " + profile.getURL() + "\n" + 
+-        "map() completion: " + (status == null ? 0.0f : status.mapProgress()) + "\n" + 
++      return "Job: " + profile.getJobID() + "\n" +
++        "file: " + profile.getJobFile() + "\n" +
++        "tracking URL: " + profile.getURL() + "\n" +
++        "map() completion: " + (status == null ? 0.0f : status.mapProgress()) + "\n" +
+         "reduce() completion: " + (status == null ? 0.0f : status.reduceProgress());
+     }
+-        
++
+     /**
+      * Returns the counters for this job
+      */
+     public Counters getCounters() throws IOException {
+       return jobSubmitClient.getJobCounters(getID());
+     }
+-    
++
+     @Override
+     public String[] getTaskDiagnostics(TaskAttemptID id) throws IOException {
+       return jobSubmitClient.getTaskDiagnostics(id);
+@@ -463,8 +474,8 @@ public Counters getCounters() throws IOException {
+ 
+     @Override
+     public String getFailureInfo() throws IOException {
+-      //assuming that this is just being called after 
+-      //we realized the job failed. SO we try avoiding 
++      //assuming that this is just being called after
++      //we realized the job failed. SO we try avoiding
+       //a rpc by not calling updateStatus
+       ensureFreshStatus();
+       if (status == null) {
+@@ -483,10 +494,10 @@ public JobStatus getJobStatus() throws IOException {
+   private JobSubmissionProtocol jobSubmitClient;
+   private Path sysDir = null;
+   private Path stagingAreaDir = null;
+-  
++
+   private FileSystem fs = null;
+   private UserGroupInformation ugi;
+-  private static final String TASKLOG_PULL_TIMEOUT_KEY = 
++  private static final String TASKLOG_PULL_TIMEOUT_KEY =
+     "mapreduce.client.tasklog.timeout";
+   private static final int DEFAULT_TASKLOG_TIMEOUT = 60000;
+   static int tasklogtimeout;
+@@ -497,22 +508,22 @@ public JobStatus getJobStatus() throws IOException {
+   public JobClient() {
+     this.progMonitorPollIntervalMillis = DEFAULT_MONITOR_POLL_INTERVAL;
+   }
+-    
++
+   /**
+-   * Build a job client with the given {@link JobConf}, and connect to the 
++   * Build a job client with the given {@link JobConf}, and connect to the
+    * default {@link JobTracker}.
+-   * 
++   *
+    * @param conf the job configuration.
+    * @throws IOException
+    */
+   public JobClient(JobConf conf) throws IOException {
+     init(conf);
+   }
+-  
++
+   /**
+-   * Build a job client with the given {@link Configuration}, 
++   * Build a job client with the given {@link Configuration},
+    * and connect to the default cluster
+-   * 
++   *
+    * @param conf the configuration.
+    * @throws IOException
+    */
+@@ -539,7 +550,7 @@ public void init(JobConf conf) throws IOException {
+       this.jobSubmitClient = createRPCProxy(JobTracker.getAddress(conf), conf);
+     } else {
+       this.jobSubmitClient = createRPCProxy(tracker, conf);
+-    }        
++    }
+ 
+     // Read progress monitor poll interval from config. Default is 1 second.
+     this.progMonitorPollIntervalMillis = conf.getInt(PROGRESS_MONITOR_POLL_INTERVAL_KEY,
+@@ -553,10 +564,25 @@ public void init(JobConf conf) throws IOException {
+ 
+   private static JobSubmissionProtocol createRPCProxy(InetSocketAddress addr,
+       Configuration conf) throws IOException {
++    int rpcTimeout = getRpcTimeout(conf);
+     return (JobSubmissionProtocol) RPC.getProxy(JobSubmissionProtocol.class,
+-        JobSubmissionProtocol.versionID, addr, 
++        JobSubmissionProtocol.versionID, addr,
+         UserGroupInformation.getCurrentUser(), conf,
+-        NetUtils.getSocketFactory(conf, JobSubmissionProtocol.class));
++        NetUtils.getSocketFactory(conf, JobSubmissionProtocol.class),
++        rpcTimeout);
++  }
++
++  /**
++   * Returns the rpc timeout to use according to the configuration. If timeout
++   * is not enabled (rpc timeout configured < 0, the default is -1) 0 is
++   * returned. This maintains previous behavior that set the rpcTimeout to 0.
++   * @param conf
++   * @return
++   */
++  @InterfaceAudience.Private
++  public static int getRpcTimeout(Configuration conf) {
++    return conf.getInt(MAPREDUCE_CLIENT_RPC_TIMEOUT_KEY,
++        MAPREDUCE_CLIENT_RPC_TIMEOUT_DEFAULT);
+   }
+ 
+   private static JobSubmissionProtocol createRPCProxy(String addr,
+@@ -573,7 +599,7 @@ public boolean handleKind(Text kind) {
+       return DelegationTokenIdentifier.MAPREDUCE_DELEGATION_KIND.equals(kind);
+     }
+ 
+-    private JobSubmissionProtocol createJTProxy(Token<?> token, Configuration conf) 
++    private JobSubmissionProtocol createJTProxy(Token<?> token, Configuration conf)
+       throws IOException {
+       JobSubmissionProtocol jt;
+       String addr = HAUtil.getServiceAddressFromToken(token);
+@@ -584,7 +610,7 @@ private JobSubmissionProtocol createJTProxy(Token<?> token, Configuration conf)
+       }
+       return jt;
+     }
+-    
++
+     @SuppressWarnings("unchecked")
+     @Override
+     public long renew(Token<?> token, Configuration conf
+@@ -604,23 +630,23 @@ public void cancel(Token<?> token, Configuration conf
+     @Override
+     public boolean isManaged(Token<?> token) throws IOException {
+       ByteArrayInputStream buf = new ByteArrayInputStream(token.getIdentifier());
+-      DelegationTokenIdentifier id = new DelegationTokenIdentifier(); 
++      DelegationTokenIdentifier id = new DelegationTokenIdentifier();
+       id.readFields(new DataInputStream(buf));
+       // AbstractDelegationToken converts given renewer to a short name, but
+       // AbstractDelegationTokenSecretManager does not, so we have to do it
+       String loginUser = UserGroupInformation.getLoginUser().getShortUserName();
+       return loginUser.equals(id.getRenewer().toString());
+     }
+-    
++
+   }
+ 
+   /**
+    * Build a job client, connect to the indicated job tracker.
+-   * 
++   *
+    * @param jobTrackAddr the job tracker to connect to.
+    * @param conf configuration.
+    */
+-  public JobClient(InetSocketAddress jobTrackAddr, 
++  public JobClient(InetSocketAddress jobTrackAddr,
+                    Configuration conf) throws IOException {
+     setConf(conf);
+     this.ugi = UserGroupInformation.getCurrentUser();
+@@ -639,9 +665,9 @@ public synchronized void close() throws IOException {
+   /**
+    * Get a filesystem handle.  We need this to prepare jobs
+    * for submission to the MapReduce system.
+-   * 
++   *
+    * @return the filesystem handle.
+-   * @throws IOException 
++   * @throws IOException
+    */
+   public synchronized FileSystem getFs() throws IOException {
+     if (this.fs == null) {
+@@ -658,7 +684,7 @@ public FileSystem run() throws IOException {
+     }
+     return this.fs;
+   }
+-  
++
+   /* see if two file systems are the same or not
+    *
+    */
+@@ -671,7 +697,7 @@ private boolean compareFs(FileSystem srcFs, FileSystem destFs) {
+     if (!srcUri.getScheme().equals(dstUri.getScheme())) {
+       return false;
+     }
+-    String srcHost = srcUri.getHost();    
++    String srcHost = srcUri.getHost();
+     String dstHost = dstUri.getHost();
+     if ((srcHost != null) && (dstHost != null)) {
+       try {
+@@ -699,18 +725,18 @@ else if (srcHost != null && dstHost == null) {
+ 
+   // copies a file to the jobtracker filesystem and returns the path where it
+   // was copied to
+-  private Path copyRemoteFiles(FileSystem jtFs, Path parentDir, 
+-      final Path originalPath, final JobConf job, short replication) 
++  private Path copyRemoteFiles(FileSystem jtFs, Path parentDir,
++      final Path originalPath, final JobConf job, short replication)
+   throws IOException, InterruptedException {
+     //check if we do not need to copy the files
+     // is jt using the same file system.
+-    // just checking for uri strings... doing no dns lookups 
++    // just checking for uri strings... doing no dns lookups
+     // to see if the filesystems are the same. This is not optimal.
+     // but avoids name resolution.
+-    
++
+     FileSystem remoteFs = null;
+     remoteFs = originalPath.getFileSystem(job);
+-    
++
+     if (compareFs(remoteFs, jtFs)) {
+       return originalPath;
+     }
+@@ -721,7 +747,7 @@ private Path copyRemoteFiles(FileSystem jtFs, Path parentDir,
+     jtFs.setReplication(newPath, replication);
+     return newPath;
+   }
+- 
++
+   private URI getPathURI(Path destPath, String fragment)
+       throws URISyntaxException {
+     URI pathURI = destPath.toUri();
+@@ -736,26 +762,26 @@ private URI getPathURI(Path destPath, String fragment)
+   }
+ 
+   /**
+-   * configure the jobconf of the user with the command line options of 
++   * configure the jobconf of the user with the command line options of
+    * -libjars, -files, -archives
+    * @param job the JobConf
+    * @param submitJobDir
+    * @throws IOException
+    */
+-  private void copyAndConfigureFiles(JobConf job, Path jobSubmitDir) 
++  private void copyAndConfigureFiles(JobConf job, Path jobSubmitDir)
+   throws IOException, InterruptedException {
+     short replication = (short)job.getInt("mapred.submit.replication", 10);
+     copyAndConfigureFiles(job, jobSubmitDir, replication);
+ 
+     // Set the working directory
+     if (job.getWorkingDirectory() == null) {
+-      job.setWorkingDirectory(fs.getWorkingDirectory());          
++      job.setWorkingDirectory(fs.getWorkingDirectory());
+     }
+   }
+-  
+-  private void copyAndConfigureFiles(JobConf job, Path submitJobDir, 
++
++  private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+       short replication) throws IOException, InterruptedException {
+-    
++
+     if (!(job.getBoolean("mapred.used.genericoptionsparser", false))) {
+       LOG.warn("Use GenericOptionsParser for parsing the arguments. " +
+                "Applications should implement Tool for the same.");
+@@ -770,7 +796,7 @@ private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+     //
+     // Figure out what fs the JobTracker is using.  Copy the
+     // job to it, under a temporary name.  This allows DFS to work,
+-    // and under the local fs also provides UNIX-like object loading 
++    // and under the local fs also provides UNIX-like object loading
+     // semantics.  (that is, if the job file is deleted right after
+     // submission, we can still run the submission to completion)
+     //
+@@ -790,8 +816,8 @@ private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+     Path archivesDir = JobSubmissionFiles.getJobDistCacheArchives(submitJobDir);
+     Path libjarsDir = JobSubmissionFiles.getJobDistCacheLibjars(submitJobDir);
+     // add all the command line files/ jars and archive
+-    // first copy them to jobtrackers filesystem 
+-    
++    // first copy them to jobtrackers filesystem
++
+     if (files != null) {
+       FileSystem.mkdirs(fs, filesDir, mapredSysPerms);
+       String[] fileArr = files.split(",");
+@@ -808,13 +834,13 @@ private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+           URI pathURI = getPathURI(newPath, tmpURI.getFragment());
+           DistributedCache.addCacheFile(pathURI, job);
+         } catch(URISyntaxException ue) {
+-          //should not throw a uri exception 
++          //should not throw a uri exception
+           throw new IOException("Failed to create uri for " + tmpFile, ue);
+         }
+         DistributedCache.createSymlink(job);
+       }
+     }
+-    
++
+     if (libjars != null) {
+       FileSystem.mkdirs(fs, libjarsDir, mapredSysPerms);
+       String[] libjarsArr = libjars.split(",");
+@@ -825,10 +851,10 @@ private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+           new Path(newPath.toUri().getPath()), job, fs);
+       }
+     }
+-    
+-    
++
++
+     if (archives != null) {
+-     FileSystem.mkdirs(fs, archivesDir, mapredSysPerms); 
++     FileSystem.mkdirs(fs, archivesDir, mapredSysPerms);
+      String[] archivesArr = archives.split(",");
+      for (String tmpArchives: archivesArr) {
+        URI tmpURI;
+@@ -849,20 +875,20 @@ private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+        DistributedCache.createSymlink(job);
+      }
+     }
+-    
++
+     // First we check whether the cached archives and files are legal.
+     TrackerDistributedCacheManager.validate(job);
+     //  set the timestamps of the archives and files and set the
+     //  public/private visibility of the archives and files
+     TrackerDistributedCacheManager.determineTimestampsAndCacheVisibilities(job);
+     // get DelegationTokens for cache files
+-    TrackerDistributedCacheManager.getDelegationTokens(job, 
++    TrackerDistributedCacheManager.getDelegationTokens(job,
+                                                        job.getCredentials());
+ 
+     String originalJarPath = job.getJar();
+ 
+     if (originalJarPath != null) {           // copy jar to JobTracker's fs
+-      // use jar name if job is not named. 
++      // use jar name if job is not named.
+       if ("".equals(job.getJobName())){
+         job.setJobName(new Path(originalJarPath).getName());
+       }
+@@ -877,7 +903,7 @@ private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+         job.setJar(submitJarFile.toString());
+         fs.copyFromLocalFile(originalJarFile, submitJarFile);
+         fs.setReplication(submitJarFile, replication);
+-        fs.setPermission(submitJarFile, 
++        fs.setPermission(submitJarFile,
+             new FsPermission(JobSubmissionFiles.JOB_FILE_PERMISSION));
+       }
+     } else {
+@@ -885,13 +911,13 @@ private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+                "See JobConf(Class) or JobConf#setJar(String).");
+     }
+   }
+-  
++
+   /**
+    * Submit a job to the MR system.
+-   * 
++   *
+    * This returns a handle to the {@link RunningJob} which can be used to track
+    * the running-job.
+-   * 
++   *
+    * @param jobFile the job configuration.
+    * @return a handle to the {@link RunningJob} which can be used to track the
+    *         running-job.
+@@ -899,19 +925,19 @@ private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+    * @throws InvalidJobConfException
+    * @throws IOException
+    */
+-  public RunningJob submitJob(String jobFile) throws FileNotFoundException, 
+-                                                     InvalidJobConfException, 
++  public RunningJob submitJob(String jobFile) throws FileNotFoundException,
++                                                     InvalidJobConfException,
+                                                      IOException {
+     // Load in the submitted job details
+     JobConf job = new JobConf(jobFile);
+     return submitJob(job);
+   }
+-      
++
+   /**
+    * Submit a job to the MR system.
+    * This returns a handle to the {@link RunningJob} which can be used to track
+    * the running-job.
+-   * 
++   *
+    * @param job the job configuration.
+    * @return a handle to the {@link RunningJob} which can be used to track the
+    *         running-job.
+@@ -938,9 +964,9 @@ public RunningJob submitJob(JobConf job) throws FileNotFoundException,
+    * @throws InterruptedException
+    * @throws IOException
+    */
+-  public 
++  public
+   RunningJob submitJobInternal(final JobConf job
+-                               ) throws FileNotFoundException, 
++                               ) throws FileNotFoundException,
+                                         ClassNotFoundException,
+                                         InterruptedException,
+                                         IOException {
+@@ -948,7 +974,7 @@ RunningJob submitJobInternal(final JobConf job
+      * configure the command line options correctly on the submitting dfs
+      */
+     return ugi.doAs(new PrivilegedExceptionAction<RunningJob>() {
+-      public RunningJob run() throws FileNotFoundException, 
++      public RunningJob run() throws FileNotFoundException,
+       ClassNotFoundException,
+       InterruptedException,
+       IOException{
+@@ -981,7 +1007,7 @@ public RunningJob run() throws FileNotFoundException,
+           jobCopy = (JobConf)context.getConfiguration();
+ 
+           // Check the output specification
+-          if (reduces == 0 ? jobCopy.getUseNewMapper() : 
++          if (reduces == 0 ? jobCopy.getUseNewMapper() :
+             jobCopy.getUseNewReducer()) {
+             org.apache.hadoop.mapreduce.OutputFormat<?,?> output =
+               ReflectionUtils.newInstance(context.getOutputFormatClass(),
+@@ -1004,8 +1030,8 @@ public RunningJob run() throws FileNotFoundException,
+           jobCopy.set(QueueManager.toFullPropertyName(queue,
+               QueueACL.ADMINISTER_JOBS.getAclName()), acl.getAclString());
+ 
+-          // Write job file to JobTracker's fs        
+-          FSDataOutputStream out = 
++          // Write job file to JobTracker's fs
++          FSDataOutputStream out =
+             FileSystem.create(fs, submitJobFile,
+                 new FsPermission(JobSubmissionFiles.JOB_FILE_PERMISSION));
+ 
+@@ -1088,7 +1114,7 @@ int writeNewSplits(JobContext job, Path jobSubmitDir) throws IOException,
+         jobSubmitDir.getFileSystem(conf), array);
+     return array.length;
+   }
+-  
++
+   private int writeSplits(org.apache.hadoop.mapreduce.JobContext job,
+       Path jobSubmitDir) throws IOException,
+       InterruptedException, ClassNotFoundException {
+@@ -1101,9 +1127,9 @@ private int writeSplits(org.apache.hadoop.mapreduce.JobContext job,
+     }
+     return maps;
+   }
+-  
++
+   //method to write splits for old api mapper.
+-  private int writeOldSplits(JobConf job, Path jobSubmitDir) 
++  private int writeOldSplits(JobConf job, Path jobSubmitDir)
+   throws IOException {
+     org.apache.hadoop.mapred.InputSplit[] splits =
+     job.getInputFormat().getSplits(job, job.getNumMapTasks());
+@@ -1131,7 +1157,7 @@ public int compare(org.apache.hadoop.mapred.InputSplit a,
+         jobSubmitDir.getFileSystem(job), splits);
+     return splits.length;
+   }
+-  
++
+   private static class SplitComparator implements Comparator<InputSplit> {
+     @Override
+     public int compare(InputSplit o1, InputSplit o2) {
+@@ -1152,21 +1178,21 @@ public int compare(InputSplit o1, InputSplit o2) {
+       }
+     }
+   }
+-  
+-  /** 
+-   * Checks if the job directory is clean and has all the required components 
++
++  /**
++   * Checks if the job directory is clean and has all the required components
+    * for (re) starting the job
+    */
+-  public static boolean isJobDirValid(Path jobDirPath, FileSystem fs) 
++  public static boolean isJobDirValid(Path jobDirPath, FileSystem fs)
+   throws IOException {
+     FileStatus[] contents = null;
+-    
++
+     try {
+       contents = fs.listStatus(jobDirPath);
+     } catch(FileNotFoundException fnfe) {
+       return false;
+     }
+-    
++
+     int matchCount = 0;
+     if (contents.length >=2) {
+       for (FileStatus status : contents) {
+@@ -1183,13 +1209,13 @@ public static boolean isJobDirValid(Path jobDirPath, FileSystem fs)
+     }
+     return false;
+   }
+-    
++
+   /**
+    * Get an {@link RunningJob} object to track an ongoing job.  Returns
+    * null if the id does not correspond to any known job.
+-   * 
++   *
+    * @param jobid the jobid of the job.
+-   * @return the {@link RunningJob} handle to track the job, null if the 
++   * @return the {@link RunningJob} handle to track the job, null if the
+    *         <code>jobid</code> doesn't correspond to any known job.
+    * @throws IOException
+    */
+@@ -1202,16 +1228,16 @@ public RunningJob getJob(JobID jobid) throws IOException {
+     }
+   }
+ 
+-  /**@deprecated Applications should rather use {@link #getJob(JobID)}. 
++  /**@deprecated Applications should rather use {@link #getJob(JobID)}.
+    */
+   @Deprecated
+   public RunningJob getJob(String jobid) throws IOException {
+     return getJob(JobID.forName(jobid));
+   }
+-  
++
+   /**
+    * Get the information of the current state of the map tasks of a job.
+-   * 
++   *
+    * @param jobId the job to query.
+    * @return the list of all of the map tips.
+    * @throws IOException
+@@ -1219,42 +1245,42 @@ public RunningJob getJob(String jobid) throws IOException {
+   public TaskReport[] getMapTaskReports(JobID jobId) throws IOException {
+     return jobSubmitClient.getMapTaskReports(jobId);
+   }
+-  
++
+   /**@deprecated Applications should rather use {@link #getMapTaskReports(JobID)}*/
+   @Deprecated
+   public TaskReport[] getMapTaskReports(String jobId) throws IOException {
+     return getMapTaskReports(JobID.forName(jobId));
+   }
+-  
++
+   /**
+    * Get the information of the current state of the reduce tasks of a job.
+-   * 
++   *
+    * @param jobId the job to query.
+    * @return the list of all of the reduce tips.
+    * @throws IOException
+-   */    
++   */
+   public TaskReport[] getReduceTaskReports(JobID jobId) throws IOException {
+     return jobSubmitClient.getReduceTaskReports(jobId);
+   }
+ 
+   /**
+    * Get the information of the current state of the cleanup tasks of a job.
+-   * 
++   *
+    * @param jobId the job to query.
+    * @return the list of all of the cleanup tips.
+    * @throws IOException
+-   */    
++   */
+   public TaskReport[] getCleanupTaskReports(JobID jobId) throws IOException {
+     return jobSubmitClient.getCleanupTaskReports(jobId);
+   }
+ 
+   /**
+    * Get the information of the current state of the setup tasks of a job.
+-   * 
++   *
+    * @param jobId the job to query.
+    * @return the list of all of the setup tips.
+    * @throws IOException
+-   */    
++   */
+   public TaskReport[] getSetupTaskReports(JobID jobId) throws IOException {
+     return jobSubmitClient.getSetupTaskReports(jobId);
+   }
+@@ -1264,17 +1290,17 @@ public RunningJob getJob(String jobid) throws IOException {
+   public TaskReport[] getReduceTaskReports(String jobId) throws IOException {
+     return getReduceTaskReports(JobID.forName(jobId));
+   }
+-  
++
+   /**
+    * Display the information about a job's tasks, of a particular type and
+    * in a particular state
+-   * 
++   *
+    * @param jobId the ID of the job
+    * @param type the type of the task (map/reduce/setup/cleanup)
+-   * @param state the state of the task 
++   * @param state the state of the task
+    * (pending/running/completed/failed/killed)
+    */
+-  public void displayTasks(JobID jobId, String type, String state) 
++  public void displayTasks(JobID jobId, String type, String state)
+   throws IOException {
+     TaskReport[] reports = new TaskReport[0];
+     if (type.equals("map")) {
+@@ -1301,7 +1327,7 @@ private void printTaskAttempts(TaskReport report) {
+     if (report.getCurrentStatus() == TIPStatus.COMPLETE) {
+       System.out.println(report.getSuccessfulTaskAttempt());
+     } else if (report.getCurrentStatus() == TIPStatus.RUNNING) {
+-      for (TaskAttemptID t : 
++      for (TaskAttemptID t :
+         report.getRunningTaskAttempts()) {
+         System.out.println(t);
+       }
+@@ -1309,7 +1335,7 @@ private void printTaskAttempts(TaskReport report) {
+   }
+   /**
+    * Get status information about the Map-Reduce cluster.
+-   *  
++   *
+    * @return the status information about the Map-Reduce cluster as an object
+    *         of {@link ClusterStatus}.
+    * @throws IOException
+@@ -1320,7 +1346,7 @@ public ClusterStatus getClusterStatus() throws IOException {
+ 
+   /**
+    * Get status information about the Map-Reduce cluster.
+-   *  
++   *
+    * @param  detailed if true then get a detailed status including the
+    *         tracker names and memory usage of the JobTracker
+    * @return the status information about the Map-Reduce cluster as an object
+@@ -1330,11 +1356,11 @@ public ClusterStatus getClusterStatus() throws IOException {
+   public ClusterStatus getClusterStatus(boolean detailed) throws IOException {
+     return jobSubmitClient.getClusterStatus(detailed);
+   }
+-  
++
+   /**
+-   * Grab the jobtracker's view of the staging directory path where 
++   * Grab the jobtracker's view of the staging directory path where
+    * job-specific files will  be placed.
+-   * 
++   *
+    * @return the staging directory where job-specific files are to be placed.
+    */
+   public Path getStagingAreaDir() throws IOException {
+@@ -1342,11 +1368,11 @@ public Path getStagingAreaDir() throws IOException {
+       stagingAreaDir = new Path(jobSubmitClient.getStagingAreaDir());
+     }
+     return stagingAreaDir;
+-  }    
++  }
+ 
+-  /** 
++  /**
+    * Get the jobs that are not completed and not failed.
+-   * 
++   *
+    * @return array of {@link JobStatus} for the running/to-be-run jobs.
+    * @throws IOException
+    */
+@@ -1356,28 +1382,28 @@ public Path getStagingAreaDir() throws IOException {
+ 
+   private static void downloadProfile(TaskCompletionEvent e
+                                       ) throws IOException  {
+-    URLConnection connection = 
+-      new URL(getTaskLogURL(e.getTaskAttemptId(), e.getTaskTrackerHttp()) + 
++    URLConnection connection =
++      new URL(getTaskLogURL(e.getTaskAttemptId(), e.getTaskTrackerHttp()) +
+               "&filter=profile").openConnection();
+     InputStream in = connection.getInputStream();
+     OutputStream out = new FileOutputStream(e.getTaskAttemptId() + ".profile");
+     IOUtils.copyBytes(in, out, 64 * 1024, true);
+   }
+ 
+-  /** 
++  /**
+    * Get the jobs that are submitted.
+-   * 
++   *
+    * @return array of {@link JobStatus} for the submitted jobs.
+    * @throws IOException
+    */
+   public JobStatus[] getAllJobs() throws IOException {
+     return jobSubmitClient.getAllJobs();
+   }
+-  
+-  /** 
++
++  /**
+    * Utility that submits a job, then polls for progress until the job is
+    * complete.
+-   * 
++   *
+    * @param job the job configuration.
+    * @throws IOException if the job fails
+    */
+@@ -1394,7 +1420,7 @@ public static RunningJob runJob(JobConf job) throws IOException {
+     }
+     return rj;
+   }
+-  
++
+   /**
+    * @return true if the profile parameters indicate that this is using
+    * hprof, which generates profile files in a particular location
+@@ -1436,14 +1462,14 @@ private boolean shouldDownloadProfile(JobConf conf) {
+   }
+ 
+   /**
+-   * Monitor a job and print status in real-time as progress is made and tasks 
++   * Monitor a job and print status in real-time as progress is made and tasks
+    * fail.
+    * @param conf the job's configuration
+    * @param job the job to track
+    * @return true if the job succeeded
+    * @throws IOException if communication to the JobTracker fails
+    */
+-  public boolean monitorAndPrintJob(JobConf conf, 
++  public boolean monitorAndPrintJob(JobConf conf,
+                                     RunningJob job
+   ) throws IOException, InterruptedException {
+     String lastReport = null;
+@@ -1458,17 +1484,17 @@ public boolean monitorAndPrintJob(JobConf conf,
+ 
+     while (!job.isComplete()) {
+       Thread.sleep(this.progMonitorPollIntervalMillis);
+-      String report = 
++      String report =
+         (" map " + StringUtils.formatPercent(job.mapProgress(), 0)+
+-            " reduce " + 
++            " reduce " +
+             StringUtils.formatPercent(job.reduceProgress(), 0));
+       if (!report.equals(lastReport)) {
+         LOG.info(report);
+         lastReport = report;
+       }
+ 
+-      TaskCompletionEvent[] events = 
+-        job.getTaskCompletionEvents(eventCounter); 
++      TaskCompletionEvent[] events =
++        job.getTaskCompletionEvents(eventCounter);
+       eventCounter += events.length;
+       for(TaskCompletionEvent event : events){
+         TaskCompletionEvent.Status status = event.getTaskStatus();
+@@ -1483,20 +1509,20 @@ public boolean monitorAndPrintJob(JobConf conf,
+         case NONE:
+           break;
+         case SUCCEEDED:
+-          if (event.getTaskStatus() == 
++          if (event.getTaskStatus() ==
+             TaskCompletionEvent.Status.SUCCEEDED){
+             LOG.info(event.toString());
+             displayTaskLogs(event.getTaskAttemptId(), event.getTaskTrackerHttp());
+           }
+-          break; 
++          break;
+         case FAILED:
+-          if (event.getTaskStatus() == 
++          if (event.getTaskStatus() ==
+             TaskCompletionEvent.Status.FAILED){
+             LOG.info(event.toString());
+             // Displaying the task diagnostic information
+             TaskAttemptID taskId = event.getTaskAttemptId();
+-            String[] taskDiagnostics = 
+-              jobSubmitClient.getTaskDiagnostics(taskId); 
++            String[] taskDiagnostics =
++              jobSubmitClient.getTaskDiagnostics(taskId);
+             if (taskDiagnostics != null) {
+               for(String diagnostics : taskDiagnostics){
+                 System.err.println(diagnostics);
+@@ -1505,12 +1531,12 @@ public boolean monitorAndPrintJob(JobConf conf,
+             // Displaying the task logs
+             displayTaskLogs(event.getTaskAttemptId(), event.getTaskTrackerHttp());
+           }
+-          break; 
++          break;
+         case KILLED:
+           if (event.getTaskStatus() == TaskCompletionEvent.Status.KILLED){
+             LOG.info(event.toString());
+           }
+-          break; 
++          break;
+         case ALL:
+           LOG.info(event.toString());
+           displayTaskLogs(event.getTaskAttemptId(), event.getTaskTrackerHttp());
+@@ -1527,33 +1553,33 @@ public boolean monitorAndPrintJob(JobConf conf,
+   }
+ 
+   static String getTaskLogURL(TaskAttemptID taskId, String baseUrl) {
+-    return (baseUrl + "/tasklog?plaintext=true&attemptid=" + taskId); 
++    return (baseUrl + "/tasklog?plaintext=true&attemptid=" + taskId);
+   }
+-  
++
+   private static void displayTaskLogs(TaskAttemptID taskId, String baseUrl)
+     throws IOException {
+     // The tasktracker for a 'failed/killed' job might not be around...
+     if (baseUrl != null) {
+       // Construct the url for the tasklogs
+       String taskLogUrl = getTaskLogURL(taskId, baseUrl);
+-      
++
+       // Copy tasks's stdout of the JobClient
+       getTaskLogs(taskId, new URL(taskLogUrl+"&filter=stdout"), System.out);
+-        
+-      // Copy task's stderr to stderr of the JobClient 
++
++      // Copy task's stderr to stderr of the JobClient
+       getTaskLogs(taskId, new URL(taskLogUrl+"&filter=stderr"), System.err);
+     }
+   }
+-    
+-  private static void getTaskLogs(TaskAttemptID taskId, URL taskLogUrl, 
++
++  private static void getTaskLogs(TaskAttemptID taskId, URL taskLogUrl,
+                                   OutputStream out) {
+     try {
+       URLConnection connection = taskLogUrl.openConnection();
+       connection.setReadTimeout(tasklogtimeout);
+       connection.setConnectTimeout(tasklogtimeout);
+-      BufferedReader input = 
++      BufferedReader input =
+         new BufferedReader(new InputStreamReader(connection.getInputStream()));
+-      BufferedWriter output = 
++      BufferedWriter output =
+         new BufferedWriter(new OutputStreamWriter(out));
+       try {
+         String logData = null;
+@@ -1567,14 +1593,14 @@ private static void getTaskLogs(TaskAttemptID taskId, URL taskLogUrl,
+         input.close();
+       }
+     }catch(IOException ioe){
+-      LOG.warn("Error reading task output" + ioe.getMessage()); 
++      LOG.warn("Error reading task output" + ioe.getMessage());
+     }
+-  }    
++  }
+ 
+   static Configuration getConfiguration(String jobTrackerSpec)
+   {
+     Configuration conf = new Configuration();
+-    if (jobTrackerSpec != null) {        
++    if (jobTrackerSpec != null) {
+       if (jobTrackerSpec.indexOf(":") >= 0) {
+         conf.set("mapred.job.tracker", jobTrackerSpec);
+       } else {
+@@ -1591,43 +1617,43 @@ static Configuration getConfiguration(String jobTrackerSpec)
+ 
+   /**
+    * Sets the output filter for tasks. only those tasks are printed whose
+-   * output matches the filter. 
++   * output matches the filter.
+    * @param newValue task filter.
+    */
+   @Deprecated
+   public void setTaskOutputFilter(TaskStatusFilter newValue){
+     this.taskOutputFilter = newValue;
+   }
+-    
++
+   /**
+    * Get the task output filter out of the JobConf.
+-   * 
++   *
+    * @param job the JobConf to examine.
+    * @return the filter level.
+    */
+   public static TaskStatusFilter getTaskOutputFilter(JobConf job) {
+-    return TaskStatusFilter.valueOf(job.get("jobclient.output.filter", 
++    return TaskStatusFilter.valueOf(job.get("jobclient.output.filter",
+                                             "FAILED"));
+   }
+-    
++
+   /**
+    * Modify the JobConf to set the task output filter.
+-   * 
++   *
+    * @param job the JobConf to modify.
+    * @param newValue the value to set.
+    */
+-  public static void setTaskOutputFilter(JobConf job, 
++  public static void setTaskOutputFilter(JobConf job,
+                                          TaskStatusFilter newValue) {
+     job.set("jobclient.output.filter", newValue.toString());
+   }
+-    
++
+   /**
+    * Returns task output filter.
+-   * @return task filter. 
++   * @return task filter.
+    */
+   @Deprecated
+   public TaskStatusFilter getTaskOutputFilter(){
+-    return this.taskOutputFilter; 
++    return this.taskOutputFilter;
+   }
+ 
+   private String getJobPriorityNames() {
+@@ -1637,7 +1663,7 @@ private String getJobPriorityNames() {
+     }
+     return sb.substring(0, sb.length()-1);
+   }
+-  
++
+   /**
+    * Display usage of the command-line tool and terminate execution
+    */
+@@ -1662,14 +1688,14 @@ private void displayUsage(String cmd) {
+       System.err.println(prefix + "[" + cmd + " <task-id>]");
+     } else if ("-set-priority".equals(cmd)) {
+       System.err.println(prefix + "[" + cmd + " <job-id> <priority>]. " +
+-          "Valid values for priorities are: " 
+-          + jobPriorityValues); 
++          "Valid values for priorities are: "
++          + jobPriorityValues);
+     } else if ("-list-active-trackers".equals(cmd)) {
+       System.err.println(prefix + "[" + cmd + "]");
+     } else if ("-list-blacklisted-trackers".equals(cmd)) {
+       System.err.println(prefix + "[" + cmd + "]");
+     } else if ("-list-attempt-ids".equals(cmd)) {
+-      System.err.println(prefix + "[" + cmd + 
++      System.err.println(prefix + "[" + cmd +
+           " <job-id> <task-type> <task-state>]. " +
+           "Valid values for <task-type> are " + taskTypes + ". " +
+           "Valid values for <task-state> are " + taskStates);
+@@ -1694,13 +1720,13 @@ private void displayUsage(String cmd) {
+       ToolRunner.printGenericCommandUsage(System.out);
+     }
+   }
+-    
++
+   public int run(String[] argv) throws Exception {
+     int exitCode = -1;
+     if (argv.length < 1) {
+       displayUsage("");
+       return exitCode;
+-    }    
++    }
+     // process arguments
+     String cmd = argv[0];
+     String submitJobFile = null;
+@@ -1766,12 +1792,12 @@ public int run(String[] argv) throws Exception {
+       jobid = argv[1];
+       newPriority = argv[2];
+       try {
+-        JobPriority jp = JobPriority.valueOf(newPriority); 
++        JobPriority jp = JobPriority.valueOf(newPriority);
+       } catch (IllegalArgumentException iae) {
+         displayUsage(cmd);
+         return exitCode;
+       }
+-      setJobPriority = true; 
++      setJobPriority = true;
+     } else if ("-events".equals(cmd)) {
+       if (argv.length != 4) {
+         displayUsage(cmd);
+@@ -1851,7 +1877,7 @@ public int run(String[] argv) throws Exception {
+       conf = new JobConf(getConf());
+     }
+     init(conf);
+-        
++
+     // Submit the request
+     try {
+       if (submitJobFile != null) {
+@@ -1880,7 +1906,7 @@ public int run(String[] argv) throws Exception {
+         } else {
+           Counters counters = job.getCounters();
+           if (counters == null) {
+-            System.out.println("Counters not available for retired job " + 
++            System.out.println("Counters not available for retired job " +
+                 jobid);
+             exitCode = -1;
+           } else {
+@@ -1907,7 +1933,7 @@ public int run(String[] argv) throws Exception {
+           job.setJobPriority(newPriority);
+           System.out.println("Changed job priority.");
+           exitCode = 0;
+-        } 
++        }
+       } else if (viewHistory) {
+         viewHistory(outputDir, viewAllHistory);
+         exitCode = 0;
+@@ -1958,13 +1984,13 @@ public int run(String[] argv) throws Exception {
+     return exitCode;
+   }
+ 
+-  private void viewHistory(String outputDir, boolean all) 
++  private void viewHistory(String outputDir, boolean all)
+     throws IOException {
+     HistoryViewer historyViewer = new HistoryViewer(outputDir,
+                                         getConf(), all);
+     historyViewer.print();
+   }
+-  
++
+   /**
+    * List the events for the given job
+    * @param jobId the job id for the job's events to list
+@@ -1972,14 +1998,14 @@ private void viewHistory(String outputDir, boolean all)
+    */
+   private void listEvents(JobID jobId, int fromEventId, int numEvents)
+     throws IOException {
+-    TaskCompletionEvent[] events = 
++    TaskCompletionEvent[] events =
+       jobSubmitClient.getTaskCompletionEvents(jobId, fromEventId, numEvents);
+     System.out.println("Task completion events for " + jobId);
+-    System.out.println("Number of events (from " + fromEventId + 
++    System.out.println("Number of events (from " + fromEventId +
+                        ") are: " + events.length);
+     for(TaskCompletionEvent event: events) {
+-      System.out.println(event.getTaskStatus() + " " + event.getTaskAttemptId() + " " + 
+-                         getTaskLogURL(event.getTaskAttemptId(), 
++      System.out.println(event.getTaskStatus() + " " + event.getTaskAttemptId() + " " +
++                         getTaskLogURL(event.getTaskAttemptId(),
+                                        event.getTaskTrackerHttp()));
+     }
+   }
+@@ -1996,7 +2022,7 @@ private void listJobs() throws IOException {
+     System.out.printf("%d jobs currently running\n", jobs.length);
+     displayJobList(jobs);
+   }
+-    
++
+   /**
+    * Dump a list of all jobs submitted.
+    * @throws IOException
+@@ -2010,7 +2036,7 @@ private void listAllJobs() throws IOException {
+     "\tFailed : 3\tPrep : 4\n");
+     displayJobList(jobs);
+   }
+-  
++
+   /**
+    * Display the list of active trackers
+    */
+@@ -2037,14 +2063,14 @@ void displayJobList(JobStatus[] jobs) {
+     System.out.printf("JobId\tState\tStartTime\tUserName\tPriority\tSchedulingInfo\n");
+     for (JobStatus job : jobs) {
+       System.out.printf("%s\t%d\t%d\t%s\t%s\t%s\n", job.getJobID(), job.getRunState(),
+-          job.getStartTime(), job.getUsername(), 
++          job.getStartTime(), job.getUsername(),
+           job.getJobPriority().name(), job.getSchedulingInfo());
+     }
+   }
+ 
+   /**
+    * Get status information about the max available Maps in the cluster.
+-   *  
++   *
+    * @return the max available Maps in the cluster
+    * @throws IOException
+    */
+@@ -2054,7 +2080,7 @@ public int getDefaultMaps() throws IOException {
+ 
+   /**
+    * Get status information about the max available Reduces in the cluster.
+-   *  
++   *
+    * @return the max available Reduces in the cluster
+    * @throws IOException
+    */
+@@ -2064,7 +2090,7 @@ public int getDefaultReduces() throws IOException {
+ 
+   /**
+    * Grab the jobtracker system directory path where job-specific files are to be placed.
+-   * 
++   *
+    * @return the system directory where job-specific files are to be placed.
+    */
+   public Path getSystemDir() {
+@@ -2073,34 +2099,34 @@ public Path getSystemDir() {
+     }
+     return sysDir;
+   }
+-  
+-  
++
++
+   /**
+    * Return an array of queue information objects about all the Job Queues
+    * configured.
+-   * 
++   *
+    * @return Array of JobQueueInfo objects
+    * @throws IOException
+    */
+   public JobQueueInfo[] getQueues() throws IOException {
+     return jobSubmitClient.getQueues();
+   }
+-  
++
+   /**
+    * Gets all the jobs which were added to particular Job Queue
+-   * 
++   *
+    * @param queueName name of the Job Queue
+    * @return Array of jobs present in the job queue
+    * @throws IOException
+    */
+-  
++
+   public JobStatus[] getJobsFromQueue(String queueName) throws IOException {
+     return jobSubmitClient.getJobsFromQueue(queueName);
+   }
+-  
++
+   /**
+    * Gets the queue information associated to a particular Job Queue
+-   * 
++   *
+    * @param queueName name of the job queue.
+    * @return Queue information associated to particular queue.
+    * @throws IOException
+@@ -2108,7 +2134,7 @@ public Path getSystemDir() {
+   public JobQueueInfo getQueueInfo(String queueName) throws IOException {
+     return jobSubmitClient.getQueueInfo(queueName);
+   }
+-  
++
+   /**
+    * Gets the Queue ACLs for current user
+    * @return array of QueueAclsInfo object for current user.
+@@ -2122,7 +2148,7 @@ public JobQueueInfo getQueueInfo(String queueName) throws IOException {
+    * @return the new token
+    * @throws IOException
+    */
+-  public Token<DelegationTokenIdentifier> 
++  public Token<DelegationTokenIdentifier>
+     getDelegationToken(Text renewer) throws IOException, InterruptedException {
+     Token<DelegationTokenIdentifier> result =
+       jobSubmitClient.getDelegationToken(renewer);
+@@ -2136,7 +2162,7 @@ public JobQueueInfo getQueueInfo(String queueName) throws IOException {
+       service.append(addr.getPort());
+       result.setService(new Text(service.toString()));
+     } else {
+-      result.setService(HAUtil.buildTokenServiceForLogicalAddress(jtAddress));      
++      result.setService(HAUtil.buildTokenServiceForLogicalAddress(jtAddress));
+     }
+     return result;
+   }
+@@ -2164,7 +2190,7 @@ public long renewDelegationToken(Token<DelegationTokenIdentifier> token)
+    * @throws IOException
+    */
+   public void cancelDelegationToken(Token<DelegationTokenIdentifier> token
+-                                    ) throws IOException, 
++                                    ) throws IOException,
+                                              InterruptedException {
+     try {
+       jobSubmitClient.cancelDelegationToken(token);
+@@ -2173,14 +2199,14 @@ public void cancelDelegationToken(Token<DelegationTokenIdentifier> token
+                                      AccessControlException.class);
+     }
+   }
+- 
++
+   /**
+    */
+   public static void main(String argv[]) throws Exception {
+     int res = ToolRunner.run(new JobClient(), argv);
+     System.exit(res);
+   }
+-  
++
+   @SuppressWarnings("unchecked")
+   private void readTokensFromFiles(Configuration conf, Credentials credentials
+                                    ) throws IOException {
+@@ -2188,8 +2214,8 @@ private void readTokensFromFiles(Configuration conf, Credentials credentials
+     String binaryTokenFilename =
+       conf.get("mapreduce.job.credentials.binary");
+     if (binaryTokenFilename != null) {
+-      Credentials binary = 
+-        Credentials.readTokenStorageFile(new Path("file:///" +  
++      Credentials binary =
++        Credentials.readTokenStorageFile(new Path("file:///" +
+                                                   binaryTokenFilename), conf);
+       credentials.addAll(binary);
+     }
+@@ -2203,11 +2229,11 @@ private void readTokensFromFiles(Configuration conf, Credentials credentials
+       try {
+         // read JSON
+         ObjectMapper mapper = new ObjectMapper();
+-        Map<String, String> nm = 
++        Map<String, String> nm =
+           mapper.readValue(new File(localFileName), Map.class);
+ 
+         for(Map.Entry<String, String> ent: nm.entrySet()) {
+-          credentials.addSecretKey(new Text(ent.getKey()), 
++          credentials.addSecretKey(new Text(ent.getKey()),
+                                    ent.getValue().getBytes());
+         }
+       } catch (JsonMappingException e) {
+@@ -2222,13 +2248,13 @@ private void readTokensFromFiles(Configuration conf, Credentials credentials
+ 
+   //get secret keys and tokens and store them into TokenCache
+   @SuppressWarnings("unchecked")
+-  private void populateTokenCache(Configuration conf, Credentials credentials) 
++  private void populateTokenCache(Configuration conf, Credentials credentials)
+   throws IOException{
+     readTokensFromFiles(conf, credentials);
+- 
++
+     // add the delegation tokens from configuration
+     String [] nameNodes = conf.getStrings(JobContext.JOB_NAMENODES);
+-    LOG.debug("adding the following namenodes' delegation tokens:" + 
++    LOG.debug("adding the following namenodes' delegation tokens:" +
+               Arrays.toString(nameNodes));
+     if(nameNodes != null) {
+       Path [] ps = new Path[nameNodes.length];
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java
+index 9ac1e03..56b8731 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerProxies.java
+@@ -136,10 +136,10 @@ private static JobSubmissionProtocol createJTProxyWithJobSubmissionProtocol(
+     RPC.setProtocolEngine(conf, JobSubmissionProtocol.class, WritableRpcEngine.class);
+ 
+     final long version = RPC.getProtocolVersion(JobSubmissionProtocol.class);
+-    
++    int rpcTimeout = JobClient.getRpcTimeout(conf);
+     RPC.getProxy(JobSubmissionProtocol.class, version, address, ugi, conf,
+-        NetUtils.getDefaultSocketFactory(conf), 0);
+-    
++        NetUtils.getDefaultSocketFactory(conf), rpcTimeout);
++
+     JobSubmissionProtocol proxy = RPC.getProtocolProxy(
+         JobSubmissionProtocol.class, version, address, ugi, conf,
+         NetUtils.getDefaultSocketFactory(conf), 0, null).getProxy();
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/conf/TestJobConf.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/conf/TestJobConf.java
+index e2fce92..80a1895 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/conf/TestJobConf.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/conf/TestJobConf.java
+@@ -17,10 +17,18 @@
+  */
+ package org.apache.hadoop.conf;
+ 
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.fail;
++
++import java.io.IOException;
++import java.net.SocketTimeoutException;
++
+ import junit.framework.Assert;
+ import junit.framework.TestCase;
+ 
++import org.apache.hadoop.mapred.JobClient;
+ import org.apache.hadoop.mapred.JobConf;
++import org.junit.Test;
+ 
+ public class TestJobConf extends TestCase {
+ 
+@@ -86,7 +94,7 @@ public void testMemoryConfigForMapOrReduceTask(){
+     configuration.set("mapred.job.map.memory.mb","-1");
+     configuration.set("mapred.job.reduce.memory.mb","-1");
+     Assert.assertEquals(configuration.getMemoryForMapTask(),-1);
+-    Assert.assertEquals(configuration.getMemoryForReduceTask(),-1);    
++    Assert.assertEquals(configuration.getMemoryForReduceTask(),-1);
+ 
+     configuration = new JobConf();
+     configuration.set("mapred.task.maxvmem" , String.valueOf(2*1024 * 1024));
+@@ -95,35 +103,35 @@ public void testMemoryConfigForMapOrReduceTask(){
+     Assert.assertEquals(configuration.getMemoryForMapTask(),2);
+     Assert.assertEquals(configuration.getMemoryForReduceTask(),2);
+   }
+-  
++
+   /**
+    * Test that negative values for MAPRED_TASK_MAXVMEM_PROPERTY cause
+    * new configuration keys' values to be used.
+    */
+-  
++
+   public void testNegativeValueForTaskVmem() {
+     JobConf configuration = new JobConf();
+-    
++
+     configuration.set(JobConf.MAPRED_TASK_MAXVMEM_PROPERTY, "-3");
+     configuration.set("mapred.job.map.memory.mb", "4");
+     configuration.set("mapred.job.reduce.memory.mb", "5");
+     Assert.assertEquals(4, configuration.getMemoryForMapTask());
+     Assert.assertEquals(5, configuration.getMemoryForReduceTask());
+-    
++
+   }
+-  
++
+   /**
+    * Test that negative values for all memory configuration properties causes
+    * APIs to disable memory limits
+    */
+-  
++
+   public void testNegativeValuesForMemoryParams() {
+     JobConf configuration = new JobConf();
+-    
++
+     configuration.set(JobConf.MAPRED_TASK_MAXVMEM_PROPERTY, "-4");
+     configuration.set("mapred.job.map.memory.mb", "-5");
+     configuration.set("mapred.job.reduce.memory.mb", "-6");
+-    
++
+     Assert.assertEquals(JobConf.DISABLED_MEMORY_LIMIT,
+                         configuration.getMemoryForMapTask());
+     Assert.assertEquals(JobConf.DISABLED_MEMORY_LIMIT,
+@@ -169,11 +177,23 @@ public void testMaxVirtualMemoryForTask() {
+     Assert.assertEquals(configuration.getMemoryForMapTask(), 2);
+     Assert.assertEquals(configuration.getMemoryForReduceTask(), 2);
+ 
+-    configuration = new JobConf();   
++    configuration = new JobConf();
+     configuration.set("mapred.job.map.memory.mb", String.valueOf(300));
+     configuration.set("mapred.job.reduce.memory.mb", String.valueOf(400));
+     configuration.setMaxVirtualMemoryForTask(2 * 1024 * 1024);
+     Assert.assertEquals(configuration.getMemoryForMapTask(), 2);
+     Assert.assertEquals(configuration.getMemoryForReduceTask(), 2);
+   }
++
++  @Test
++  public void testGetRpcTimeout() throws IOException {
++    JobConf conf = new JobConf();
++    assertEquals("-1", conf.get(JobClient.MAPREDUCE_CLIENT_RPC_TIMEOUT_KEY));
++    assertEquals(JobClient.MAPREDUCE_CLIENT_RPC_TIMEOUT_DEFAULT,
++        JobClient.getRpcTimeout(conf));
++    conf.set(JobClient.MAPREDUCE_CLIENT_RPC_TIMEOUT_KEY, "0");
++    assertEquals(0, JobClient.getRpcTimeout(conf));
++    conf.set(JobClient.MAPREDUCE_CLIENT_RPC_TIMEOUT_KEY, "-500");
++    assertEquals(-500, JobClient.getRpcTimeout(conf));
++  }
+ }
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestRpcTimeout.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestRpcTimeout.java
+new file mode 100644
+index 0000000..f98797d
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestRpcTimeout.java
+@@ -0,0 +1,97 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.mapred;
++
++import static org.junit.Assert.fail;
++
++import java.io.IOException;
++import java.net.SocketTimeoutException;
++
++import org.junit.After;
++import org.junit.Before;
++import org.junit.Test;
++
++public class TestRpcTimeout {
++  private static String[] trackers = new String[] { "tracker_tracker1:1000",
++    "tracker_tracker2:1000", "tracker_tracker3:1000" };
++  private JobTracker jobTracker;
++  private MiniMRCluster mr;
++
++  @Before
++  public void setUp() throws Exception {
++    JobConf conf = new JobConf();
++    conf.setClass("mapred.jobtracker.taskScheduler",
++        TestClusterStatus.FakeTaskScheduler.class,
++        TaskScheduler.class);
++    mr = new MiniMRCluster(0, 0, 0, "file:///", 1, null, null, null, conf);
++    jobTracker = mr.getJobTrackerRunner().getJobTracker();
++    for (String tracker : trackers) {
++      establishFirstContact(jobTracker, tracker);
++    }
++  }
++
++  @After
++  public void tearDown() throws Exception {
++    mr.shutdown();
++    mr = null;
++    jobTracker = null;
++  }
++
++  static short sendHeartBeat(JobTracker jt, TaskTrackerStatus status,
++      boolean initialContact, boolean acceptNewTasks,
++      String tracker, short responseId)
++      throws IOException {
++    if (status == null) {
++      status = new TaskTrackerStatus(tracker,
++      JobInProgress.convertTrackerNameToHostName(tracker));
++    }
++    jt.heartbeat(status, false, initialContact, acceptNewTasks, responseId);
++    return ++responseId ;
++  }
++
++  static void establishFirstContact(JobTracker jt, String tracker)
++      throws IOException {
++    sendHeartBeat(jt, null, true, false, tracker, (short) 0);
++  }
++
++  @Test
++  public void testRpcTimeout() throws IOException {
++    JobConf conf = mr.createJobConf();
++    // Set a very short rpc timeout, and make sure we get a socket timeout
++    // exception.
++    conf.set(JobClient.MAPREDUCE_CLIENT_RPC_TIMEOUT_KEY, "1");
++    JobClient clientWithTimeout = new JobClient(conf);
++    try {
++      for (Thread thread : Thread.getAllStackTraces().keySet()) {
++        if (thread.getName().contains("IPC Server")) {
++          thread.suspend();
++        }
++      }
++      clientWithTimeout.getClusterStatus();
++      fail();
++    } catch (SocketTimeoutException ex) {
++      // This is expected.
++    } finally {
++      for (Thread thread : Thread.getAllStackTraces().keySet()) {
++        if (thread.getName().contains("IPC Server")) {
++          thread.resume();
++        }
++      }
++    }
++  }
++}
+-- 
+1.7.9.5
+

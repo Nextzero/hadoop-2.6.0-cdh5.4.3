@@ -1,0 +1,82 @@
+From 75eda22a3ad8d9be02b1b639496a18febd35141c Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Tue, 28 Apr 2015 14:05:26 -0700
+Subject: [PATCH 551/596] MAPREDUCE-6343. JobConf.parseMaximumHeapSizeMB()
+ fails to parse value greater than 2GB expressed in
+ bytes. (Hao Xia via kasha) (cherry picked from
+ commit 519092322dd1bf71984bef1393d8e082643408cd)
+
+Conflicts:
+	hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestJobConf.java
+(cherry picked from commit a9543b1102393b55d9e52b97567df70a1b14c266)
+---
+ .../java/org/apache/hadoop/mapred/JobConf.java     |   10 +++++-----
+ .../java/org/apache/hadoop/mapred/TestJobConf.java |   16 ++++++++++++++++
+ 2 files changed, 21 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JobConf.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JobConf.java
+index b7416e9..2fcf7aa6 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JobConf.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JobConf.java
+@@ -2102,28 +2102,28 @@ public static int parseMaximumHeapSizeMB(String javaOpts) {
+     // Find the last matching -Xmx following word boundaries
+     Matcher m = JAVA_OPTS_XMX_PATTERN.matcher(javaOpts);
+     if (m.matches()) {
+-      int size = Integer.parseInt(m.group(1));
++      long size = Long.parseLong(m.group(1));
+       if (size <= 0) {
+         return -1;
+       }
+       if (m.group(2).isEmpty()) {
+         // -Xmx specified in bytes
+-        return size / (1024 * 1024);
++        return (int) (size / (1024 * 1024));
+       }
+       char unit = m.group(2).charAt(0);
+       switch (unit) {
+         case 'g':
+         case 'G':
+           // -Xmx specified in GB
+-          return size * 1024;
++          return (int) (size * 1024);
+         case 'm':
+         case 'M':
+           // -Xmx specified in MB
+-          return size;
++          return (int) size;
+         case 'k':
+         case 'K':
+           // -Xmx specified in KB
+-          return size / 1024;
++          return (int) (size / 1024);
+       }
+     }
+     // -Xmx not specified
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestJobConf.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestJobConf.java
+index 3d924e1..ba45475 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestJobConf.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestJobConf.java
+@@ -188,4 +188,20 @@ public void testDeprecatedPropertyNameForTaskVmem() {
+     Assert.assertEquals(2048, configuration.getLong(
+         JobConf.MAPREDUCE_JOB_REDUCE_MEMORY_MB_PROPERTY, -1));
+   }
++
++  /**
++   * Test parsing various types of Java heap options.
++   */
++  @Test
++  public void testParseMaximumHeapSizeMB() {
++    // happy cases
++    Assert.assertEquals(4096, JobConf.parseMaximumHeapSizeMB("-Xmx4294967296"));
++    Assert.assertEquals(4096, JobConf.parseMaximumHeapSizeMB("-Xmx4194304k"));
++    Assert.assertEquals(4096, JobConf.parseMaximumHeapSizeMB("-Xmx4096m"));
++    Assert.assertEquals(4096, JobConf.parseMaximumHeapSizeMB("-Xmx4g"));
++
++    // sad cases
++    Assert.assertEquals(-1, JobConf.parseMaximumHeapSizeMB("-Xmx4?"));
++    Assert.assertEquals(-1, JobConf.parseMaximumHeapSizeMB(""));
++  }
+ }
+-- 
+1.7.9.5
+

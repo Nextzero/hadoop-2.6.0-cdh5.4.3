@@ -1,0 +1,151 @@
+From 58dfeab4db47dabac7f8f9db6981975819d53306 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Fri, 5 Dec 2014 18:20:19 -0800
+Subject: [PATCH 285/596] HADOOP-11343. Overflow is not properly handled in
+ caclulating final iv for AES CTR. Contributed by
+ Jerry Chen.
+
+(cherry picked from commit 0707e4eca906552c960e3b8c4e20d9913145eca6)
+(cherry picked from commit dabdd2d746d1e1194c124c5c7fe73fcc025e78d2)
+(cherry picked from commit 68ee5b52789967d69fa73b20af0541c09d8d1dd9)
+---
+ .../apache/hadoop/crypto/AesCtrCryptoCodec.java    |   27 ++++-----
+ .../org/apache/hadoop/crypto/TestCryptoCodec.java  |   64 ++++++++++++++++++++
+ 2 files changed, 76 insertions(+), 15 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/AesCtrCryptoCodec.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/AesCtrCryptoCodec.java
+index 8f8bc66..5e286b9 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/AesCtrCryptoCodec.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/AesCtrCryptoCodec.java
+@@ -33,7 +33,6 @@
+    * @see http://en.wikipedia.org/wiki/Advanced_Encryption_Standard
+    */
+   private static final int AES_BLOCK_SIZE = SUITE.getAlgorithmBlockSize();
+-  private static final int CTR_OFFSET = 8;
+ 
+   @Override
+   public CipherSuite getCipherSuite() {
+@@ -48,20 +47,18 @@ public CipherSuite getCipherSuite() {
+   public void calculateIV(byte[] initIV, long counter, byte[] IV) {
+     Preconditions.checkArgument(initIV.length == AES_BLOCK_SIZE);
+     Preconditions.checkArgument(IV.length == AES_BLOCK_SIZE);
+-    
+-    System.arraycopy(initIV, 0, IV, 0, CTR_OFFSET);
+-    long l = 0;
+-    for (int i = 0; i < 8; i++) {
+-      l = ((l << 8) | (initIV[CTR_OFFSET + i] & 0xff));
++
++    int i = IV.length; // IV length
++    int j = 0; // counter bytes index
++    int sum = 0;
++    while (i-- > 0) {
++      // (sum >>> Byte.SIZE) is the carry for addition
++      sum = (initIV[i] & 0xff) + (sum >>> Byte.SIZE);
++      if (j++ < 8) { // Big-endian, and long is 8 bytes length
++        sum += (byte) counter & 0xff;
++        counter >>>= 8;
++      }
++      IV[i] = (byte) sum;
+     }
+-    l += counter;
+-    IV[CTR_OFFSET + 0] = (byte) (l >>> 56);
+-    IV[CTR_OFFSET + 1] = (byte) (l >>> 48);
+-    IV[CTR_OFFSET + 2] = (byte) (l >>> 40);
+-    IV[CTR_OFFSET + 3] = (byte) (l >>> 32);
+-    IV[CTR_OFFSET + 4] = (byte) (l >>> 24);
+-    IV[CTR_OFFSET + 5] = (byte) (l >>> 16);
+-    IV[CTR_OFFSET + 6] = (byte) (l >>> 8);
+-    IV[CTR_OFFSET + 7] = (byte) (l);
+   }
+ }
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/crypto/TestCryptoCodec.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/crypto/TestCryptoCodec.java
+index 79987ce..08231f9 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/crypto/TestCryptoCodec.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/crypto/TestCryptoCodec.java
+@@ -23,7 +23,9 @@
+ import java.io.BufferedInputStream;
+ import java.io.DataInputStream;
+ import java.io.IOException;
++import java.math.BigInteger;
+ import java.security.GeneralSecurityException;
++import java.security.SecureRandom;
+ import java.util.Arrays;
+ import java.util.HashMap;
+ import java.util.Map;
+@@ -41,6 +43,8 @@
+ import org.junit.Assume;
+ import org.junit.Test;
+ 
++import com.google.common.primitives.Longs;
++
+ public class TestCryptoCodec {
+   private static final Log LOG= LogFactory.getLog(TestCryptoCodec.class);
+   private static final byte[] key = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 
+@@ -230,4 +234,64 @@ private void checkSecureRandom(CryptoCodec codec, int len) {
+     Assert.assertEquals(len, rand1.length);
+     Assert.assertFalse(Arrays.equals(rand, rand1));
+   }
++  
++  /**
++   * Regression test for IV calculation, see HADOOP-11343
++   */
++  @Test(timeout=120000)
++  public void testCalculateIV() throws Exception {
++    JceAesCtrCryptoCodec codec = new JceAesCtrCryptoCodec();
++    codec.setConf(conf);
++
++    SecureRandom sr = new SecureRandom();
++    byte[] initIV = new byte[16];
++    byte[] IV = new byte[16];
++
++    long iterations = 1000;
++    long counter = 10000;
++
++    // Overflow test, IV: 00 00 00 00 00 00 00 00 ff ff ff ff ff ff ff ff 
++    for(int i = 0; i < 8; i++) {
++      initIV[8 + i] = (byte)0xff;
++    }
++
++    for(long j = 0; j < counter; j++) {
++      assertIVCalculation(codec, initIV, j, IV);
++    }
++
++    // Random IV and counter sequence test
++    for(long i = 0; i < iterations; i++) {
++      sr.nextBytes(initIV);
++
++      for(long j = 0; j < counter; j++) {
++        assertIVCalculation(codec, initIV, j, IV);
++      }
++    }
++
++    // Random IV and random counter test
++    for(long i = 0; i < iterations; i++) {
++      sr.nextBytes(initIV);
++
++      for(long j = 0; j < counter; j++) {
++        long c = sr.nextLong();
++        assertIVCalculation(codec, initIV, c, IV);
++      }
++    }
++  }
++
++  private void assertIVCalculation(CryptoCodec codec, byte[] initIV,
++      long counter, byte[] IV) {
++    codec.calculateIV(initIV, counter, IV);
++
++    BigInteger iv = new BigInteger(1, IV);
++    BigInteger ref = calculateRef(initIV, counter);
++
++    assertTrue("Calculated IV don't match with the reference", iv.equals(ref));
++  }
++
++  private static BigInteger calculateRef(byte[] initIV, long counter) {
++    byte[] cb = Longs.toByteArray(counter);
++    BigInteger bi = new BigInteger(1, initIV);
++    return bi.add(new BigInteger(1, cb));
++  }
+ }
+-- 
+1.7.9.5
+

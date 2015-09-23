@@ -1,0 +1,33 @@
+From 77776101dd338e5ec015d5f043d1e9c1239a070a Mon Sep 17 00:00:00 2001
+From: Sean Mackrory <sean@cloudera.com>
+Date: Thu, 24 Jan 2013 13:55:29 -0800
+Subject: [PATCH 015/596] MR1: CDH-9274: Oro was removed from Ivy
+ dependencies, removing it from Maven to prevent
+ broken symlinks in packaging (cherry picked from
+ commit c3f64c6260aea1d271a975d012d11ce18a1e360c)
+
+(cherry picked from commit d1181393917250bbd7e0693bb7f0c513332cb710)
+(cherry picked from commit 96769bf5050d0cfce571f246b6148c35c98d8c8b)
+(cherry picked from commit 7a185f39d4eefa54f0f8f54a8d439484f3b2f5e3)
+---
+ .../cloudera/maven-packaging/hadoop-core/pom.xml   |    4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-core/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-core/pom.xml
+index d4d886f..9748b9f 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-core/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-core/pom.xml
+@@ -123,10 +123,6 @@
+       <artifactId>hsqldb</artifactId>
+     </dependency>
+     <dependency>
+-      <groupId>oro</groupId>
+-      <artifactId>oro</artifactId>
+-    </dependency>
+-    <dependency>
+       <groupId>org.eclipse.jdt</groupId>
+       <artifactId>core</artifactId>
+     </dependency>
+-- 
+1.7.9.5
+

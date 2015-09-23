@@ -1,0 +1,173 @@
+From b6a7dd47935373ef6079c84f1801274a85910554 Mon Sep 17 00:00:00 2001
+From: Benoy Antony <benoy@apache.org>
+Date: Mon, 5 Jan 2015 15:06:46 -0800
+Subject: [PATCH 567/596] HADOOP-11402. Negative user-to-group cache entries
+ are never cleared for never-again-accessed users.
+ Contributed by Varun Saxena.
+
+(cherry picked from commit 53caeaa16b1450b54e994c77f5d0c8a767b88d57)
+(cherry picked from commit 0c2d996c2ce2f3e1c959a04f15bb6fb0ba9c4b1f)
+---
+ .../java/org/apache/hadoop/security/Groups.java    |   36 +++++++++------
+ .../apache/hadoop/security/TestGroupsCaching.java  |   48 ++++++++++++++++++++
+ 2 files changed, 71 insertions(+), 13 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/Groups.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/Groups.java
+index f3c5094..9fd39b0 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/Groups.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/Groups.java
+@@ -23,12 +23,14 @@
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
+-import java.util.concurrent.ConcurrentHashMap;
++import java.util.Set;
+ import java.util.concurrent.ExecutionException;
+ import java.util.concurrent.TimeUnit;
+ 
++import com.google.common.annotations.VisibleForTesting;
+ import com.google.common.base.Ticker;
+ import com.google.common.cache.CacheBuilder;
++import com.google.common.cache.Cache;
+ import com.google.common.cache.CacheLoader;
+ import com.google.common.cache.LoadingCache;
+ import org.apache.hadoop.HadoopIllegalArgumentException;
+@@ -60,14 +62,13 @@
+   private final GroupMappingServiceProvider impl;
+ 
+   private final LoadingCache<String, List<String>> cache;
+-  private final ConcurrentHashMap<String, Long> negativeCacheMask =
+-    new ConcurrentHashMap<String, Long>();
+   private final Map<String, List<String>> staticUserToGroupsMap =
+       new HashMap<String, List<String>>();
+   private final long cacheTimeout;
+   private final long negativeCacheTimeout;
+   private final long warningDeltaMs;
+   private final Timer timer;
++  private Set<String> negativeCache;
+ 
+   public Groups(Configuration conf) {
+     this(conf, new Timer());
+@@ -99,11 +100,24 @@ public Groups(Configuration conf, final Timer timer) {
+       .expireAfterWrite(10 * cacheTimeout, TimeUnit.MILLISECONDS)
+       .build(new GroupCacheLoader());
+ 
++    if(negativeCacheTimeout > 0) {
++      Cache<String, Boolean> tempMap = CacheBuilder.newBuilder()
++        .expireAfterWrite(negativeCacheTimeout, TimeUnit.MILLISECONDS)
++        .ticker(new TimerToTickerAdapter(timer))
++        .build();
++      negativeCache = Collections.newSetFromMap(tempMap.asMap());
++    }
++
+     if(LOG.isDebugEnabled())
+       LOG.debug("Group mapping impl=" + impl.getClass().getName() + 
+           "; cacheTimeout=" + cacheTimeout + "; warningDeltaMs=" +
+           warningDeltaMs);
+   }
++  
++  @VisibleForTesting
++  Set<String> getNegativeCache() {
++    return negativeCache;
++  }
+ 
+   /*
+    * Parse the hadoop.user.group.static.mapping.overrides configuration to
+@@ -159,13 +173,8 @@ private IOException noGroupsForUser(String user) {
+ 
+     // Check the negative cache first
+     if (isNegativeCacheEnabled()) {
+-      Long expirationTime = negativeCacheMask.get(user);
+-      if (expirationTime != null) {
+-        if (timer.monotonicNow() < expirationTime) {
+-          throw noGroupsForUser(user);
+-        } else {
+-          negativeCacheMask.remove(user, expirationTime);
+-        }
++      if (negativeCache.contains(user)) {
++        throw noGroupsForUser(user);
+       }
+     }
+ 
+@@ -212,8 +221,7 @@ public long read() {
+ 
+       if (groups.isEmpty()) {
+         if (isNegativeCacheEnabled()) {
+-          long expirationTime = timer.monotonicNow() + negativeCacheTimeout;
+-          negativeCacheMask.put(user, expirationTime);
++          negativeCache.add(user);
+         }
+ 
+         // We throw here to prevent Cache from retaining an empty group
+@@ -252,7 +260,9 @@ public void refresh() {
+       LOG.warn("Error refreshing groups cache", e);
+     }
+     cache.invalidateAll();
+-    negativeCacheMask.clear();
++    if(isNegativeCacheEnabled()) {
++      negativeCache.clear();
++    }
+   }
+ 
+   /**
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestGroupsCaching.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestGroupsCaching.java
+index 89e5b2d..3686694 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestGroupsCaching.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/security/TestGroupsCaching.java
+@@ -454,5 +454,53 @@ public void testNegativeCacheClearedOnRefresh() throws Exception {
+     }
+ 
+     assertEquals(startingRequestCount + 1, FakeGroupMapping.getRequestCount());
++  }  
++
++  @Test
++  public void testNegativeCacheEntriesExpire() throws Exception {
++    conf.setLong(
++       CommonConfigurationKeys.HADOOP_SECURITY_GROUPS_NEGATIVE_CACHE_SECS, 2);
++    FakeTimer timer = new FakeTimer();
++    // Ensure that stale entries are removed from negative cache every 2 seconds
++    Groups groups = new Groups(conf, timer);
++    groups.cacheGroupsAdd(Arrays.asList(myGroups));
++    groups.refresh();
++    // Add both these users to blacklist so that they
++    // can be added to negative cache
++    FakeGroupMapping.addToBlackList("user1");
++    FakeGroupMapping.addToBlackList("user2");
++
++    // Put user1 in negative cache.
++    try {
++      groups.getGroups("user1");
++      fail("Did not throw IOException : Failed to obtain groups" +
++            " from FakeGroupMapping.");
++    } catch (IOException e) {
++      GenericTestUtils.assertExceptionContains("No groups found for user", e);
++    }
++    // Check if user1 exists in negative cache
++    assertTrue(groups.getNegativeCache().contains("user1"));
++
++    // Advance fake timer
++    timer.advance(1000);
++    // Put user2 in negative cache
++    try {
++      groups.getGroups("user2");
++      fail("Did not throw IOException : Failed to obtain groups" +
++            " from FakeGroupMapping.");
++    } catch (IOException e) {
++      GenericTestUtils.assertExceptionContains("No groups found for user", e);
++    }
++    // Check if user2 exists in negative cache
++    assertTrue(groups.getNegativeCache().contains("user2"));
++
++    // Advance timer. Only user2 should be present in negative cache.
++    timer.advance(1100);
++    assertFalse(groups.getNegativeCache().contains("user1"));
++    assertTrue(groups.getNegativeCache().contains("user2"));
++
++    // Advance timer. Even user2 should not be present in negative cache.
++    timer.advance(1000);
++    assertFalse(groups.getNegativeCache().contains("user2"));
+   }
+ }
+-- 
+1.7.9.5
+

@@ -1,0 +1,146 @@
+From 0c594b721f3d1176888e88043b3356c3107803b6 Mon Sep 17 00:00:00 2001
+From: Jian He <jianhe@apache.org>
+Date: Tue, 6 Jan 2015 14:15:57 -0800
+Subject: [PATCH 482/596] YARN-2978. Fixed potential NPE while getting queue
+ info. Contributed by Varun Saxena (cherry picked
+ from commit
+ dd57c2047bfd21910acc38c98153eedf1db75169)
+
+(cherry picked from commit c61e8a7bfa7236e354f859a889083fab3d7ca9eb)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../scheduler/capacity/AbstractCSQueue.java        |   24 +++++++++++---------
+ .../scheduler/capacity/LeafQueue.java              |   10 ++++----
+ .../scheduler/capacity/ParentQueue.java            |    4 +---
+ 3 files changed, 18 insertions(+), 20 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/AbstractCSQueue.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/AbstractCSQueue.java
+index fc0fbb4..5b27bc2 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/AbstractCSQueue.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/AbstractCSQueue.java
+@@ -65,7 +65,6 @@
+   RMNodeLabelsManager labelManager;
+   String defaultLabelExpression;
+   Resource usedResources = Resources.createResource(0, 0);
+-  QueueInfo queueInfo;
+   Map<String, Float> absoluteCapacityByNodeLabels;
+   Map<String, Float> capacitiyByNodeLabels;
+   Map<String, Resource> usedResourcesByNodeLabels = new HashMap<String, Resource>();
+@@ -87,7 +86,6 @@ public AbstractCSQueue(CapacitySchedulerContext cs,
+     this.parent = parent;
+     this.queueName = queueName;
+     this.resourceCalculator = cs.getResourceCalculator();
+-    this.queueInfo = recordFactory.newRecordInstance(QueueInfo.class);
+     
+     // must be called after parent and queueName is set
+     this.metrics = old != null ? old.getMetrics() :
+@@ -99,9 +97,7 @@ public AbstractCSQueue(CapacitySchedulerContext cs,
+     this.accessibleLabels = cs.getConfiguration().getAccessibleNodeLabels(getQueuePath());
+     this.defaultLabelExpression = cs.getConfiguration()
+         .getDefaultNodeLabelExpression(getQueuePath());
+-    
+-    this.queueInfo.setQueueName(queueName);
+-    
++
+     // inherit from parent if labels not set
+     if (this.accessibleLabels == null && parent != null) {
+       this.accessibleLabels = parent.getAccessibleNodeLabels();
+@@ -280,12 +276,6 @@ synchronized void setupQueueConfigs(Resource clusterResource, float capacity,
+     this.capacitiyByNodeLabels = new HashMap<String, Float>(nodeLabelCapacities);
+     this.maxCapacityByNodeLabels =
+         new HashMap<String, Float>(maximumNodeLabelCapacities);
+-    
+-    this.queueInfo.setAccessibleNodeLabels(this.accessibleLabels);
+-    this.queueInfo.setCapacity(this.capacity);
+-    this.queueInfo.setMaximumCapacity(this.maximumCapacity);
+-    this.queueInfo.setQueueState(this.state);
+-    this.queueInfo.setDefaultNodeLabelExpression(this.defaultLabelExpression);
+ 
+     // Update metrics
+     CSQueueUtils.updateQueueStatistics(
+@@ -330,6 +320,18 @@ synchronized void setupQueueConfigs(Resource clusterResource, float capacity,
+     this.reservationsContinueLooking = reservationContinueLooking;
+   }
+   
++  protected QueueInfo getQueueInfo() {
++    QueueInfo queueInfo = recordFactory.newRecordInstance(QueueInfo.class);
++    queueInfo.setQueueName(queueName);
++    queueInfo.setAccessibleNodeLabels(accessibleLabels);
++    queueInfo.setCapacity(capacity);
++    queueInfo.setMaximumCapacity(maximumCapacity);
++    queueInfo.setQueueState(state);
++    queueInfo.setDefaultNodeLabelExpression(defaultLabelExpression);
++    queueInfo.setCurrentCapacity(getUsedCapacity());
++    return queueInfo;
++  }
++  
+   @Private
+   public Resource getMaximumAllocation() {
+     return maximumAllocation;
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/LeafQueue.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/LeafQueue.java
+index ffeec63..4ae36d5 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/LeafQueue.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/LeafQueue.java
+@@ -163,8 +163,6 @@ public LeafQueue(CapacitySchedulerContext cs,
+         CSQueueUtils.computeMaxActiveApplicationsPerUser(
+             maxActiveAppsUsingAbsCap, userLimit, userLimitFactor);
+ 
+-    this.queueInfo.setChildQueues(new ArrayList<QueueInfo>());
+-
+     QueueState state = cs.getConfiguration().getState(getQueuePath());
+ 
+     Map<QueueACL, AccessControlList> acls = 
+@@ -235,14 +233,14 @@ protected synchronized void setupQueueConfigs(
+         this.defaultLabelExpression)) {
+       throw new IOException("Invalid default label expression of "
+           + " queue="
+-          + queueInfo.getQueueName()
++          + getQueueName()
+           + " doesn't have permission to access all labels "
+           + "in default label expression. labelExpression of resource request="
+           + (this.defaultLabelExpression == null ? ""
+               : this.defaultLabelExpression)
+           + ". Queue labels="
+-          + (queueInfo.getAccessibleNodeLabels() == null ? "" : StringUtils.join(queueInfo
+-              .getAccessibleNodeLabels().iterator(), ',')));
++          + (getAccessibleNodeLabels() == null ? "" : StringUtils.join(
++              getAccessibleNodeLabels().iterator(), ',')));
+     }
+     
+     this.nodeLocalityDelay = nodeLocalityDelay;
+@@ -433,7 +431,7 @@ public synchronized float getUserLimitFactor() {
+   @Override
+   public synchronized QueueInfo getQueueInfo(
+       boolean includeChildQueues, boolean recursive) {
+-    queueInfo.setCurrentCapacity(usedCapacity);
++    QueueInfo queueInfo = getQueueInfo();
+     return queueInfo;
+   }
+ 
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/ParentQueue.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/ParentQueue.java
+index 6ffaf4c..6b0b7a6 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/ParentQueue.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/ParentQueue.java
+@@ -109,8 +109,6 @@ public ParentQueue(CapacitySchedulerContext cs,
+     Map<QueueACL, AccessControlList> acls = 
+       cs.getConfiguration().getAcls(getQueuePath());
+ 
+-    this.queueInfo.setChildQueues(new ArrayList<QueueInfo>());
+-
+     setupQueueConfigs(cs.getClusterResource(), capacity, absoluteCapacity,
+         maximumCapacity, absoluteMaxCapacity, state, acls, accessibleLabels,
+         defaultLabelExpression, capacitiyByNodeLabels, maxCapacityByNodeLabels, 
+@@ -205,7 +203,7 @@ public String getQueuePath() {
+   @Override
+   public synchronized QueueInfo getQueueInfo( 
+       boolean includeChildQueues, boolean recursive) {
+-    queueInfo.setCurrentCapacity(usedCapacity);
++    QueueInfo queueInfo = getQueueInfo();
+ 
+     List<QueueInfo> childQueuesInfo = new ArrayList<QueueInfo>();
+     if (includeChildQueues) {
+-- 
+1.7.9.5
+

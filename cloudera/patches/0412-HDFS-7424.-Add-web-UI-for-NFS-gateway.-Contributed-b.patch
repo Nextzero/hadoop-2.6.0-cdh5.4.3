@@ -1,0 +1,349 @@
+From db6a01b3450bad734033a9e59fae047845bd3614 Mon Sep 17 00:00:00 2001
+From: Brandon Li <brandonli@apache.org>
+Date: Thu, 4 Dec 2014 10:46:26 -0800
+Subject: [PATCH 412/596] HDFS-7424. Add web UI for NFS gateway. Contributed
+ by Brandon Li
+
+(cherry picked from commit 1bbcc3d0320b9435317bfeaa078af22d4de8d00c)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ hadoop-hdfs-project/hadoop-hdfs-nfs/pom.xml        |    5 +
+ .../apache/hadoop/hdfs/nfs/conf/NfsConfigKeys.java |   10 ++
+ .../hadoop/hdfs/nfs/nfs3/Nfs3HttpServer.java       |  111 ++++++++++++++++++++
+ .../hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java       |   24 ++++-
+ .../hadoop/hdfs/nfs/nfs3/TestNfs3HttpServer.java   |   89 ++++++++++++++++
+ hadoop-hdfs-project/hadoop-hdfs/pom.xml            |    3 +
+ 6 files changed, 240 insertions(+), 2 deletions(-)
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/Nfs3HttpServer.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs-nfs/src/test/java/org/apache/hadoop/hdfs/nfs/nfs3/TestNfs3HttpServer.java
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/pom.xml b/hadoop-hdfs-project/hadoop-hdfs-nfs/pom.xml
+index f5d6348..28ff3a7 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-nfs/pom.xml
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/pom.xml
+@@ -189,6 +189,11 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
+       <artifactId>xmlenc</artifactId>
+       <scope>compile</scope>
+     </dependency>
++    <dependency>
++      <groupId>org.bouncycastle</groupId>
++      <artifactId>bcprov-jdk16</artifactId>
++      <scope>test</scope>
++    </dependency>
+   </dependencies>
+ 
+   <profiles>
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/conf/NfsConfigKeys.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/conf/NfsConfigKeys.java
+index 178d855..7566791 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/conf/NfsConfigKeys.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/conf/NfsConfigKeys.java
+@@ -60,4 +60,14 @@
+   
+   public final static String LARGE_FILE_UPLOAD = "nfs.large.file.upload";
+   public final static boolean LARGE_FILE_UPLOAD_DEFAULT = true;
++  
++  public static final String NFS_HTTP_PORT_KEY = "nfs.http.port";
++  public static final int NFS_HTTP_PORT_DEFAULT = 50079;
++  public static final String NFS_HTTP_ADDRESS_KEY = "nfs.http.address";
++  public static final String NFS_HTTP_ADDRESS_DEFAULT = "0.0.0.0:" + NFS_HTTP_PORT_DEFAULT;
++
++  public static final String NFS_HTTPS_PORT_KEY = "nfs.https.port";
++  public static final int NFS_HTTPS_PORT_DEFAULT = 50579;
++  public static final String NFS_HTTPS_ADDRESS_KEY = "nfs.https.address";
++  public static final String NFS_HTTPS_ADDRESS_DEFAULT = "0.0.0.0:" + NFS_HTTPS_PORT_DEFAULT;
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/Nfs3HttpServer.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/Nfs3HttpServer.java
+new file mode 100644
+index 0000000..c37a21e
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/Nfs3HttpServer.java
+@@ -0,0 +1,111 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.nfs.nfs3;
++
++import java.io.IOException;
++import java.net.InetSocketAddress;
++import java.net.URI;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.hdfs.DFSUtil;
++import org.apache.hadoop.hdfs.nfs.conf.NfsConfigKeys;
++import org.apache.hadoop.hdfs.nfs.conf.NfsConfiguration;
++import org.apache.hadoop.hdfs.server.common.JspHelper;
++import org.apache.hadoop.http.HttpConfig;
++import org.apache.hadoop.http.HttpServer2;
++import org.apache.hadoop.net.NetUtils;
++
++/**
++ * Encapsulates the HTTP server started by the NFS3 gateway.
++ */
++class Nfs3HttpServer {
++  private int infoPort;
++  private int infoSecurePort;
++
++  private HttpServer2 httpServer;
++
++  private final NfsConfiguration conf;
++
++  Nfs3HttpServer(NfsConfiguration conf) {
++    this.conf = conf;
++  }
++
++  void start() throws IOException {
++    final InetSocketAddress httpAddr = getHttpAddress(conf);
++
++    final String httpsAddrString = conf.get(
++        NfsConfigKeys.NFS_HTTPS_ADDRESS_KEY,
++        NfsConfigKeys.NFS_HTTPS_ADDRESS_DEFAULT);
++    InetSocketAddress httpsAddr = NetUtils.createSocketAddr(httpsAddrString);
++
++    HttpServer2.Builder builder = DFSUtil.httpServerTemplateForNNAndJN(conf,
++        httpAddr, httpsAddr, "nfs3",
++        NfsConfigKeys.DFS_NFS_KERBEROS_PRINCIPAL_KEY,
++        NfsConfigKeys.DFS_NFS_KEYTAB_FILE_KEY);
++
++    this.httpServer = builder.build();
++    this.httpServer.start();
++    
++    HttpConfig.Policy policy = DFSUtil.getHttpPolicy(conf);
++    int connIdx = 0;
++    if (policy.isHttpEnabled()) {
++      infoPort = httpServer.getConnectorAddress(connIdx++).getPort();
++    }
++
++    if (policy.isHttpsEnabled()) {
++      infoSecurePort = httpServer.getConnectorAddress(connIdx).getPort();
++    }
++  }
++
++  void stop() throws IOException {
++    if (httpServer != null) {
++      try {
++        httpServer.stop();
++      } catch (Exception e) {
++        throw new IOException(e);
++      }
++    }
++  }
++
++  public int getPort() {
++    return this.infoPort;
++  }
++
++  public int getSecurePort() {
++    return this.infoSecurePort;
++  }
++
++  /**
++   * Return the URI that locates the HTTP server.
++   */
++  public URI getServerURI() {
++    // getHttpClientScheme() only returns https for HTTPS_ONLY policy. This
++    // matches the behavior that the first connector is a HTTPS connector only
++    // for HTTPS_ONLY policy.
++    InetSocketAddress addr = httpServer.getConnectorAddress(0);
++    return URI.create(DFSUtil.getHttpClientScheme(conf) + "://"
++        + NetUtils.getHostPortString(addr));
++  }
++
++  public InetSocketAddress getHttpAddress(Configuration conf) {
++    String addr = conf.get(NfsConfigKeys.NFS_HTTP_ADDRESS_KEY,
++        NfsConfigKeys.NFS_HTTP_ADDRESS_DEFAULT);
++    return NetUtils.createSocketAddr(addr, NfsConfigKeys.NFS_HTTP_PORT_DEFAULT,
++        NfsConfigKeys.NFS_HTTP_ADDRESS_KEY);
++  }
++}
+\ No newline at end of file
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+index 62c92c9..23d5775 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+@@ -161,6 +161,7 @@
+ 
+   private final RpcCallCache rpcCallCache;
+   private JvmPauseMonitor pauseMonitor;
++  private Nfs3HttpServer infoServer = null;
+ 
+   public RpcProgramNfs3(NfsConfiguration config, DatagramSocket registrationSocket,
+       boolean allowInsecurePorts) throws IOException {
+@@ -203,6 +204,7 @@ public RpcProgramNfs3(NfsConfiguration config, DatagramSocket registrationSocket
+     }
+ 
+     rpcCallCache = new RpcCallCache("NFS3", 256);
++    infoServer = new Nfs3HttpServer(config);
+   }
+ 
+   private void clearDirectory(String writeDumpDir) throws IOException {
+@@ -219,14 +221,19 @@ private void clearDirectory(String writeDumpDir) throws IOException {
+       throw new IOException("Cannot create dump directory " + dumpDir);
+     }
+   }
+-
++  
+   @Override
+-  public void startDaemons() {
++  public void startDaemons() {    
+     if (pauseMonitor == null) {
+       pauseMonitor = new JvmPauseMonitor(config);
+       pauseMonitor.start();
+     }
+     writeManager.startAsyncDataService();
++    try {
++      infoServer.start();
++    } catch (IOException e) {
++      LOG.error("failed to start web server", e);
++    }
+   }
+ 
+   @Override
+@@ -237,6 +244,19 @@ public void stopDaemons() {
+     if (pauseMonitor != null) {
+       pauseMonitor.stop();
+     }
++    // Stop the web server
++    if (infoServer != null) {
++      try {
++        infoServer.stop();
++      } catch (Exception e) {
++        LOG.warn("Exception shutting down web server", e);
++      }
++    }
++  }
++  
++  @VisibleForTesting
++  Nfs3HttpServer getInfoServer() {
++    return this.infoServer;
+   }
+ 
+   // Checks the type of IOException and maps it to appropriate Nfs3Status code.
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/test/java/org/apache/hadoop/hdfs/nfs/nfs3/TestNfs3HttpServer.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/test/java/org/apache/hadoop/hdfs/nfs/nfs3/TestNfs3HttpServer.java
+new file mode 100644
+index 0000000..d44e9ab
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/test/java/org/apache/hadoop/hdfs/nfs/nfs3/TestNfs3HttpServer.java
+@@ -0,0 +1,89 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.nfs.nfs3;
++
++import static org.junit.Assert.assertTrue;
++
++import java.io.File;
++import java.net.URL;
++
++import org.apache.hadoop.fs.FileUtil;
++import org.apache.hadoop.hdfs.DFSConfigKeys;
++import org.apache.hadoop.hdfs.DFSTestUtil;
++import org.apache.hadoop.hdfs.MiniDFSCluster;
++import org.apache.hadoop.hdfs.nfs.conf.NfsConfigKeys;
++import org.apache.hadoop.hdfs.nfs.conf.NfsConfiguration;
++import org.apache.hadoop.http.HttpConfig;
++import org.apache.hadoop.security.ssl.KeyStoreTestUtil;
++import org.junit.AfterClass;
++import org.junit.BeforeClass;
++import org.junit.Test;
++
++public class TestNfs3HttpServer {
++  private static final String BASEDIR = System.getProperty("test.build.dir",
++      "target/test-dir") + "/" + TestNfs3HttpServer.class.getSimpleName();
++  private static NfsConfiguration conf = new NfsConfiguration();
++  private static MiniDFSCluster cluster;
++  private static String keystoresDir;
++  private static String sslConfDir;
++
++  @BeforeClass
++  public static void setUp() throws Exception {
++    conf.set(DFSConfigKeys.DFS_HTTP_POLICY_KEY,
++        HttpConfig.Policy.HTTP_AND_HTTPS.name());
++    conf.set(NfsConfigKeys.NFS_HTTP_ADDRESS_KEY, "localhost:0");
++    conf.set(NfsConfigKeys.NFS_HTTPS_ADDRESS_KEY, "localhost:0");
++    File base = new File(BASEDIR);
++    FileUtil.fullyDelete(base);
++    base.mkdirs();
++    keystoresDir = new File(BASEDIR).getAbsolutePath();
++    sslConfDir = KeyStoreTestUtil.getClasspathDir(TestNfs3HttpServer.class);
++    KeyStoreTestUtil.setupSSLConfig(keystoresDir, sslConfDir, conf, false);
++
++    cluster = new MiniDFSCluster.Builder(conf).numDataNodes(1).build();
++    cluster.waitActive();
++  }
++
++  @AfterClass
++  public static void tearDown() throws Exception {
++    FileUtil.fullyDelete(new File(BASEDIR));
++    if (cluster != null) {
++      cluster.shutdown();
++    }
++    KeyStoreTestUtil.cleanupSSLConfig(keystoresDir, sslConfDir);
++  }
++
++  @Test
++  public void testHttpServer() throws Exception {
++    Nfs3 nfs = new Nfs3(conf);
++    nfs.startServiceInternal(false);
++    RpcProgramNfs3 nfsd = (RpcProgramNfs3) nfs.getRpcProgram();
++    Nfs3HttpServer infoServer = nfsd.getInfoServer();
++
++    String urlRoot = infoServer.getServerURI().toString();
++
++    // Check default servlets.
++    String pageContents = DFSTestUtil.urlGet(new URL(urlRoot + "/jmx"));
++    assertTrue("Bad contents: " + pageContents,
++        pageContents.contains("java.lang:type="));
++    System.out.println("pc:" + pageContents);
++
++    int port = infoServer.getSecurePort();
++    assertTrue("Can't get https port", port > 0);
++  }
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/pom.xml b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+index 5caca67..8c99f0e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/pom.xml
++++ b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+@@ -400,6 +400,9 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
+                 <copy file="${basedir}/src/main/webapps/proto-journal-web.xml"
+                       tofile="${project.build.directory}/webapps/journal/WEB-INF/web.xml"
+                       filtering="true"/>
++                <copy file="${basedir}/src/main/webapps/proto-web.xml"
++                      tofile="${project.build.directory}/webapps/nfs3/WEB-INF/web.xml"
++                      filtering="true"/>
+                 <copy toDir="${project.build.directory}/webapps">
+                   <fileset dir="${basedir}/src/main/webapps">
+                     <exclude name="**/*.jsp"/>
+-- 
+1.7.9.5
+

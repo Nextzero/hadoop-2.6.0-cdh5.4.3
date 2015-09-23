@@ -1,0 +1,62 @@
+From bcb60e0158ce0db0680b5cfcf132220b9e1c9ab4 Mon Sep 17 00:00:00 2001
+From: Arun Suresh <asuresh@cloudera.com>
+Date: Fri, 24 Oct 2014 17:35:16 -0700
+Subject: [PATCH 191/596] CLOUDERA-BUILD: CDH-22694: HDFS startup script
+ should include jar from SENTRY_HOME/lib/plugins
+
+(cherry picked from commit ac961023527122dbc3afbd92ea2cfea1f21ed054)
+(cherry picked from commit a1f4b4ccb76fd2a79a0ca3a4cd31f7253c2dd8a8)
+---
+ hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs |   30 +++++++++++++++++++++
+ 1 file changed, 30 insertions(+)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs b/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs
+index 3d88fb1..756bff4 100755
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs
+@@ -130,12 +130,42 @@ fi
+ 
+ if [ "$COMMAND" = "namenode" ] ; then
+   CLASS='org.apache.hadoop.hdfs.server.namenode.NameNode'
++  # Set SENTRY_HOME if possible and add Sentry plugin jars to classpath
++  if [[ -z "$SENTRY_HOME" ]]
++  then
++    # HADOOP_HDFS_HOME should have been set by hadoop-config.sh
++    if [[ -d ${HADOOP_HDFS_HOME}/../sentry ]]
++    then
++      export SENTRY_HOME=`readlink -m ${HADOOP_HDFS_HOME}/../sentry`
++    fi
++  fi
++  if [[ -n "$SENTRY_HOME" ]]
++  then
++    for f in ${SENTRY_HOME}/lib/plugins/*.jar; do
++     CLASSPATH=${CLASSPATH}:${f}
++    done
++  fi
+   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_NAMENODE_OPTS"
+ elif [ "$COMMAND" = "zkfc" ] ; then
+   CLASS='org.apache.hadoop.hdfs.tools.DFSZKFailoverController'
+   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_ZKFC_OPTS"
+ elif [ "$COMMAND" = "secondarynamenode" ] ; then
+   CLASS='org.apache.hadoop.hdfs.server.namenode.SecondaryNameNode'
++  # Set SENTRY_HOME if possible and add Sentry plugin jars to classpath
++  if [[ -z "$SENTRY_HOME" ]]
++  then
++    # HADOOP_HDFS_HOME should have been set by hadoop-config.sh
++    if [[ -d ${HADOOP_HDFS_HOME}/../sentry ]]
++    then
++      export SENTRY_HOME=`readlink -m ${HADOOP_HDFS_HOME}/../sentry`
++    fi
++  fi
++  if [[ -n "$SENTRY_HOME" ]]
++  then
++    for f in ${SENTRY_HOME}/lib/plugins/*.jar; do
++     CLASSPATH=${CLASSPATH}:${f}
++    done
++  fi
+   HADOOP_OPTS="$HADOOP_OPTS $HADOOP_SECONDARYNAMENODE_OPTS"
+ elif [ "$COMMAND" = "datanode" ] ; then
+   CLASS='org.apache.hadoop.hdfs.server.datanode.DataNode'
+-- 
+1.7.9.5
+

@@ -1,0 +1,174 @@
+From 398bbb9d8bf1599a86d7e0a603eb4e3bbf8f88f4 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Thu, 18 Dec 2014 11:05:06 -0800
+Subject: [PATCH 410/596] HADOOP-11427. ChunkedArrayList: fix removal via
+ iterator and implement get (cmccabe)
+
+(cherry picked from commit 07619aa516deb9094a18e0c64ce66ff9c8b05e92)
+(cherry picked from commit 2743b94c2759397d5151b36a1c814e3fe650aa66)
+---
+ .../apache/hadoop/hdfs/util/ChunkedArrayList.java  |   42 ++++++++++-
+ .../hadoop/hdfs/util/TestChunkedArrayList.java     |   78 ++++++++++++++++++++
+ 2 files changed, 116 insertions(+), 4 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/ChunkedArrayList.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/ChunkedArrayList.java
+index 89a0db6..b1f5862 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/ChunkedArrayList.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/util/ChunkedArrayList.java
+@@ -110,11 +110,33 @@ public ChunkedArrayList(int initialChunkCapacity, int maxChunkSize) {
+ 
+   @Override
+   public Iterator<T> iterator() {
+-    return Iterables.concat(chunks).iterator();
++    final Iterator<T> it = Iterables.concat(chunks).iterator();
++
++    return new Iterator<T>() {
++      @Override
++      public boolean hasNext() {
++        return it.hasNext();
++      }
++
++      @Override
++      public T next() {
++        return it.next();
++      }
++
++      @Override
++      public void remove() {
++        it.remove();
++        size--;
++      }
++    };
+   }
+ 
+   @Override
+   public boolean add(T e) {
++    if (size == Integer.MAX_VALUE) {
++      throw new RuntimeException("Can't add an additional element to the " +
++          "list; list already has INT_MAX elements.");
++    }
+     if (lastChunk == null) {
+       addChunk(initialChunkCapacity);
+     } else if (lastChunk.size() >= lastChunkCapacity) {
+@@ -164,8 +186,20 @@ int getMaxChunkSize() {
+   }
+ 
+   @Override
+-  public T get(int arg0) {
+-    throw new UnsupportedOperationException(
+-        this.getClass().getName() + " does not support random access");
++  public T get(int idx) {
++    if (idx < 0) {
++      throw new IndexOutOfBoundsException();
++    }
++    int base = 0;
++    Iterator<List<T>> it = chunks.iterator();
++    while (it.hasNext()) {
++      List<T> list = it.next();
++      int size = list.size();
++      if (idx < base + size) {
++        return list.get(idx - base);
++      }
++      base += size;
++    }
++    throw new IndexOutOfBoundsException();
+   }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/util/TestChunkedArrayList.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/util/TestChunkedArrayList.java
+index a1e49cc..5ae36e6 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/util/TestChunkedArrayList.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/util/TestChunkedArrayList.java
+@@ -20,7 +20,9 @@
+ import static org.junit.Assert.*;
+ 
+ import java.util.ArrayList;
++import java.util.Iterator;
+ 
++import org.junit.Assert;
+ import org.junit.Test;
+ 
+ import com.google.common.base.Stopwatch;
+@@ -90,4 +92,80 @@ public void testPerformance() {
+       }
+     }
+   }
++
++  @Test
++  public void testRemovals() throws Exception {
++    final int NUM_ELEMS = 100000;
++    ChunkedArrayList<Integer> list = new ChunkedArrayList<Integer>();
++    for (int i = 0; i < NUM_ELEMS; i++) {
++      list.add(i);
++    }
++
++    // Iterate through all list elements.
++    Iterator<Integer> iter = list.iterator();
++    for (int i = 0; i < NUM_ELEMS; i++) {
++      Assert.assertTrue(iter.hasNext());
++      Integer val = iter.next();
++      Assert.assertEquals(Integer.valueOf(i), val);
++    }
++    Assert.assertFalse(iter.hasNext());
++    Assert.assertEquals(NUM_ELEMS, list.size());
++
++    // Remove even elements.
++    iter = list.iterator();
++    for (int i = 0; i < NUM_ELEMS; i++) {
++      Assert.assertTrue(iter.hasNext());
++      Integer val = iter.next();
++      Assert.assertEquals(Integer.valueOf(i), val);
++      if (i % 2 == 0) {
++        iter.remove();
++      }
++    }
++    Assert.assertFalse(iter.hasNext());
++    Assert.assertEquals(NUM_ELEMS / 2, list.size());
++
++    // Iterate through all odd list elements.
++    iter = list.iterator();
++    for (int i = 0; i < NUM_ELEMS / 2; i++) {
++      Assert.assertTrue(iter.hasNext());
++      Integer val = iter.next();
++      Assert.assertEquals(Integer.valueOf(1 + (2 * i)), val);
++      iter.remove();
++    }
++    Assert.assertFalse(iter.hasNext());
++
++    // Check that list is now empty.
++    Assert.assertEquals(0, list.size());
++    Assert.assertTrue(list.isEmpty());
++    iter = list.iterator();
++    Assert.assertFalse(iter.hasNext());
++  }
++
++  @Test
++  public void testGet() throws Exception {
++    final int NUM_ELEMS = 100001;
++    ChunkedArrayList<Integer> list = new ChunkedArrayList<Integer>();
++    for (int i = 0; i < NUM_ELEMS; i++) {
++      list.add(i);
++    }
++
++    Assert.assertEquals(Integer.valueOf(100), list.get(100));
++    Assert.assertEquals(Integer.valueOf(1000), list.get(1000));
++    Assert.assertEquals(Integer.valueOf(10000), list.get(10000));
++    Assert.assertEquals(Integer.valueOf(100000), list.get(100000));
++
++    Iterator<Integer> iter = list.iterator();
++    iter.next();
++    iter.remove();
++    Assert.assertEquals(Integer.valueOf(1), list.get(0));
++
++    iter = list.iterator();
++    for (int i = 0; i < 500; i++) {
++      iter.next();
++    }
++    iter.remove();
++
++    Assert.assertEquals(Integer.valueOf(502), list.get(500));
++    Assert.assertEquals(Integer.valueOf(602), list.get(600));
++  }
+ }
+-- 
+1.7.9.5
+

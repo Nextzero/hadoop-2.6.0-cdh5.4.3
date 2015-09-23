@@ -1,0 +1,69 @@
+From ef63befb6c2fc79dcf94127aa39f0f78072a031b Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Fri, 14 Nov 2014 15:20:00 -0800
+Subject: [PATCH 193/596] CLOUDERA-BUILD: TestApplicationHistoryClientService
+ fails on JDK8 (equivalent to YARN-2766)
+
+(cherry picked from commit 20bb62b66fbfacb9cf35fac93f91fc3c17e4d35f)
+---
+ .../TestApplicationHistoryClientService.java       |   24 ++++++++++++++++++--
+ 1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/src/test/java/org/apache/hadoop/yarn/server/applicationhistoryservice/TestApplicationHistoryClientService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/src/test/java/org/apache/hadoop/yarn/server/applicationhistoryservice/TestApplicationHistoryClientService.java
+index 7c2593d..66531d0 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/src/test/java/org/apache/hadoop/yarn/server/applicationhistoryservice/TestApplicationHistoryClientService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/src/test/java/org/apache/hadoop/yarn/server/applicationhistoryservice/TestApplicationHistoryClientService.java
+@@ -19,6 +19,8 @@
+ package org.apache.hadoop.yarn.server.applicationhistoryservice;
+ 
+ import java.io.IOException;
++import java.util.Collections;
++import java.util.Comparator;
+ import java.util.List;
+ 
+ import org.apache.hadoop.conf.Configuration;
+@@ -97,6 +99,12 @@ public void testApplications() throws IOException, YarnException {
+         clientService.getClientHandler().getApplications(request);
+     List<ApplicationReport> appReport = response.getApplicationList();
+     Assert.assertNotNull(appReport);
++    Collections.sort(appReport, new Comparator<ApplicationReport>() {
++      @Override
++      public int compare(ApplicationReport o1, ApplicationReport o2) {
++        return o1.getApplicationId().compareTo(o2.getApplicationId());
++      }
++    });
+     Assert.assertEquals(appId, appReport.get(0).getApplicationId());
+     Assert.assertEquals(appId1, appReport.get(1).getApplicationId());
+   }
+@@ -131,6 +139,12 @@ public void testApplicationAttempts() throws IOException, YarnException {
+     List<ApplicationAttemptReport> attemptReports =
+         response.getApplicationAttemptList();
+     Assert.assertNotNull(attemptReports);
++    Collections.sort(attemptReports, new Comparator<ApplicationAttemptReport>() {
++      @Override
++      public int compare(ApplicationAttemptReport o1, ApplicationAttemptReport o2) {
++        return o1.getApplicationAttemptId().compareTo(o2.getApplicationAttemptId());
++      }
++    });
+     Assert.assertEquals(appAttemptId, attemptReports.get(0)
+       .getApplicationAttemptId());
+     Assert.assertEquals(appAttemptId1, attemptReports.get(1)
+@@ -168,7 +182,13 @@ public void testContainers() throws IOException, YarnException {
+         clientService.getClientHandler().getContainers(request);
+     List<ContainerReport> containers = response.getContainerList();
+     Assert.assertNotNull(containers);
+-    Assert.assertEquals(containerId, containers.get(1).getContainerId());
+-    Assert.assertEquals(containerId1, containers.get(0).getContainerId());
++    Collections.sort(containers, new Comparator<ContainerReport>() {
++      @Override
++      public int compare(ContainerReport o1, ContainerReport o2) {
++        return o1.getContainerId().compareTo(o2.getContainerId());
++      }
++    });
++    Assert.assertEquals(containerId, containers.get(0).getContainerId());
++    Assert.assertEquals(containerId1, containers.get(1).getContainerId());
+   }
+ }
+-- 
+1.7.9.5
+

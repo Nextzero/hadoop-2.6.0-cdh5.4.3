@@ -1,0 +1,48 @@
+From 13d6736cc9bcd544bcc8c2325e425d5f944f5f3c Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Fri, 25 Jan 2013 16:33:35 -0800
+Subject: [PATCH 017/596] MR1: CLOUDERA-BUILD. JT HA mrhaadmin does not work
+ when hadoop.security.authorization is set to true
+
+  Reason: bug
+  Auhor: Alejandro Abdelnur
+  Ref: CDH-10099
+(cherry picked from commit 593e06d3f6ff07f212b312489e3bc705ad0fa51e)
+
+(cherry picked from commit a6278ea1e3bcb64c72782b7bb904ca2e3462bd7d)
+(cherry picked from commit ae8bf17af51080ca954740a3073937b896385f9d)
+(cherry picked from commit b92c05e9e1a0bd3c8c9937eba0e515c38549f6ac)
+---
+ .../apache/hadoop/mapred/JobTrackerHADaemon.java   |    9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHADaemon.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHADaemon.java
+index 343fab8..94c768a 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHADaemon.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHADaemon.java
+@@ -28,6 +28,7 @@
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
+ import org.apache.hadoop.ha.HAServiceStatus;
+ import org.apache.hadoop.ha.proto.HAServiceProtocolProtos.HAServiceProtocolService;
+ import org.apache.hadoop.ha.protocolPB.HAServiceProtocolPB;
+@@ -102,7 +103,13 @@ public void start() throws IOException {
+ 
+     this.rpcServer = RPC.getServer(HAServiceProtocolPB.class, haPbService,
+         rpcAddr.getHostName(), rpcAddr.getPort(), conf);
+-    
++
++    // set service-level authorization security policy
++    if (conf.getBoolean(
++        CommonConfigurationKeys.HADOOP_SECURITY_AUTHORIZATION, false)) {
++      rpcServer.refreshServiceAcl(conf, new MapReducePolicyProvider());
++    }
++
+     this.rpcServer.start();
+     
+     // set port in config
+-- 
+1.7.9.5
+

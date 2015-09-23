@@ -1,0 +1,32 @@
+From 580091d0d0886ba518ec701216716a2a85b2a692 Mon Sep 17 00:00:00 2001
+From: Kihwal Lee <kihwal@apache.org>
+Date: Tue, 28 Oct 2014 14:54:05 -0500
+Subject: [PATCH 232/596] HDFS-7213. processIncrementalBlockReport performance
+ degradation. Contributed by Eric Payne.
+
+(cherry picked from commit e226b5b40d716b6d363c43a8783766b72734e347)
+(cherry picked from commit 5ed24f3afd166342b2d827c5c1e9826dd6eca7c7)
+---
+ .../hdfs/server/blockmanagement/BlockManager.java  |    4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index d7b5a31..d1da6c7 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -3083,9 +3083,11 @@ public void processIncrementalBlockReport(final DatanodeID nodeID,
+             + " is received from " + nodeID);
+       }
+     }
+-    blockLog.debug("*BLOCK* NameNode.processIncrementalBlockReport: " + "from "
++    if (blockLog.isDebugEnabled()) {
++      blockLog.debug("*BLOCK* NameNode.processIncrementalBlockReport: " + "from "
+         + nodeID + " receiving: " + receiving + ", " + " received: " + received
+         + ", " + " deleted: " + deleted);
++    }
+   }
+ 
+   /**
+-- 
+1.7.9.5
+

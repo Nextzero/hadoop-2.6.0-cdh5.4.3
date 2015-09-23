@@ -1,0 +1,41 @@
+From e19dbbffd3f5baee8bbffc16671ccfdad9fa2672 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Thu, 19 Sep 2013 17:55:34 -0700
+Subject: [PATCH 168/596] CLOUDERA-BUILD. Targeting Java 7 by default
+ (CDH-14356)
+
+(cherry picked from commit c9e514d40c9e2c2109172ba25b80cde9400bd377)
+
+Conflicts:
+	pom.xml
+
+(cherry picked from commit a75a50248ac08edb21f244dfc5276515b3d8e1b8)
+(cherry picked from commit 417f70096ac3c7ef2157b74b5b15c837491bb3ca)
+(cherry picked from commit 35cd569ceb9f6572aa8bf00698fc8bd176ae5c09)
+---
+ pom.xml |    5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/pom.xml b/pom.xml
+index 36c5b7d..e551b60 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -109,12 +109,13 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
+     <distMgmtStagingId>apache.staging.https</distMgmtStagingId>
+     <distMgmtStagingName>Apache Release Distribution Repository</distMgmtStagingName>
+     <distMgmtStagingUrl>https://repository.apache.org/service/local/staging/deploy/maven2</distMgmtStagingUrl>
+-    <javaVersion>1.6</javaVersion>
+-    <targetJavaVersion>1.6</targetJavaVersion>
+ 
+     <!-- platform encoding override -->
+     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
++
++    <javaVersion>1.7</javaVersion>
++    <targetJavaVersion>1.7</targetJavaVersion>
+   </properties>
+ 
+   <modules>
+-- 
+1.7.9.5
+

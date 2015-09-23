@@ -1,0 +1,33 @@
+From cbf44a8c0fa6385d8a02afa1e4ba2c4c21b58f73 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Mon, 18 Mar 2013 15:43:46 -0700
+Subject: [PATCH 049/596] MR1: MAPREDUCE-5028. The previous commit is a
+ partial cherry-pick. This is to fix it.
+
+Ref: CDH-10562
+Author: Karthik Kambatla
+(cherry picked from commit c05d7c700b9458bb54029e592bca0bbd36f4c7bc)
+(cherry picked from commit f25e097163a416a006b434d24775a28da1f1b880)
+(cherry picked from commit 721d6f9e2ea87cb97c50e515aae048f9f8522d4d)
+(cherry picked from commit fea63cb7e8aebe7eab1b510a6745f4fcd27f4578)
+---
+ .../hadoop/mapreduce/task/ReduceContextImpl.java   |    3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/task/ReduceContextImpl.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/task/ReduceContextImpl.java
+index 0dba950..6709695 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/task/ReduceContextImpl.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/task/ReduceContextImpl.java
+@@ -134,7 +134,8 @@ public boolean nextKeyValue() throws IOException, InterruptedException {
+     buffer.reset(currentRawKey.getBytes(), 0, currentRawKey.getLength());
+     key = keyDeserializer.deserialize(key);
+     DataInputBuffer nextVal = input.getValue();
+-    buffer.reset(nextVal.getData(), nextVal.getPosition(), nextVal.getLength());
++    buffer.reset(nextVal.getData(), nextVal.getPosition(),
++        nextVal.getLength() - nextVal.getPosition());
+     value = valueDeserializer.deserialize(value);
+ 
+     currentKeyLength = nextKey.getLength() - nextKey.getPosition();
+-- 
+1.7.9.5
+

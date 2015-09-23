@@ -1,0 +1,51 @@
+From 20290a2638ec2e1a23e8744b07ec6a9c6ec3b56d Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@apache.org>
+Date: Wed, 17 Apr 2013 23:18:24 +0000
+Subject: [PATCH 054/596] MR1: MAPREDUCE-5133.
+ TestSubmitJob.testSecureJobExecution is flaky due
+ to job dir deletion race. (sandyr via tucu)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1469098 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit d47454bf29ab2c89d2bbb0d87afead8abfd03687)
+
+Reason: Flaky test
+Author: Sandy Ryza
+Ref: CDH-11169
+(cherry picked from commit af716c750fdc0b4df33550ec7f29acee9b442d3e)
+(cherry picked from commit 6f8fc4fab67c59dde24e05959f62cab885e63046)
+(cherry picked from commit df27b2e4df5cbffe6c5d88010f64a22cc3a36cbf)
+(cherry picked from commit 5e0f92d4e66cacc8a16974e139920986407ac954)
+---
+ .../org/apache/hadoop/mapred/TestSubmitJob.java    |   16 ++++++++++++----
+ 1 file changed, 12 insertions(+), 4 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestSubmitJob.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestSubmitJob.java
+index 329fd6e..9d265a8 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestSubmitJob.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestSubmitJob.java
+@@ -281,10 +281,18 @@ public FileSystem run() throws Exception {
+           reduceSignalFile.toString());
+       // wait for job to be done
+       UtilsForTests.waitTillDone(jClient);
+-
+-      // check if the staging area is cleaned up
+-      LOG.info("Check if job submit dir is cleanup or not");
+-      assertFalse(fs.exists(jobSubmitDirpath));
++      
++      // Check that the job submit directory is cleaned up
++      int maxChecks = 20;
++      int sleepMs = 100;
++      for (int i = 0; fs.exists(jobSubmitDirpath) && i < maxChecks; i++) {
++        try {
++          Thread.sleep(sleepMs);
++        } catch (InterruptedException ex) {}
++      }
++      
++      assertFalse("Job submit dir was not cleaned up after " +
++          maxChecks * sleepMs + " ms", fs.exists(jobSubmitDirpath));
+     } finally {
+       if (mr != null) {
+         mr.shutdown();
+-- 
+1.7.9.5
+

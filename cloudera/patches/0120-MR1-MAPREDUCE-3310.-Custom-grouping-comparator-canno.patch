@@ -1,0 +1,674 @@
+From 27a9fcccf72fa5680188aa627a66b8b72c8b0a92 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Mon, 6 Jan 2014 11:29:16 -0800
+Subject: [PATCH 120/596] MR1: MAPREDUCE-3310. Custom grouping comparator
+ cannot be set for Combiners (tucu)
+
+(cherry picked from commit a3001f9ebccaf587ac312d563ce2f445080f4982)
+(cherry picked from commit 25405ee8d4a1f3598a763cc4dcdaaaa80ed26f48)
+(cherry picked from commit 9376b5f094c82f8b9e8162e836625141e5c1a7dc)
+---
+ .../mapred/org/apache/hadoop/mapred/JobConf.java   |   54 +++++-
+ .../src/mapred/org/apache/hadoop/mapred/Task.java  |    8 +-
+ .../mapred/org/apache/hadoop/mapreduce/Job.java    |   19 +-
+ .../org/apache/hadoop/mapreduce/JobContext.java    |   11 ++
+ .../hadoop/mapreduce/lib/map/WrappedMapper.java    |    5 +
+ .../mapreduce/lib/reduce/WrappedReducer.java       |    5 +
+ .../hadoop/mapreduce/task/JobContextImpl.java      |   11 ++
+ .../hadoop/mapred/TestOldCombinerGrouping.java     |  201 ++++++++++++++++++++
+ .../hadoop/mapreduce/TestNewCombinerGrouping.java  |  185 ++++++++++++++++++
+ 9 files changed, 492 insertions(+), 7 deletions(-)
+ create mode 100644 hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestOldCombinerGrouping.java
+ create mode 100644 hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/TestNewCombinerGrouping.java
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobConf.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobConf.java
+index 2e5dba3..7118d6e 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobConf.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobConf.java
+@@ -883,6 +883,24 @@ public String getKeyFieldPartitionerOption() {
+     return get("mapred.text.key.partitioner.options");
+   }
+ 
++  /**
++   * Get the user defined {@link WritableComparable} comparator for
++   * grouping keys of inputs to the combiner.
++   *
++   * @return comparator set by the user for grouping values.
++   * @see #setCombinerKeyGroupingComparator(Class) for details.
++   */
++  public RawComparator getCombinerKeyGroupingComparator() {
++    Class<? extends RawComparator> theClass = getClass(
++        "mapred.output.value.combiner.groupfn.class", null, RawComparator.class);
++    if (theClass == null) {
++      return getOutputKeyComparator();
++    }
++
++    return ReflectionUtils.newInstance(theClass, this);
++  }
++
++
+   /** 
+    * Get the user defined {@link WritableComparable} comparator for 
+    * grouping keys of inputs to the reduce.
+@@ -900,6 +918,38 @@ public RawComparator getOutputValueGroupingComparator() {
+     return ReflectionUtils.newInstance(theClass, this);
+   }
+ 
++
++  /**
++   * Set the user defined {@link RawComparator} comparator for
++   * grouping keys in the input to the combiner.
++   * <p/>
++   * <p>This comparator should be provided if the equivalence rules for keys
++   * for sorting the intermediates are different from those for grouping keys
++   * before each call to
++   * {@link Reducer#reduce(Object, java.util.Iterator, OutputCollector, Reporter)}.</p>
++   * <p/>
++   * <p>For key-value pairs (K1,V1) and (K2,V2), the values (V1, V2) are passed
++   * in a single call to the reduce function if K1 and K2 compare as equal.</p>
++   * <p/>
++   * <p>Since {@link #setOutputKeyComparatorClass(Class)} can be used to control
++   * how keys are sorted, this can be used in conjunction to simulate
++   * <i>secondary sort on values</i>.</p>
++   * <p/>
++   * <p><i>Note</i>: This is not a guarantee of the combiner sort being
++   * <i>stable</i> in any sense. (In any case, with the order of available
++   * map-outputs to the combiner being non-deterministic, it wouldn't make
++   * that much sense.)</p>
++   *
++   * @param theClass the comparator class to be used for grouping keys for the
++   * combiner. It should implement <code>RawComparator</code>.
++   * @see #setOutputKeyComparatorClass(Class)
++   */
++  public void setCombinerKeyGroupingComparator(
++      Class<? extends RawComparator> theClass) {
++    setClass("mapred.output.value.combiner.groupfn.class", theClass,
++        RawComparator.class);
++  }
++
+   /** 
+    * Set the user defined {@link RawComparator} comparator for 
+    * grouping keys in the input to the reduce.
+@@ -923,7 +973,9 @@ public RawComparator getOutputValueGroupingComparator() {
+    * 
+    * @param theClass the comparator class to be used for grouping keys. 
+    *                 It should implement <code>RawComparator</code>.
+-   * @see #setOutputKeyComparatorClass(Class)                 
++   * @see #setOutputKeyComparatorClass(Class)
++   * @see {@link #setCombinerKeyGroupingComparator(Class)} for setting a
++   * comparator for the combiner.
+    */
+   public void setOutputValueGroupingComparator(
+ 		  Class<? extends RawComparator> theClass) {
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/Task.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/Task.java
+index 62253e2..7d805a3 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/Task.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/Task.java
+@@ -21,8 +21,6 @@
+ import java.io.DataInput;
+ import java.io.DataOutput;
+ import java.io.IOException;
+-import java.lang.reflect.Constructor;
+-import java.lang.reflect.InvocationTargetException;
+ import java.text.NumberFormat;
+ import java.util.HashMap;
+ import java.util.Iterator;
+@@ -62,7 +60,6 @@
+ import org.apache.hadoop.util.ResourceCalculatorPlugin;
+ import org.apache.hadoop.util.ResourceCalculatorPlugin.ProcResourceValues;
+ import org.apache.hadoop.util.StringUtils;
+-import org.apache.hadoop.fs.FSDataInputStream;
+ 
+ /** 
+  * Base class for tasks.
+@@ -1388,7 +1385,8 @@ protected OldCombinerRunner(Class<? extends Reducer<K,V,K,V>> cls,
+       combinerClass = cls;
+       keyClass = (Class<K>) job.getMapOutputKeyClass();
+       valueClass = (Class<V>) job.getMapOutputValueClass();
+-      comparator = (RawComparator<K>) job.getOutputKeyComparator();
++      comparator = (RawComparator<K>)
++          job.getCombinerKeyGroupingComparator();
+     }
+ 
+     @SuppressWarnings("unchecked")
+@@ -1435,7 +1433,7 @@ public void combine(RawKeyValueIterator kvIter,
+       this.taskId = taskId;
+       keyClass = (Class<K>) context.getMapOutputKeyClass();
+       valueClass = (Class<V>) context.getMapOutputValueClass();
+-      comparator = (RawComparator<K>) context.getSortComparator();
++      comparator = (RawComparator<K>) context.getCombinerKeyGroupingComparator();
+       this.committer = committer;
+     }
+ 
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/Job.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/Job.java
+index 466edd8..020ce2c 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/Job.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/Job.java
+@@ -24,7 +24,6 @@
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.io.RawComparator;
+-import org.apache.hadoop.mapreduce.TaskAttemptID;
+ import org.apache.hadoop.mapred.JobClient;
+ import org.apache.hadoop.mapred.JobConf;
+ import org.apache.hadoop.mapred.RunningJob;
+@@ -321,6 +320,7 @@ public void setOutputValueClass(Class<?> theClass
+    * are passed to the {@link Reducer}.
+    * @param cls the raw comparator
+    * @throws IllegalStateException if the job is submitted
++   * @see {@link #setCombinerKeyGroupingComparatorClass(Class)}
+    */
+   public void setSortComparatorClass(Class<? extends RawComparator> cls
+                                      ) throws IllegalStateException {
+@@ -330,11 +330,28 @@ public void setSortComparatorClass(Class<? extends RawComparator> cls
+ 
+   /**
+    * Define the comparator that controls which keys are grouped together
++   * for a single call to combiner,
++   * {@link Reducer#reduce(Object, Iterable,
++   * org.apache.hadoop.mapreduce.Reducer.Context)}
++   *
++   * @param cls the raw comparator to use
++   * @throws IllegalStateException if the job is submitted
++   */
++  public void setCombinerKeyGroupingComparatorClass(
++      Class<? extends RawComparator> cls) throws IllegalStateException {
++    ensureState(JobState.DEFINE);
++    conf.setCombinerKeyGroupingComparator(cls);
++  }
++
++  /**
++   * Define the comparator that controls which keys are grouped together
+    * for a single call to 
+    * {@link Reducer#reduce(Object, Iterable, 
+    *                       org.apache.hadoop.mapreduce.Reducer.Context)}
+    * @param cls the raw comparator to use
+    * @throws IllegalStateException if the job is submitted
++   * @see {@link #setCombinerKeyGroupingComparatorClass(Class)} for setting a
++   * comparator for the combiner.
+    */
+   public void setGroupingComparatorClass(Class<? extends RawComparator> cls
+                                          ) throws IllegalStateException {
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/JobContext.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/JobContext.java
+index fe3f8a6..88f5955 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/JobContext.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/JobContext.java
+@@ -217,12 +217,23 @@
+    */
+   public String getJar();
+ 
++  /**
++   * Get the user defined {@link RawComparator} comparator for
++   * grouping keys of inputs to the combiner.
++   *
++   * @return comparator set by the user for grouping values.
++   * @see Job#setCombinerKeyGroupingComparatorClass(Class) for details.
++   */
++  public RawComparator<?> getCombinerKeyGroupingComparator();
++
+   /** 
+    * Get the user defined {@link RawComparator} comparator for 
+    * grouping keys of inputs to the reduce.
+    * 
+    * @return comparator set by the user for grouping values.
+    * @see Job#setGroupingComparatorClass(Class) for details.  
++   * @see {@link #getCombinerKeyGroupingComparator()} for setting a
++   * comparator for the combiner.
+    */
+   public RawComparator<?> getGroupingComparator();
+   
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/map/WrappedMapper.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/map/WrappedMapper.java
+index ab011e5..fa317fcf 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/map/WrappedMapper.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/map/WrappedMapper.java
+@@ -163,6 +163,11 @@ public Configuration getConfiguration() {
+     }
+ 
+     @Override
++    public RawComparator<?> getCombinerKeyGroupingComparator() {
++      return mapContext.getCombinerKeyGroupingComparator();
++    }
++
++    @Override
+     public RawComparator<?> getGroupingComparator() {
+       return mapContext.getGroupingComparator();
+     }
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/reduce/WrappedReducer.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/reduce/WrappedReducer.java
+index b990b62..e0fa6ec 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/reduce/WrappedReducer.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/reduce/WrappedReducer.java
+@@ -156,6 +156,11 @@ public Configuration getConfiguration() {
+     }
+ 
+     @Override
++    public RawComparator<?> getCombinerKeyGroupingComparator() {
++      return reduceContext.getCombinerKeyGroupingComparator();
++    }
++
++    @Override
+     public RawComparator<?> getGroupingComparator() {
+       return reduceContext.getGroupingComparator();
+     }
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/task/JobContextImpl.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/task/JobContextImpl.java
+index f0637b0..1775b23 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/task/JobContextImpl.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/task/JobContextImpl.java
+@@ -257,6 +257,17 @@ public String getJar() {
+     return conf.getJar();
+   }
+ 
++  /**
++   * Get the user defined {@link RawComparator} comparator for
++   * grouping keys of inputs to the combiner.
++   *
++   * @return comparator set by the user for grouping values.
++   * @see Job#setCombinerKeyGroupingComparatorClass(Class) for details.
++   */
++  public RawComparator<?> getCombinerKeyGroupingComparator() {
++    return conf.getCombinerKeyGroupingComparator();
++  }
++
+   /** 
+    * Get the user defined {@link RawComparator} comparator for 
+    * grouping keys of inputs to the reduce.
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestOldCombinerGrouping.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestOldCombinerGrouping.java
+new file mode 100644
+index 0000000..cc8be25
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestOldCombinerGrouping.java
+@@ -0,0 +1,201 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.mapred;
++
++import junit.framework.Assert;
++import junit.framework.TestCase;
++import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.io.LongWritable;
++import org.apache.hadoop.io.RawComparator;
++import org.apache.hadoop.io.Text;
++
++import java.io.BufferedReader;
++import java.io.File;
++import java.io.FileReader;
++import java.io.FileWriter;
++import java.io.IOException;
++import java.io.PrintWriter;
++import java.util.HashSet;
++import java.util.Iterator;
++import java.util.Set;
++import java.util.UUID;
++
++public class TestOldCombinerGrouping extends TestCase {
++  private static String TEST_ROOT_DIR =
++      new File("build", UUID.randomUUID().toString()).getAbsolutePath();
++
++  public static class Map implements
++      Mapper<LongWritable, Text, Text, LongWritable> {
++    @Override
++    public void map(LongWritable key, Text value,
++        OutputCollector<Text, LongWritable> output, Reporter reporter)
++        throws IOException {
++      String v = value.toString();
++      String k = v.substring(0, v.indexOf(","));
++      v = v.substring(v.indexOf(",") + 1);
++      output.collect(new Text(k), new LongWritable(Long.parseLong(v)));
++    }
++
++    @Override
++    public void close() throws IOException {
++    }
++
++    @Override
++    public void configure(JobConf job) {
++    }
++  }
++
++  public static class Reduce implements
++      Reducer<Text, LongWritable, Text, LongWritable> {
++
++    @Override
++    public void reduce(Text key, Iterator<LongWritable> values,
++        OutputCollector<Text, LongWritable> output, Reporter reporter)
++        throws IOException {
++      LongWritable maxValue = null;
++      while (values.hasNext()) {
++        LongWritable value = values.next();
++        if (maxValue == null) {
++          maxValue = value;
++        } else if (value.compareTo(maxValue) > 0) {
++          maxValue = value;
++        }
++      }
++      output.collect(createOutputKey(key), maxValue);
++    }
++
++    @Override
++    public void close() throws IOException {
++    }
++
++    @Override
++    public void configure(JobConf job) {
++    }
++
++    protected Text createOutputKey(Text key) {
++      String k = key.toString();
++      return new Text(k.substring(0, k.indexOf("|")));
++    }
++
++  }
++
++  public static class Combiner extends Reduce {
++
++    @Override
++    protected Text createOutputKey(Text key) {
++      return key;
++    }
++
++  }
++
++  public static class GroupComparator implements RawComparator<Text> {
++    @Override
++    public int compare(byte[] bytes, int i, int i2, byte[] bytes2, int i3,
++        int i4) {
++      byte[] b1 = new byte[i2];
++      System.arraycopy(bytes, i, b1, 0, i2);
++
++      byte[] b2 = new byte[i4];
++      System.arraycopy(bytes2, i3, b2, 0, i4);
++
++      return compare(new Text(new String(b1)), new Text(new String(b2)));
++    }
++
++    @Override
++    public int compare(Text o1, Text o2) {
++      String s1 = o1.toString();
++      String s2 = o2.toString();
++      s1 = s1.substring(0, s1.indexOf("|"));
++      s2 = s2.substring(0, s2.indexOf("|"));
++      return s1.compareTo(s2);
++    }
++
++  }
++
++  public void testCombiner() throws Exception {
++    if (!new File(TEST_ROOT_DIR).mkdirs()) {
++      throw new RuntimeException("Could not create test dir: " + TEST_ROOT_DIR);
++    }
++    File in = new File(TEST_ROOT_DIR, "input");
++    if (!in.mkdirs()) {
++      throw new RuntimeException("Could not create test dir: " + in);
++    }
++    File out = new File(TEST_ROOT_DIR, "output");
++    PrintWriter pw = new PrintWriter(new FileWriter(new File(in, "data.txt")));
++    pw.println("A|a,1");
++    pw.println("A|b,2");
++    pw.println("B|a,3");
++    pw.println("B|b,4");
++    pw.println("B|c,5");
++    pw.close();
++    JobConf job = new JobConf();
++    TextInputFormat.setInputPaths(job, new Path(in.getPath()));
++    TextOutputFormat.setOutputPath(job, new Path(out.getPath()));
++    job.setMapperClass(Map.class);
++    job.setReducerClass(Reduce.class);
++    job.setInputFormat(TextInputFormat.class);
++    job.setMapOutputKeyClass(Text.class);
++    job.setMapOutputValueClass(LongWritable.class);
++    job.setOutputFormat(TextOutputFormat.class);
++    job.setOutputValueGroupingComparator(GroupComparator.class);
++
++    job.setCombinerClass(Combiner.class);
++    job.setCombinerKeyGroupingComparator(GroupComparator.class);
++    job.setInt("min.num.spills.for.combine", 0);
++
++    JobClient client = new JobClient(job);
++    RunningJob runningJob = client.submitJob(job);
++    runningJob.waitForCompletion();
++    if (runningJob.isSuccessful()) {
++      Counters counters = runningJob.getCounters();
++
++      long combinerInputRecords = counters.getGroup(
++          "org.apache.hadoop.mapreduce.TaskCounter").
++          getCounter("COMBINE_INPUT_RECORDS");
++      long combinerOutputRecords = counters.getGroup(
++          "org.apache.hadoop.mapreduce.TaskCounter").
++          getCounter("COMBINE_OUTPUT_RECORDS");
++      Assert.assertTrue(combinerInputRecords > 0);
++      Assert.assertTrue(combinerInputRecords > combinerOutputRecords);
++
++      BufferedReader br = new BufferedReader(new FileReader(
++          new File(out, "part-00000")));
++      Set<String> output = new HashSet<String>();
++      String line = br.readLine();
++      Assert.assertNotNull(line);
++      output.add(line);
++      line = br.readLine();
++      Assert.assertNotNull(line);
++      output.add(line);
++      line = br.readLine();
++      Assert.assertNull(line);
++      br.close();
++
++      Set<String> expected = new HashSet<String>();
++      expected.add("A\t2");
++      expected.add("B\t5");
++
++      Assert.assertEquals(expected, output);
++
++    } else {
++      Assert.fail("Job failed");
++    }
++  }
++
++}
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/TestNewCombinerGrouping.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/TestNewCombinerGrouping.java
+new file mode 100644
+index 0000000..1018756
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/TestNewCombinerGrouping.java
+@@ -0,0 +1,185 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.mapreduce;
++
++import junit.framework.Assert;
++import junit.framework.TestCase;
++import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.io.LongWritable;
++import org.apache.hadoop.io.RawComparator;
++import org.apache.hadoop.io.Text;
++import org.apache.hadoop.mapreduce.lib.input.TextInputFormat;
++import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
++
++import java.io.BufferedReader;
++import java.io.File;
++import java.io.FileReader;
++import java.io.FileWriter;
++import java.io.IOException;
++import java.io.PrintWriter;
++import java.util.HashSet;
++import java.util.Set;
++import java.util.UUID;
++
++public class TestNewCombinerGrouping extends TestCase {
++  private static String TEST_ROOT_DIR =
++      new File("build", UUID.randomUUID().toString()).getAbsolutePath();
++
++  public static class Map extends
++      Mapper<LongWritable, Text, Text, LongWritable> {
++
++    @Override
++    protected void map(LongWritable key, Text value,
++        Context context)
++        throws IOException, InterruptedException {
++      String v = value.toString();
++      String k = v.substring(0, v.indexOf(","));
++      v = v.substring(v.indexOf(",") + 1);
++      context.write(new Text(k), new LongWritable(Long.parseLong(v)));
++    }
++  }
++
++  public static class Reduce extends
++      Reducer<Text, LongWritable, Text, LongWritable> {
++
++    @Override
++    protected void reduce(Text key, Iterable<LongWritable> values,
++        Context context)
++        throws IOException, InterruptedException {
++      LongWritable maxValue = null;
++      for (LongWritable value : values) {
++        if (maxValue == null) {
++          maxValue = value;
++        } else if (value.compareTo(maxValue) > 0) {
++          maxValue = value;
++        }
++      }
++      context.write(createOutputKey(key), maxValue);
++    }
++
++    protected Text createOutputKey(Text key) {
++      String k = key.toString();
++      return new Text(k.substring(0, k.indexOf("|")));
++    }
++
++  }
++
++  public static class Combiner extends Reduce {
++
++    @Override
++    protected Text createOutputKey(Text key) {
++      return key;
++    }
++  }
++
++  public static class GroupComparator implements RawComparator<Text> {
++    @Override
++    public int compare(byte[] bytes, int i, int i2, byte[] bytes2, int i3,
++        int i4) {
++      byte[] b1 = new byte[i2];
++      System.arraycopy(bytes, i, b1, 0, i2);
++
++      byte[] b2 = new byte[i4];
++      System.arraycopy(bytes2, i3, b2, 0, i4);
++
++      return compare(new Text(new String(b1)), new Text(new String(b2)));
++    }
++
++    @Override
++    public int compare(Text o1, Text o2) {
++      String s1 = o1.toString();
++      String s2 = o2.toString();
++      s1 = s1.substring(0, s1.indexOf("|"));
++      s2 = s2.substring(0, s2.indexOf("|"));
++      return s1.compareTo(s2);
++    }
++
++  }
++
++  public void testCombiner() throws Exception {
++    if (!new File(TEST_ROOT_DIR).mkdirs()) {
++      throw new RuntimeException("Could not create test dir: " + TEST_ROOT_DIR);
++    }
++    File in = new File(TEST_ROOT_DIR, "input");
++    if (!in.mkdirs()) {
++      throw new RuntimeException("Could not create test dir: " + in);
++    }
++    File out = new File(TEST_ROOT_DIR, "output");
++    PrintWriter pw = new PrintWriter(new FileWriter(new File(in, "data.txt")));
++    pw.println("A|a,1");
++    pw.println("A|b,2");
++    pw.println("B|a,3");
++    pw.println("B|b,4");
++    pw.println("B|c,5");
++    pw.close();
++    Job job = new Job();
++    TextInputFormat.setInputPaths(job, new Path(in.getPath()));
++    TextOutputFormat.setOutputPath(job, new Path(out.getPath()));
++
++    job.setMapperClass(Map.class);
++    job.setReducerClass(Reduce.class);
++    job.setInputFormatClass(TextInputFormat.class);
++    job.setMapOutputKeyClass(Text.class);
++    job.setMapOutputValueClass(LongWritable.class);
++    job.setOutputFormatClass(TextOutputFormat.class);
++    job.setGroupingComparatorClass(GroupComparator.class);
++
++    job.setCombinerKeyGroupingComparatorClass(GroupComparator.class);
++    job.setCombinerClass(Combiner.class);
++    job.getConfiguration().setInt("min.num.spills.for.combine", 0);
++
++    job.submit();
++    job.waitForCompletion(false);
++    if (job.isSuccessful()) {
++      Counters counters = job.getCounters();
++
++      long combinerInputRecords = counters.findCounter(
++          "org.apache.hadoop.mapreduce.TaskCounter",
++          "COMBINE_INPUT_RECORDS").getValue();
++      long combinerOutputRecords = counters.findCounter(
++          "org.apache.hadoop.mapreduce.TaskCounter",
++          "COMBINE_OUTPUT_RECORDS").getValue();
++      Assert.assertTrue(combinerInputRecords > 0);
++      Assert.assertTrue(combinerInputRecords > combinerOutputRecords);
++
++      BufferedReader br = new BufferedReader(new FileReader(
++          new File(out, "part-r-00000")));
++      Set<String> output = new HashSet<String>();
++      String line = br.readLine();
++      Assert.assertNotNull(line);
++      output.add(line);
++      line = br.readLine();
++      Assert.assertNotNull(line);
++      output.add(line);
++      line = br.readLine();
++      Assert.assertNull(line);
++      br.close();
++
++      Set<String> expected = new HashSet<String>();
++      expected.add("A\t2");
++      expected.add("B\t5");
++
++      Assert.assertEquals(expected, output);
++
++    } else {
++      Assert.fail("Job failed");
++    }
++  }
++
++}
+-- 
+1.7.9.5
+

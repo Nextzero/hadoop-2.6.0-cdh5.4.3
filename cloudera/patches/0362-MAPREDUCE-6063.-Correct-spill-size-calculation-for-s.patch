@@ -1,0 +1,33 @@
+From e194e9fc7b97216fee473e55abc4e8ed669ad5ab Mon Sep 17 00:00:00 2001
+From: Chris Douglas <cdouglas@apache.org>
+Date: Wed, 3 Sep 2014 14:32:35 -0700
+Subject: [PATCH 362/596] MAPREDUCE-6063. Correct spill size calculation for
+ spills wrapping the circular buffer. Contributed by
+ zhihai xu.
+
+(cherry picked from commit a18424e724982d01e0191ca7db713da1d43d1e4d)
+
+Conflicts:
+	hadoop-mapreduce-project/CHANGES.txt
+
+(cherry picked from commit 3f4e80418b815563bfea88200a9c9f9a8b05479d)
+---
+ .../mapred/org/apache/hadoop/mapred/MapTask.java   |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/MapTask.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/MapTask.java
+index ae11cbe..3ba0552 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/MapTask.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/MapTask.java
+@@ -1261,7 +1261,7 @@ private void sortAndSpill() throws IOException, ClassNotFoundException,
+       //buffer + header lengths for the partitions
+       long size = (bufend >= bufstart
+           ? bufend - bufstart
+-          : (bufvoid - bufend) + bufstart) +
++          : (bufvoid - bufstart) + bufend) +
+                   partitions * APPROX_HEADER_LENGTH;
+       FSDataOutputStream out = null;
+       try {
+-- 
+1.7.9.5
+

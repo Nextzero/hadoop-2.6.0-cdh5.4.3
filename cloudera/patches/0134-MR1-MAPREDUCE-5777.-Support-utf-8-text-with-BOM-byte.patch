@@ -1,0 +1,345 @@
+From 958597aaf566368407f3619b0c16c74e8326a45f Mon Sep 17 00:00:00 2001
+From: Zhihai Xu <zxu@cloudera.com>
+Date: Thu, 19 Jun 2014 19:02:56 -0700
+Subject: [PATCH 134/596] MR1: MAPREDUCE-5777. Support utf-8 text with BOM
+ (byte order marker)
+
+(cherry picked from commit 507af07fcd86498f84e00382fc8e650cffaef6f3)
+(cherry picked from commit ccf8b6a4c5ae0108b7b83bfe20d70597debe574b)
+---
+ hadoop-mapreduce1-project/build.xml                |    1 +
+ .../org/apache/hadoop/mapred/LineRecordReader.java |   43 ++++++++++++++-
+ .../mapreduce/lib/input/LineRecordReader.java      |   45 ++++++++++++++--
+ .../apache/hadoop/mapred/TestLineRecordReader.java |   52 ++++++++++++++++++
+ .../src/test/org/apache/hadoop/mapred/testBOM.txt  |    2 +
+ .../mapreduce/lib/input/TestLineRecordReader.java  |   55 ++++++++++++++++++++
+ 6 files changed, 191 insertions(+), 7 deletions(-)
+ create mode 100644 hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/testBOM.txt
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index 7e1db05..b64b75d 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -782,6 +782,7 @@
+     <delete dir="${test.debug.data}"/>
+     <mkdir dir="${test.debug.data}"/>
+     <copy file="${test.src.dir}/org/apache/hadoop/mapred/testscript.txt" todir="${test.debug.data}"/>
++    <copy file="${test.src.dir}/org/apache/hadoop/mapred/testBOM.txt" todir="${test.cache.data}"/>
+     <copy file="${test.src.dir}/org/apache/hadoop/mapred/test.txt" todir="${test.cache.data}"/>
+     <copy file="${test.src.dir}/org/apache/hadoop/mapred/test.jar" todir="${test.cache.data}"/>
+     <copy file="${test.src.dir}/org/apache/hadoop/mapred/test.zip" todir="${test.cache.data}"/>
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LineRecordReader.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LineRecordReader.java
+index d4d8e7d..607d0fe 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LineRecordReader.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LineRecordReader.java
+@@ -150,6 +150,39 @@ private long getFilePosition() throws IOException {
+     return retVal;
+   }
+ 
++  private int skipUtfByteOrderMark(Text value) throws IOException {
++    // Strip BOM(Byte Order Mark)
++    // Text only support UTF-8, we only need to check UTF-8 BOM
++    // (0xEF,0xBB,0xBF) at the start of the text stream.
++    int newMaxLineLength = (int) Math.min(3L + (long) maxLineLength,
++        Integer.MAX_VALUE);
++    int newSize = in.readLine(value, newMaxLineLength, maxBytesToConsume(pos));
++    // Even we read 3 extra bytes for the first line,
++    // we won't alter existing behavior (no backwards incompat issue).
++    // Because the newSize is less than maxLineLength and
++    // the number of bytes copied to Text is always no more than newSize.
++    // If the return size from readLine is not less than maxLineLength,
++    // we will discard the current line and read the next line.
++    pos += newSize;
++    int textLength = value.getLength();
++    byte[] textBytes = value.getBytes();
++    if ((textLength >= 3) && (textBytes[0] == (byte)0xEF) &&
++        (textBytes[1] == (byte)0xBB) && (textBytes[2] == (byte)0xBF)) {
++      // find UTF-8 BOM, strip it.
++      LOG.info("Found UTF-8 BOM and skipped it");
++      textLength -= 3;
++      newSize -= 3;
++      if (textLength > 0) {
++        // It may work to use the same buffer and not do the copyBytes
++        textBytes = value.copyBytes();
++        value.set(textBytes, 3, textLength);
++      } else {
++        value.clear();
++      }
++    }
++    return newSize;
++  }
++
+   public LineRecordReader(InputStream in, long offset, long endOffset,
+                           int maxLineLength) {
+     this(in, offset, endOffset, maxLineLength, null);
+@@ -200,11 +233,17 @@ public synchronized boolean next(LongWritable key, Text value)
+     while (getFilePosition() <= end) {
+       key.set(pos);
+ 
+-      int newSize = in.readLine(value, maxLineLength, maxBytesToConsume(pos));
++      int newSize = 0;
++      if (pos == 0) {
++        newSize = skipUtfByteOrderMark(value);
++      } else {
++        newSize = in.readLine(value, maxLineLength, maxBytesToConsume(pos));
++        pos += newSize;
++      }
++
+       if (newSize == 0) {
+         return false;
+       }
+-      pos += newSize;
+       if (newSize < maxLineLength) {
+         return true;
+       }
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/input/LineRecordReader.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/input/LineRecordReader.java
+index 67e3bcd..c50e1cd 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/input/LineRecordReader.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/input/LineRecordReader.java
+@@ -132,6 +132,39 @@ private long getFilePosition() throws IOException {
+     return retVal;
+   }
+ 
++  private int skipUtfByteOrderMark() throws IOException {
++    // Strip BOM(Byte Order Mark)
++    // Text only support UTF-8, we only need to check UTF-8 BOM
++    // (0xEF,0xBB,0xBF) at the start of the text stream.
++    int newMaxLineLength = (int) Math.min(3L + (long) maxLineLength,
++        Integer.MAX_VALUE);
++    int newSize = in.readLine(value, newMaxLineLength, maxBytesToConsume(pos));
++    // Even we read 3 extra bytes for the first line,
++    // we won't alter existing behavior (no backwards incompat issue).
++    // Because the newSize is less than maxLineLength and
++    // the number of bytes copied to Text is always no more than newSize.
++    // If the return size from readLine is not less than maxLineLength,
++    // we will discard the current line and read the next line.
++    pos += newSize;
++    int textLength = value.getLength();
++    byte[] textBytes = value.getBytes();
++    if ((textLength >= 3) && (textBytes[0] == (byte)0xEF) &&
++        (textBytes[1] == (byte)0xBB) && (textBytes[2] == (byte)0xBF)) {
++      // find UTF-8 BOM, strip it.
++      LOG.info("Found UTF-8 BOM and skipped it");
++      textLength -= 3;
++      newSize -= 3;
++      if (textLength > 0) {
++        // It may work to use the same buffer and not do the copyBytes
++        textBytes = value.copyBytes();
++        value.set(textBytes, 3, textLength);
++      } else {
++        value.clear();
++      }
++    }
++    return newSize;
++  }
++
+   public boolean nextKeyValue() throws IOException {
+     if (key == null) {
+       key = new LongWritable();
+@@ -144,12 +177,14 @@ public boolean nextKeyValue() throws IOException {
+     // We always read one extra line, which lies outside the upper
+     // split limit i.e. (end - 1)
+     while (getFilePosition() <= end) {
+-      newSize = in.readLine(value, maxLineLength, maxBytesToConsume(pos));
+-      if (newSize == 0) {
+-        break;
++      if (pos == 0) {
++        newSize = skipUtfByteOrderMark();
++      } else {
++        newSize = in.readLine(value, maxLineLength, maxBytesToConsume(pos));
++        pos += newSize;
+       }
+-      pos += newSize;
+-      if (newSize < maxLineLength) {
++
++      if ((newSize == 0) || (newSize < maxLineLength)) {
+         break;
+       }
+ 
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestLineRecordReader.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestLineRecordReader.java
+index 472da68..cddf126 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestLineRecordReader.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestLineRecordReader.java
+@@ -17,6 +17,7 @@
+ 
+ package org.apache.hadoop.mapred;
+ 
++import java.io.File;
+ import java.io.IOException;
+ import java.io.InputStreamReader;
+ import java.io.OutputStreamWriter;
+@@ -25,9 +26,13 @@
+ 
+ import junit.framework.TestCase;
+ 
++import org.apache.commons.logging.LogFactory;
++import org.apache.commons.logging.Log;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.io.LongWritable;
++import org.apache.hadoop.io.Text;
+ import org.apache.hadoop.mapred.Mapper;
+ import org.apache.hadoop.mapred.Reducer;
+ import org.apache.hadoop.mapred.lib.IdentityMapper;
+@@ -36,6 +41,8 @@
+ import org.junit.Test;
+ 
+ public class TestLineRecordReader extends TestCase {
++  private static final Log LOG =
++      LogFactory.getLog(TestLineRecordReader.class.getName());
+ 
+   private static Path workDir = new Path(new Path(System.getProperty(
+       "test.build.data", "."), "data"), "TestTextInputFormat");
+@@ -136,4 +143,49 @@ public void testDefaultRecordDelimiters() throws IOException,
+     this.assertEquals(expected, readOutputFile(conf));
+   }
+ 
++  /**
++   * Test whether BOM is skipped
++   *
++   * @throws IOException
++   */
++  @Test
++  public void testStripBOM() throws IOException {
++    LOG.info("testStripBOM");
++    // the test data contains a BOM at the start of the file
++    // confirm the BOM is skipped by LineRecordReader
++    Path localCachePath = new Path(System.getProperty("test.cache.data"));
++    Path txtPath = new Path(localCachePath, new Path("testBOM.txt"));
++    String UTF8_BOM = "\uFEFF";
++    LOG.info(txtPath.toString());
++    File testFile = new File(txtPath.toString());
++    long testFileSize = testFile.length();
++    Configuration conf = new Configuration();
++    conf.setInt("mapred.linerecordreader.maxlength", Integer.MAX_VALUE);
++
++    // read the data and check whether BOM is skipped
++    FileSplit split = new FileSplit(txtPath, 0, testFileSize,
++        (String[])null);
++    LineRecordReader reader = new LineRecordReader(conf, split);
++    LongWritable key = new LongWritable();
++    Text value = new Text();
++    int numRecords = 0;
++    boolean firstLine = true;
++    boolean skipBOM = true;
++    String prevVal = null;
++    while (reader.next(key, value)) {
++      if (firstLine) {
++        firstLine = false;
++        if (value.toString().startsWith(UTF8_BOM)) {
++          skipBOM = false;
++        }
++      } else {
++        assertEquals("not same text", prevVal, value.toString());
++      }
++      prevVal = new String(value.toString());
++      ++numRecords;
++    }
++    reader.close();
++
++    assertTrue("BOM is not skipped", skipBOM);
++  }
+ }
+\ No newline at end of file
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/testBOM.txt b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/testBOM.txt
+new file mode 100644
+index 0000000..561f454
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/testBOM.txt
+@@ -0,0 +1,2 @@
++﻿BOM(Byte Order Mark) test file
++BOM(Byte Order Mark) test file
+\ No newline at end of file
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/lib/input/TestLineRecordReader.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/lib/input/TestLineRecordReader.java
+index c59577f..33bc99c 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/lib/input/TestLineRecordReader.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/lib/input/TestLineRecordReader.java
+@@ -18,6 +18,7 @@
+ 
+ package org.apache.hadoop.mapreduce.lib.input;
+ 
++import java.io.File;
+ import java.io.IOException;
+ import java.io.InputStreamReader;
+ import java.io.OutputStreamWriter;
+@@ -26,6 +27,8 @@
+ 
+ import junit.framework.TestCase;
+ 
++import org.apache.commons.logging.LogFactory;
++import org.apache.commons.logging.Log;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+@@ -33,10 +36,15 @@
+ import org.apache.hadoop.mapreduce.Mapper;
+ import org.apache.hadoop.mapreduce.Reducer;
+ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
++import org.apache.hadoop.mapreduce.TaskAttemptContext;
++import org.apache.hadoop.mapreduce.TaskAttemptID;
++import org.apache.hadoop.mapreduce.task.TaskAttemptContextImpl;
+ import org.apache.tools.ant.util.FileUtils;
+ import org.junit.Test;
+ 
+ public class TestLineRecordReader extends TestCase {
++  private static final Log LOG =
++      LogFactory.getLog(TestLineRecordReader.class.getName());
+ 
+   private static Path workDir = new Path(new Path(System.getProperty(
+       "test.build.data", "."), "data"), "TestTextInputFormat");
+@@ -137,4 +145,51 @@ public void testDefaultRecordDelimiters() throws IOException,
+     this.assertEquals(expected, readOutputFile(conf));
+   }
+ 
++  /**
++   * Test whether BOM is skipped
++   *
++   * @throws IOException
++   */
++  @Test
++  public void testStripBOM() throws IOException {
++    LOG.info("testStripBOM");
++    // the test data contains a BOM at the start of the file
++    // confirm the BOM is skipped by LineRecordReader
++    String UTF8_BOM = "\uFEFF";
++    Path localCachePath = new Path(System.getProperty("test.cache.data"));
++    Path txtPath = new Path(localCachePath, new Path("testBOM.txt"));
++    LOG.info(txtPath.toString());
++    File testFile = new File(txtPath.toString());
++    long testFileSize = testFile.length();
++    Configuration conf = new Configuration();
++    conf.setInt("mapred.linerecordreader.maxlength", Integer.MAX_VALUE);
++    TaskAttemptContext context = new TaskAttemptContextImpl(conf,
++        new TaskAttemptID());
++
++    // read the data and check whether BOM is skipped
++    FileSplit split = new FileSplit(txtPath, 0, testFileSize,
++        (String[])null);
++    LineRecordReader reader = new LineRecordReader();
++    reader.initialize(split, context);
++    int numRecords = 0;
++    boolean firstLine = true;
++    boolean skipBOM = true;
++    String prevVal = null;
++    while (reader.nextKeyValue()) {
++      if (firstLine) {
++        firstLine = false;
++        if (reader.getCurrentValue().toString().startsWith(UTF8_BOM)) {
++          skipBOM = false;
++        }
++      } else {
++        assertEquals("not same text", prevVal,
++            reader.getCurrentValue().toString());
++      }
++      prevVal = new String(reader.getCurrentValue().toString());
++      ++numRecords;
++    }
++    reader.close();
++
++    assertTrue("BOM is not skipped", skipBOM);
++  }
+ }
+-- 
+1.7.9.5
+

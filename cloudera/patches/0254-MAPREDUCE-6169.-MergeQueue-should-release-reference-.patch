@@ -1,0 +1,65 @@
+From 0713c371dfaf4ddcb13d0da2440e44143d9c0e24 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Thu, 20 Nov 2014 15:36:57 -0800
+Subject: [PATCH 254/596] MAPREDUCE-6169. MergeQueue should release reference
+ to the current item from key and value at the end
+ of the iteration to save memory. (Zhihai Xu via
+ kasha)
+
+(cherry picked from commit 90194ca1cbd695d48c3705121c2ac9a8554578a2)
+(cherry picked from commit 3a4211ec2ca28403dd985d01c7842036b74ee04c)
+
+Conflicts:
+	hadoop-mapreduce-project/CHANGES.txt
+---
+ .../main/java/org/apache/hadoop/mapred/Merger.java |   11 ++++++++++-
+ .../hadoop/mapreduce/task/reduce/TestMerger.java   |    2 ++
+ 2 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Merger.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Merger.java
+index b44e742..fffa92a 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Merger.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Merger.java
+@@ -528,9 +528,17 @@ private void adjustPriorityQueue(Segment<K, V> reader) throws IOException{
+       }
+     }
+ 
++    private void resetKeyValue() {
++      key = null;
++      value.reset(new byte[] {}, 0);
++      diskIFileValue.reset(new byte[] {}, 0);
++    }
++
+     public boolean next() throws IOException {
+-      if (size() == 0)
++      if (size() == 0) {
++        resetKeyValue();
+         return false;
++      }
+ 
+       if (minSegment != null) {
+         //minSegment is non-null for all invocations of next except the first
+@@ -539,6 +547,7 @@ public boolean next() throws IOException {
+         adjustPriorityQueue(minSegment);
+         if (size() == 0) {
+           minSegment = null;
++          resetKeyValue();
+           return false;
+         }
+       }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapreduce/task/reduce/TestMerger.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapreduce/task/reduce/TestMerger.java
+index 651dd38..6e3bedf 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapreduce/task/reduce/TestMerger.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapreduce/task/reduce/TestMerger.java
+@@ -294,6 +294,8 @@ public void testMergeShouldReturnProperProgress(
+     // Now there should be no more input
+     Assert.assertFalse(mergeQueue.next());
+     Assert.assertEquals(1.0f, mergeQueue.getProgress().get(), epsilon);
++    Assert.assertTrue(mergeQueue.getKey() == null);
++    Assert.assertEquals(0, mergeQueue.getValue().getData().length);
+   }
+ 
+   private Progressable getReporter() {
+-- 
+1.7.9.5
+

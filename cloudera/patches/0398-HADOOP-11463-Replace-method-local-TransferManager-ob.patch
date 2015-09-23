@@ -1,0 +1,91 @@
+From b83be367fad9280e47991f93d7f6203a162eba79 Mon Sep 17 00:00:00 2001
+From: Steve Loughran <stevel@apache.org>
+Date: Thu, 5 Feb 2015 12:19:49 +0000
+Subject: [PATCH 398/596] HADOOP-11463 Replace method-local TransferManager
+ object with S3AFileSystem#transfers. (Ted Yu via
+ stevel) (cherry picked from commit
+ 4cd9657b7153b571022495629acfb3fa4ec51b14)
+
+---
+ .../org/apache/hadoop/fs/s3a/S3AFileSystem.java    |   30 ++++++++------------
+ 1 file changed, 12 insertions(+), 18 deletions(-)
+
+diff --git a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+index 0b22e17..925a23a 100644
+--- a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
++++ b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+@@ -240,7 +240,6 @@ public void initialize(URI name, Configuration conf) throws IOException {
+       Date purgeBefore = new Date(new Date().getTime() - purgeExistingMultipartAge*1000);
+ 
+       transfers.abortMultipartUploads(bucket, purgeBefore);
+-      transfers.shutdownNow(false);
+     }
+ 
+     serverSideEncryptionAlgorithm = conf.get(SERVER_SIDE_ENCRYPTION_ALGORITHM);
+@@ -939,13 +938,6 @@ public void copyFromLocalFile(boolean delSrc, boolean overwrite, Path src,
+     LocalFileSystem local = getLocal(getConf());
+     File srcfile = local.pathToFile(src);
+ 
+-    TransferManagerConfiguration transferConfiguration = new TransferManagerConfiguration();
+-    transferConfiguration.setMinimumUploadPartSize(partSize);
+-    transferConfiguration.setMultipartUploadThreshold(partSizeThreshold);
+-
+-    TransferManager transfers = new TransferManager(s3);
+-    transfers.setConfiguration(transferConfiguration);
+-
+     final ObjectMetadata om = new ObjectMetadata();
+     if (StringUtils.isNotBlank(serverSideEncryptionAlgorithm)) {
+       om.setServerSideEncryption(serverSideEncryptionAlgorithm);
+@@ -971,8 +963,6 @@ public void progressChanged(ProgressEvent progressEvent) {
+       statistics.incrementWriteOps(1);
+     } catch (InterruptedException e) {
+       throw new IOException("Got interrupted, cancelling");
+-    } finally {
+-      transfers.shutdownNow(false);
+     }
+ 
+     // This will delete unnecessary fake parent directories
+@@ -983,6 +973,18 @@ public void progressChanged(ProgressEvent progressEvent) {
+     }
+   }
+ 
++  @Override
++  public void close() throws IOException {
++    try {
++      super.close();
++    } finally {
++      if (transfers != null) {
++        transfers.shutdownNow(true);
++        transfers = null;
++      }
++    }
++  }
++
+   /**
+   * Override getCononicalServiceName because we don't support token in S3A
+   */
+@@ -997,12 +999,6 @@ private void copyFile(String srcKey, String dstKey) throws IOException {
+       LOG.debug("copyFile " + srcKey + " -> " + dstKey);
+     }
+ 
+-    TransferManagerConfiguration transferConfiguration = new TransferManagerConfiguration();
+-    transferConfiguration.setMultipartCopyPartSize(partSize);
+-
+-    TransferManager transfers = new TransferManager(s3);
+-    transfers.setConfiguration(transferConfiguration);
+-
+     ObjectMetadata srcom = s3.getObjectMetadata(bucket, srcKey);
+     final ObjectMetadata dstom = srcom.clone();
+     if (StringUtils.isNotBlank(serverSideEncryptionAlgorithm)) {
+@@ -1029,8 +1025,6 @@ public void progressChanged(ProgressEvent progressEvent) {
+       statistics.incrementWriteOps(1);
+     } catch (InterruptedException e) {
+       throw new IOException("Got interrupted, cancelling");
+-    } finally {
+-      transfers.shutdownNow(false);
+     }
+   }
+ 
+-- 
+1.7.9.5
+

@@ -1,0 +1,78 @@
+From 1435fca37e6150f0cd48bc7b83b9d6d76e5ec8be Mon Sep 17 00:00:00 2001
+From: Jian He <jianhe@apache.org>
+Date: Wed, 28 Jan 2015 15:23:13 -0800
+Subject: [PATCH 480/596] YARN-3103. AMRMClientImpl does not update AMRM token
+ properly. Contributed by Jason Lowe (cherry picked
+ from commit
+ 6d2bdbd7dab179dfb4f19bb41809e97f1db88c6b)
+
+(cherry picked from commit 12522fd9cbd8da8c040a5b7bb71fcdaa256daf89)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../yarn/client/api/impl/AMRMClientImpl.java       |    8 ++++----
+ .../yarn/client/api/impl/TestAMRMClient.java       |   14 +++++++++++---
+ 2 files changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/main/java/org/apache/hadoop/yarn/client/api/impl/AMRMClientImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/main/java/org/apache/hadoop/yarn/client/api/impl/AMRMClientImpl.java
+index 071c1ee..2fb9ebb 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/main/java/org/apache/hadoop/yarn/client/api/impl/AMRMClientImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/main/java/org/apache/hadoop/yarn/client/api/impl/AMRMClientImpl.java
+@@ -756,11 +756,11 @@ private void updateAMRMToken(Token token) throws IOException {
+         new org.apache.hadoop.security.token.Token<AMRMTokenIdentifier>(token
+           .getIdentifier().array(), token.getPassword().array(), new Text(
+           token.getKind()), new Text(token.getService()));
+-    amrmToken.setService(ClientRMProxy.getAMRMTokenService(getConfig()));
++    // Preserve the token service sent by the RM when adding the token
++    // to ensure we replace the previous token setup by the RM.
++    // Afterwards we can update the service address for the RPC layer.
+     UserGroupInformation currentUGI = UserGroupInformation.getCurrentUser();
+-    if (UserGroupInformation.isSecurityEnabled()) {
+-      currentUGI = UserGroupInformation.getLoginUser();
+-    }
+     currentUGI.addToken(amrmToken);
++    amrmToken.setService(ClientRMProxy.getAMRMTokenService(getConfig()));
+   }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/TestAMRMClient.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/TestAMRMClient.java
+index 789fdfa..85dd6a1 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/TestAMRMClient.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-client/src/test/java/org/apache/hadoop/yarn/client/api/impl/TestAMRMClient.java
+@@ -199,8 +199,11 @@ public void startApp() throws Exception {
+     // of testing.
+     UserGroupInformation.setLoginUser(UserGroupInformation
+       .createRemoteUser(UserGroupInformation.getCurrentUser().getUserName()));
+-    appAttempt.getAMRMToken().setService(ClientRMProxy.getAMRMTokenService(conf));
++
++    // emulate RM setup of AMRM token in credentials by adding the token
++    // *before* setting the token service
+     UserGroupInformation.getCurrentUser().addToken(appAttempt.getAMRMToken());
++    appAttempt.getAMRMToken().setService(ClientRMProxy.getAMRMTokenService(conf));
+   }
+   
+   @After
+@@ -994,13 +997,18 @@ public ApplicationMasterProtocol run() {
+         UserGroupInformation.getCurrentUser().getCredentials();
+     Iterator<org.apache.hadoop.security.token.Token<?>> iter =
+         credentials.getAllTokens().iterator();
++    org.apache.hadoop.security.token.Token<AMRMTokenIdentifier> result = null;
+     while (iter.hasNext()) {
+       org.apache.hadoop.security.token.Token<?> token = iter.next();
+       if (token.getKind().equals(AMRMTokenIdentifier.KIND_NAME)) {
+-        return (org.apache.hadoop.security.token.Token<AMRMTokenIdentifier>)
++        if (result != null) {
++          Assert.fail("credentials has more than one AMRM token."
++              + " token1: " + result + " token2: " + token);
++        }
++        result = (org.apache.hadoop.security.token.Token<AMRMTokenIdentifier>)
+             token;
+       }
+     }
+-    return null;
++    return result;
+   }
+ }
+-- 
+1.7.9.5
+

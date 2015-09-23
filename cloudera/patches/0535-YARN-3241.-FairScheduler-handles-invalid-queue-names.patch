@@ -1,0 +1,296 @@
+From 86e01393a160758d0d7b799ce3c005aab3b09859 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Mon, 23 Mar 2015 13:22:03 -0700
+Subject: [PATCH 535/596] YARN-3241. FairScheduler handles invalid queue names
+ inconsistently. (Zhihai Xu via kasha)
+
+(cherry picked from commit 2bc097cd14692e6ceb06bff959f28531534eb307)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestAllocationFileLoaderService.java
+---
+ .../fair/AllocationFileLoaderService.java          |    8 +-
+ .../scheduler/fair/FairScheduler.java              |    2 +
+ .../scheduler/fair/InvalidQueueNameException.java  |   39 ++++++++++
+ .../scheduler/fair/QueueManager.java               |   16 ++++
+ .../fair/TestAllocationFileLoaderService.java      |   26 ++++++-
+ .../scheduler/fair/TestFairScheduler.java          |   78 ++++++++++++++++++++
+ .../scheduler/fair/TestQueueManager.java           |   13 +++-
+ 7 files changed, 179 insertions(+), 3 deletions(-)
+ create mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/InvalidQueueNameException.java
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/AllocationFileLoaderService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/AllocationFileLoaderService.java
+index e0e23e0..0854b85 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/AllocationFileLoaderService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/AllocationFileLoaderService.java
+@@ -395,13 +395,19 @@ private void loadQueue(String parentName, Element element,
+       Map<String, Map<QueueACL, AccessControlList>> queueAcls, 
+       Map<FSQueueType, Set<String>> configuredQueues) 
+       throws AllocationConfigurationException {
+-    String queueName = element.getAttribute("name");
++    String queueName = element.getAttribute("name").trim();
+ 
+     if (queueName.contains(".")) {
+       throw new AllocationConfigurationException("Bad fair scheduler config "
+           + "file: queue name (" + queueName + ") shouldn't contain period.");
+     }
+ 
++    if (queueName.isEmpty()) {
++      throw new AllocationConfigurationException("Bad fair scheduler config "
++          + "file: queue name shouldn't be empty or "
++          + "consist only of whitespace.");
++    }
++
+     if (parentName != null) {
+       queueName = parentName + "." + queueName;
+     }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
+index b814e82..20f4305 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairScheduler.java
+@@ -695,6 +695,8 @@ FSLeafQueue assignToQueue(RMApp rmApp, String queueName, String user) {
+           appRejectMsg = queueName + " is not a leaf queue";
+         }
+       }
++    } catch (InvalidQueueNameException qne) {
++      appRejectMsg = qne.getMessage();
+     } catch (IOException ioe) {
+       appRejectMsg = "Error assigning app to queue " + queueName;
+     }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/InvalidQueueNameException.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/InvalidQueueNameException.java
+new file mode 100644
+index 0000000..fc5ba16
+--- /dev/null
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/InvalidQueueNameException.java
+@@ -0,0 +1,39 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair;
++
++import org.apache.hadoop.classification.InterfaceAudience.Private;
++import org.apache.hadoop.classification.InterfaceStability.Unstable;
++
++/**
++ * Thrown when Queue Name is malformed.
++ */
++@Private
++@Unstable
++public class InvalidQueueNameException extends IllegalArgumentException {
++  private static final long serialVersionUID = -7306320927804540011L;
++
++  public InvalidQueueNameException(String message) {
++    super(message);
++  }
++
++  public InvalidQueueNameException(String message, Throwable t) {
++    super(message, t);
++  }
++}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/QueueManager.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/QueueManager.java
+index 0e625d7..24f67e4 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/QueueManager.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/QueueManager.java
+@@ -36,6 +36,7 @@
+ import org.apache.hadoop.yarn.conf.YarnConfiguration;
+ import org.xml.sax.SAXException;
+ 
++import com.google.common.annotations.VisibleForTesting;
+ /**
+  * Maintains a list of queues as well as scheduling parameters for each queue,
+  * such as guaranteed share allocations, from the fair scheduler config file.
+@@ -144,7 +145,13 @@ private FSQueue createQueue(String name, FSQueueType queueType) {
+ 
+     // Move up the queue tree until we reach one that exists.
+     while (sepIndex != -1) {
++      int prevSepIndex = sepIndex;
+       sepIndex = name.lastIndexOf('.', sepIndex-1);
++      String node = name.substring(sepIndex+1, prevSepIndex);
++      if (!isQueueNameValid(node)) {
++        throw new InvalidQueueNameException("Illegal node name at offset " +
++            (sepIndex+1) + " for queue name " + name);
++      }
+       FSQueue queue;
+       String curName = null;
+       curName = name.substring(0, sepIndex);
+@@ -390,4 +397,13 @@ public void updateAllocationConfiguration(AllocationConfiguration queueConf) {
+     // recursively
+     rootQueue.updatePreemptionVariables();
+   }
++
++  /**
++   * Check whether queue name is valid,
++   * return true if it is valid, otherwise return false.
++   */
++  @VisibleForTesting
++  boolean isQueueNameValid(String node) {
++    return !node.isEmpty() && node.equals(node.trim());
++  }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestAllocationFileLoaderService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestAllocationFileLoaderService.java
+index 9a66a94..42c288d 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestAllocationFileLoaderService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestAllocationFileLoaderService.java
+@@ -549,7 +549,31 @@ public void testQueueNameContainingPeriods() throws Exception {
+     allocLoader.setReloadListener(confHolder);
+     allocLoader.reloadAllocations();
+   }
+-  
++
++  /**
++   * Verify that you can't have the queue name with whitespace only in the
++   * allocations file.
++   */
++  @Test (expected = AllocationConfigurationException.class)
++  public void testQueueNameContainingOnlyWhitespace() throws Exception {
++    Configuration conf = new Configuration();
++    conf.set(FairSchedulerConfiguration.ALLOCATION_FILE, ALLOC_FILE);
++
++    PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
++    out.println("<?xml version=\"1.0\"?>");
++    out.println("<allocations>");
++    out.println("<queue name=\"      \">");
++    out.println("</queue>");
++    out.println("</allocations>");
++    out.close();
++
++    AllocationFileLoaderService allocLoader = new AllocationFileLoaderService();
++    allocLoader.init(conf);
++    ReloadListener confHolder = new ReloadListener();
++    allocLoader.setReloadListener(confHolder);
++    allocLoader.reloadAllocations();
++  }
++
+   private class ReloadListener implements AllocationFileLoaderService.Listener {
+     public AllocationConfiguration allocConf;
+     
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java
+index 854ba77..81deea3 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairScheduler.java
+@@ -4431,4 +4431,82 @@ public void testPerfMetricsInited() {
+     assertEquals("Incorrect number of perf metrics", 1,
+         collector.getRecords().size());
+   }
++
++  @Test
++  public void testQueueNameWithTrailingSpace() throws Exception {
++    scheduler.init(conf);
++    scheduler.start();
++    scheduler.reinitialize(conf, resourceManager.getRMContext());
++
++    // only default queue
++    assertEquals(1, scheduler.getQueueManager().getLeafQueues().size());
++
++    // submit app with queue name "A"
++    ApplicationAttemptId appAttemptId1 = createAppAttemptId(1, 1);
++    AppAddedSchedulerEvent appAddedEvent1 = new AppAddedSchedulerEvent(
++        appAttemptId1.getApplicationId(), "A", "user1");
++    scheduler.handle(appAddedEvent1);
++    // submission accepted
++    assertEquals(2, scheduler.getQueueManager().getLeafQueues().size());
++    assertNotNull(scheduler.getSchedulerApplications().get(appAttemptId1.
++        getApplicationId()));
++
++    AppAttemptAddedSchedulerEvent attempAddedEvent =
++        new AppAttemptAddedSchedulerEvent(appAttemptId1, false);
++    scheduler.handle(attempAddedEvent);
++    // That queue should have one app
++    assertEquals(1, scheduler.getQueueManager().getLeafQueue("A", true)
++        .getNumRunnableApps());
++    assertNotNull(scheduler.getSchedulerApp(appAttemptId1));
++
++    // submit app with queue name "A "
++    ApplicationAttemptId appAttemptId2 = createAppAttemptId(2, 1);
++    AppAddedSchedulerEvent appAddedEvent2 = new AppAddedSchedulerEvent(
++        appAttemptId2.getApplicationId(), "A ", "user1");
++    scheduler.handle(appAddedEvent2);
++    // submission rejected
++    assertEquals(2, scheduler.getQueueManager().getLeafQueues().size());
++    assertNull(scheduler.getSchedulerApplications().get(appAttemptId2.
++        getApplicationId()));
++    assertNull(scheduler.getSchedulerApp(appAttemptId2));
++
++    // submit app with queue name "B.C"
++    ApplicationAttemptId appAttemptId3 = createAppAttemptId(3, 1);
++    AppAddedSchedulerEvent appAddedEvent3 = new AppAddedSchedulerEvent(
++        appAttemptId3.getApplicationId(), "B.C", "user1");
++    scheduler.handle(appAddedEvent3);
++    // submission accepted
++    assertEquals(3, scheduler.getQueueManager().getLeafQueues().size());
++    assertNotNull(scheduler.getSchedulerApplications().get(appAttemptId3.
++        getApplicationId()));
++
++    attempAddedEvent =
++        new AppAttemptAddedSchedulerEvent(appAttemptId3, false);
++    scheduler.handle(attempAddedEvent);
++    // That queue should have one app
++    assertEquals(1, scheduler.getQueueManager().getLeafQueue("B.C", true)
++        .getNumRunnableApps());
++    assertNotNull(scheduler.getSchedulerApp(appAttemptId3));
++  }
++
++  @Test
++  public void testEmptyQueueNameInConfigFile() throws IOException {
++    conf.set(FairSchedulerConfiguration.ALLOCATION_FILE, ALLOC_FILE);
++    // set empty queue name
++    PrintWriter out = new PrintWriter(new FileWriter(ALLOC_FILE));
++    out.println("<?xml version=\"1.0\"?>");
++    out.println("<allocations>");
++    out.println("<queue name=\"\">");
++    out.println("</queue>");
++    out.println("</allocations>");
++    out.close();
++    try {
++      scheduler.init(conf);
++      Assert.fail("scheduler init should fail because" +
++          " empty queue name.");
++    } catch (Exception e) {
++      Assert.assertTrue(e.getMessage().contains(
++          "Failed to initialize FairScheduler"));
++    }
++  }
+ }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestQueueManager.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestQueueManager.java
+index ef0ec7e..b3ed542 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestQueueManager.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestQueueManager.java
+@@ -123,7 +123,18 @@ public void testReloadTurnsLeafToParentWithNoLeaf() {
+     assertTrue(queueManager.getParentQueue("root.queue1", false)
+         .getChildQueues().isEmpty());
+   }
+-  
++
++  @Test
++  public void testCheckQueueNodeName() {
++    assertFalse(queueManager.isQueueNameValid(""));
++    assertFalse(queueManager.isQueueNameValid("  "));
++    assertFalse(queueManager.isQueueNameValid(" a"));
++    assertFalse(queueManager.isQueueNameValid("a "));
++    assertFalse(queueManager.isQueueNameValid(" a "));
++    assertTrue(queueManager.isQueueNameValid("a b"));
++    assertTrue(queueManager.isQueueNameValid("a"));
++  }
++
+   private void updateConfiguredLeafQueues(QueueManager queueMgr, String... confLeafQueues) {
+     AllocationConfiguration allocConf = new AllocationConfiguration(conf);
+     allocConf.configuredQueues.get(FSQueueType.LEAF).addAll(Sets.newHashSet(confLeafQueues));
+-- 
+1.7.9.5
+

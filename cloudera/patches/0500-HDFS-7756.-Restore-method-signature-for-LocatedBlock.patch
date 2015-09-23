@@ -1,0 +1,208 @@
+From 6b48f09850f2804a4d9ac17a7daadf9355fe9b58 Mon Sep 17 00:00:00 2001
+From: yliu <yliu@apache.org>
+Date: Tue, 10 Feb 2015 02:00:32 +0800
+Subject: [PATCH 500/596] HDFS-7756. Restore method signature for
+ LocatedBlock#getLocations(). (Ted Yu via yliu)
+
+(cherry picked from commit cc0668ebe67078878d51d8158ac948383a3e351e)
+(cherry picked from commit f268d40ce4c3f47a989e95b99090a166761c66b8)
+---
+ .../hdfs/protocol/DatanodeInfoWithStorage.java     |   63 ++++++++++++++++++++
+ .../apache/hadoop/hdfs/protocol/LocatedBlock.java  |    4 +-
+ .../server/protocol/DatanodeInfoWithStorage.java   |   59 ------------------
+ .../blockmanagement/TestDatanodeManager.java       |    8 +--
+ 4 files changed, 69 insertions(+), 65 deletions(-)
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/DatanodeInfoWithStorage.java
+ delete mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/protocol/DatanodeInfoWithStorage.java
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/DatanodeInfoWithStorage.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/DatanodeInfoWithStorage.java
+new file mode 100644
+index 0000000..db2c2e7
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/DatanodeInfoWithStorage.java
+@@ -0,0 +1,63 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.protocol;
++
++import org.apache.hadoop.classification.InterfaceAudience;
++import org.apache.hadoop.classification.InterfaceStability;
++import org.apache.hadoop.hdfs.StorageType;
++import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
++
++@InterfaceAudience.Private
++@InterfaceStability.Evolving
++public class DatanodeInfoWithStorage extends DatanodeInfo {
++  private final String storageID;
++  private final StorageType storageType;
++
++  public DatanodeInfoWithStorage(DatanodeInfo from, String storageID,
++                                 StorageType storageType) {
++    super(from);
++    this.storageID = storageID;
++    this.storageType = storageType;
++  }
++
++  public String getStorageID() {
++    return storageID;
++  }
++
++  public StorageType getStorageType() {
++    return storageType;
++  }
++
++  @Override
++  public boolean equals(Object o) {
++    // allows this class to be used interchangeably with DatanodeInfo
++    return super.equals(o);
++  }
++
++  @Override
++  public int hashCode() {
++    // allows this class to be used interchangeably with DatanodeInfo
++    return super.hashCode();
++  }
++
++  @Override
++  public String toString() {
++    return "DatanodeInfoWithStorage[" + super.toString() + "," + storageID +
++        "," + storageType + "]";
++  }
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/LocatedBlock.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/LocatedBlock.java
+index 7fb2e30..4ff24b9 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/LocatedBlock.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/LocatedBlock.java
+@@ -25,7 +25,7 @@
+ import org.apache.hadoop.hdfs.StorageType;
+ import org.apache.hadoop.hdfs.security.token.block.BlockTokenIdentifier;
+ import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeStorageInfo;
+-import org.apache.hadoop.hdfs.server.protocol.DatanodeInfoWithStorage;
++import org.apache.hadoop.hdfs.protocol.DatanodeInfoWithStorage;
+ import org.apache.hadoop.security.token.Token;
+ 
+ import com.google.common.collect.Lists;
+@@ -140,7 +140,7 @@ public ExtendedBlock getBlock() {
+    * {@link org.apache.hadoop.hdfs.protocol.LocatedBlock#invalidateCachedStorageInfo}
+    * to invalidate the cached Storage ID/Type arrays.
+    */
+-  public DatanodeInfoWithStorage[] getLocations() {
++  public DatanodeInfo[] getLocations() {
+     return locs;
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/protocol/DatanodeInfoWithStorage.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/protocol/DatanodeInfoWithStorage.java
+deleted file mode 100644
+index ec8c346..0000000
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/protocol/DatanodeInfoWithStorage.java
++++ /dev/null
+@@ -1,59 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.hadoop.hdfs.server.protocol;
+-
+-import org.apache.hadoop.hdfs.StorageType;
+-import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
+-
+-public class DatanodeInfoWithStorage extends DatanodeInfo {
+-  private final String storageID;
+-  private final StorageType storageType;
+-
+-  public DatanodeInfoWithStorage(DatanodeInfo from, String storageID,
+-                                 StorageType storageType) {
+-    super(from);
+-    this.storageID = storageID;
+-    this.storageType = storageType;
+-  }
+-
+-  public String getStorageID() {
+-    return storageID;
+-  }
+-
+-  public StorageType getStorageType() {
+-    return storageType;
+-  }
+-
+-  @Override
+-  public boolean equals(Object o) {
+-    // allows this class to be used interchangeably with DatanodeInfo
+-    return super.equals(o);
+-  }
+-
+-  @Override
+-  public int hashCode() {
+-    // allows this class to be used interchangeably with DatanodeInfo
+-    return super.hashCode();
+-  }
+-
+-  @Override
+-  public String toString() {
+-    return "DatanodeInfoWithStorage[" + super.toString() + "," + storageID +
+-        "," + storageType + "]";
+-  }
+-}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestDatanodeManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestDatanodeManager.java
+index adf31a0..059eac0 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestDatanodeManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestDatanodeManager.java
+@@ -37,7 +37,7 @@
+ import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
+ import org.apache.hadoop.hdfs.protocol.LocatedBlock;
+ import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+-import org.apache.hadoop.hdfs.server.protocol.DatanodeInfoWithStorage;
++import org.apache.hadoop.hdfs.protocol.DatanodeInfoWithStorage;
+ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
+ import org.apache.hadoop.net.DNSToSwitchMapping;
+ import org.junit.Assert;
+@@ -274,15 +274,15 @@ public void testSortLocatedBlocks() throws IOException {
+     dm.sortLocatedBlocks(targetIp, blocks);
+ 
+     // check that storage IDs/types are aligned with datanode locs
+-    DatanodeInfoWithStorage[] sortedLocs = block.getLocations();
++    DatanodeInfo[] sortedLocs = block.getLocations();
+     storageIDs = block.getStorageIDs();
+     storageTypes = block.getStorageTypes();
+     assertThat(sortedLocs.length, is(5));
+     assertThat(storageIDs.length, is(5));
+     assertThat(storageTypes.length, is(5));
+     for(int i = 0; i < sortedLocs.length; i++) {
+-      assertThat(sortedLocs[i].getStorageID(), is(storageIDs[i]));
+-      assertThat(sortedLocs[i].getStorageType(), is(storageTypes[i]));
++      assertThat(((DatanodeInfoWithStorage)sortedLocs[i]).getStorageID(), is(storageIDs[i]));
++      assertThat(((DatanodeInfoWithStorage)sortedLocs[i]).getStorageType(), is(storageTypes[i]));
+     }
+ 
+     // Ensure the local node is first.
+-- 
+1.7.9.5
+

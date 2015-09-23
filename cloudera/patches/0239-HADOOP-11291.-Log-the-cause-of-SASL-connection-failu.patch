@@ -1,0 +1,29 @@
+From 6128b284d278c15dff747d84742553df6ff57e94 Mon Sep 17 00:00:00 2001
+From: cnauroth <cnauroth@apache.org>
+Date: Wed, 12 Nov 2014 21:54:06 -0800
+Subject: [PATCH 239/596] HADOOP-11291. Log the cause of SASL connection
+ failures. Contributed by Stephen Chu.
+
+(cherry picked from commit 7dae5b5a880205fd0125c143c44498db79c19392)
+(cherry picked from commit 5ce9cf12fedf6d2b84ed03e7b4a0c403a5a89cd1)
+(cherry picked from commit e0f913c0ecd9427e3a2bc8a2a75fd59180729e06)
+---
+ .../main/java/org/apache/hadoop/ipc/Client.java    |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/Client.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/Client.java
+index 96da01c..d9385fb 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/Client.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/Client.java
+@@ -668,7 +668,7 @@ public Object run() throws IOException, InterruptedException {
+               String msg = "Couldn't setup connection for "
+                   + UserGroupInformation.getLoginUser().getUserName() + " to "
+                   + remoteId;
+-              LOG.warn(msg);
++              LOG.warn(msg, ex);
+               throw (IOException) new IOException(msg).initCause(ex);
+             }
+           } else {
+-- 
+1.7.9.5
+

@@ -1,0 +1,28 @@
+From b14dcd60aa1f38e980d662219c52db970fb93ffb Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Wed, 3 Dec 2014 18:23:02 -0800
+Subject: [PATCH 283/596] CLOUDERA-BUILD. Fixing
+ TestContainerAllocation.testExcessReservationThanNodeManagerCapacity
+ (CDH-23593)
+
+(cherry picked from commit 75a718b6d82c2cfc7372ba848e30a1857d078de3)
+---
+ .../capacity/TestContainerAllocation.java          |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/TestContainerAllocation.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/TestContainerAllocation.java
+index 9a29bff..05aec34 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/TestContainerAllocation.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/TestContainerAllocation.java
+@@ -116,7 +116,7 @@ public void testExcessReservationThanNodeManagerCapacity() throws Exception {
+     am1.registerAppAttempt();
+ 
+     LOG.info("sending container requests ");
+-    am1.addRequests(new String[] {"*"}, 2 * GB, 1, 1);
++    am1.addRequests(new String[] {"*"}, 3 * GB, 1, 1);
+     AllocateResponse alloc1Response = am1.schedule(); // send the request
+ 
+     // kick the scheduler
+-- 
+1.7.9.5
+

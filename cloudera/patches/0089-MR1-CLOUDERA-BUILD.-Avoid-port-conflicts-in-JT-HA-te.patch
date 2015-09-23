@@ -1,0 +1,33 @@
+From b3343eb1fd66a5ec72aa3b27a5666dd2d1bc81b9 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Tue, 2 Jul 2013 22:35:05 -0700
+Subject: [PATCH 089/596] MR1: CLOUDERA-BUILD. Avoid port conflicts in JT HA
+ tests. Changes missed earlier (cherry picked from
+ commit 8105fa54be0df560c86fb33282ad1f202ab11ca1)
+ (cherry picked from commit
+ 6422e36d807a1a70117a9cb9e92c4c4902db8582) (cherry
+ picked from commit
+ cca8fafb1ffe3ca2d9c9a14afbf3fcda6a0f055c)
+
+(cherry picked from commit 885ebba0ae8c30a7019d830dfee05255ea06a6f8)
+(cherry picked from commit 4c8170d4d5de9c5ebdd668a59dccdca98e2260f3)
+(cherry picked from commit 83cc24577a5076f894224accf1fc31405b73b786)
+---
+ .../org/apache/hadoop/mapred/TestHAStress.java     |    1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStress.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStress.java
+index 3f045d8..4f13985 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStress.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestHAStress.java
+@@ -124,6 +124,7 @@ public void setUp() throws Exception {
+     conf.setLong(HAUtil.MR_HA_ACTIVE_CHECK_MILLIS, 1000);
+     conf.setBoolean("mapred.job.tracker.persist.jobstatus.active", true);
+     conf.setInt("mapred.job.tracker.persist.jobstatus.hours", 1);
++    conf.set("mapred.job.tracker.persist.jobstatus.dir", "/tmp/jobtracker/jobsInfo");
+     cluster = new MiniMRHACluster(conf);
+     cluster.getJobTrackerHaDaemon(0).makeActive();
+     cluster.startTaskTracker(0, 1);
+-- 
+1.7.9.5
+

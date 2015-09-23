@@ -1,0 +1,510 @@
+From 28a9c293917128aa844f6a28a94367c4a3908713 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Tue, 28 Oct 2014 16:41:22 -0700
+Subject: [PATCH 226/596] HDFS-7235. DataNode#transferBlock should report
+ blocks that don't exist using reportBadBlock
+ (yzhang via cmccabe) (cherry picked from commit
+ ac9ab037e9a9b03e4fa9bd471d3ab9940beb53fb)
+
+(cherry picked from commit 842a54a5f66e76eb79321b66cc3b8820fe66c5cd)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../hadoop/hdfs/server/datanode/DataNode.java      |   59 +++++++++++++++-----
+ .../datanode/UnexpectedReplicaStateException.java  |   45 +++++++++++++++
+ .../server/datanode/fsdataset/FsDatasetSpi.java    |   28 ++++++++++
+ .../datanode/fsdataset/impl/FsDatasetImpl.java     |   54 ++++++++++++++++--
+ .../org/apache/hadoop/hdfs/MiniDFSCluster.java     |   46 ++++++++++++---
+ .../org/apache/hadoop/hdfs/TestReplication.java    |   32 ++++++++---
+ .../hdfs/server/datanode/SimulatedFSDataset.java   |   43 ++++++++++++--
+ 7 files changed, 267 insertions(+), 40 deletions(-)
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/UnexpectedReplicaStateException.java
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index 23bc759..613ede8 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -56,7 +56,9 @@
+ import java.io.ByteArrayInputStream;
+ import java.io.DataInputStream;
+ import java.io.DataOutputStream;
++import java.io.EOFException;
+ import java.io.FileInputStream;
++import java.io.FileNotFoundException;
+ import java.io.IOException;
+ import java.io.InputStream;
+ import java.io.OutputStream;
+@@ -1775,30 +1777,59 @@ public int getXceiverCount() {
+   int getXmitsInProgress() {
+     return xmitsInProgress.get();
+   }
+-    
++
++  private void reportBadBlock(final BPOfferService bpos,
++      final ExtendedBlock block, final String msg) {
++    FsVolumeSpi volume = getFSDataset().getVolume(block);
++    bpos.reportBadBlocks(
++        block, volume.getStorageID(), volume.getStorageType());
++    LOG.warn(msg);
++  }
++
+   private void transferBlock(ExtendedBlock block, DatanodeInfo[] xferTargets,
+       StorageType[] xferTargetStorageTypes) throws IOException {
+     BPOfferService bpos = getBPOSForBlock(block);
+     DatanodeRegistration bpReg = getDNRegistrationForBP(block.getBlockPoolId());
+-    
+-    if (!data.isValidBlock(block)) {
+-      // block does not exist or is under-construction
++
++    boolean replicaNotExist = false;
++    boolean replicaStateNotFinalized = false;
++    boolean blockFileNotExist = false;
++    boolean lengthTooShort = false;
++
++    try {
++      data.checkBlock(block, block.getNumBytes(), ReplicaState.FINALIZED);
++    } catch (ReplicaNotFoundException e) {
++      replicaNotExist = true;
++    } catch (UnexpectedReplicaStateException e) {
++      replicaStateNotFinalized = true;
++    } catch (FileNotFoundException e) {
++      blockFileNotExist = true;
++    } catch (EOFException e) {
++      lengthTooShort = true;
++    } catch (IOException e) {
++      // The IOException indicates not being able to access block file,
++      // treat it the same here as blockFileNotExist, to trigger 
++      // reporting it as a bad block
++      blockFileNotExist = true;      
++    }
++
++    if (replicaNotExist || replicaStateNotFinalized) {
+       String errStr = "Can't send invalid block " + block;
+       LOG.info(errStr);
+-      
+       bpos.trySendErrorReport(DatanodeProtocol.INVALID_BLOCK, errStr);
+       return;
+     }
+-
+-    // Check if NN recorded length matches on-disk length 
+-    long onDiskLength = data.getLength(block);
+-    if (block.getNumBytes() > onDiskLength) {
+-      FsVolumeSpi volume = getFSDataset().getVolume(block);
++    if (blockFileNotExist) {
++      // Report back to NN bad block caused by non-existent block file.
++      reportBadBlock(bpos, block, "Can't replicate block " + block
++          + " because the block file doesn't exist, or is not accessible");
++      return;
++    }
++    if (lengthTooShort) {
++      // Check if NN recorded length matches on-disk length 
+       // Shorter on-disk len indicates corruption so report NN the corrupt block
+-      bpos.reportBadBlocks(
+-          block, volume.getStorageID(), volume.getStorageType());
+-      LOG.warn("Can't replicate block " + block
+-          + " because on-disk length " + onDiskLength 
++      reportBadBlock(bpos, block, "Can't replicate block " + block
++          + " because on-disk length " + data.getLength(block) 
+           + " is shorter than NameNode recorded length " + block.getNumBytes());
+       return;
+     }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/UnexpectedReplicaStateException.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/UnexpectedReplicaStateException.java
+new file mode 100644
+index 0000000..4a8753b
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/UnexpectedReplicaStateException.java
+@@ -0,0 +1,45 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++
++package org.apache.hadoop.hdfs.server.datanode;
++
++import java.io.IOException;
++
++import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
++import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.ReplicaState;
++
++/**
++ * Exception indicating that the replica is in an unexpected state
++ */
++public class UnexpectedReplicaStateException extends IOException {
++  private static final long serialVersionUID = 1L;
++
++  public UnexpectedReplicaStateException() {
++    super();
++  }
++
++  public UnexpectedReplicaStateException(ExtendedBlock b,
++      ReplicaState expectedState) {
++    super("Replica " + b + " is not in expected state " + expectedState);
++  }
++  
++  public UnexpectedReplicaStateException(String msg) {
++    super(msg);
++  }
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsDatasetSpi.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsDatasetSpi.java
+index 881969e..217ba9c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsDatasetSpi.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsDatasetSpi.java
+@@ -18,8 +18,10 @@
+ package org.apache.hadoop.hdfs.server.datanode.fsdataset;
+ 
+ 
++import java.io.EOFException;
+ import java.io.File;
+ import java.io.FileDescriptor;
++import java.io.FileNotFoundException;
+ import java.io.IOException;
+ import java.io.InputStream;
+ import java.util.Collection;
+@@ -35,12 +37,15 @@
+ import org.apache.hadoop.hdfs.protocol.BlockLocalPathInfo;
+ import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
+ import org.apache.hadoop.hdfs.protocol.HdfsBlocksMetadata;
++import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.ReplicaState;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+ import org.apache.hadoop.hdfs.server.datanode.DataStorage;
+ import org.apache.hadoop.hdfs.server.datanode.FinalizedReplica;
+ import org.apache.hadoop.hdfs.server.datanode.Replica;
+ import org.apache.hadoop.hdfs.server.datanode.ReplicaInPipelineInterface;
++import org.apache.hadoop.hdfs.server.datanode.ReplicaNotFoundException;
+ import org.apache.hadoop.hdfs.server.datanode.StorageLocation;
++import org.apache.hadoop.hdfs.server.datanode.UnexpectedReplicaStateException;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.FsDatasetFactory;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.FsVolumeImpl;
+ import org.apache.hadoop.hdfs.server.datanode.metrics.FSDatasetMBean;
+@@ -299,6 +304,29 @@ public String recoverClose(ExtendedBlock b, long newGS, long expectedBlockLen
+   public boolean contains(ExtendedBlock block);
+ 
+   /**
++   * Check if a block is valid.
++   *
++   * @param b           The block to check.
++   * @param minLength   The minimum length that the block must have.  May be 0.
++   * @param state       If this is null, it is ignored.  If it is non-null, we
++   *                        will check that the replica has this state.
++   *
++   * @throws ReplicaNotFoundException          If the replica is not found
++   *
++   * @throws UnexpectedReplicaStateException   If the replica is not in the 
++   *                                             expected state.
++   * @throws FileNotFoundException             If the block file is not found or there 
++   *                                              was an error locating it.
++   * @throws EOFException                      If the replica length is too short.
++   * 
++   * @throws IOException                       May be thrown from the methods called. 
++   */
++  public void checkBlock(ExtendedBlock b, long minLength, ReplicaState state)
++      throws ReplicaNotFoundException, UnexpectedReplicaStateException,
++      FileNotFoundException, EOFException, IOException;
++      
++  
++  /**
+    * Is the block valid?
+    * @return - true if the specified block is valid
+    */
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+index f130d05..e046ecd 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+@@ -19,6 +19,7 @@
+ 
+ import java.io.BufferedOutputStream;
+ import java.io.DataOutputStream;
++import java.io.EOFException;
+ import java.io.File;
+ import java.io.FileDescriptor;
+ import java.io.FileInputStream;
+@@ -81,6 +82,7 @@
+ import org.apache.hadoop.hdfs.server.datanode.ReplicaUnderRecovery;
+ import org.apache.hadoop.hdfs.server.datanode.ReplicaWaitingToBeRecovered;
+ import org.apache.hadoop.hdfs.server.datanode.StorageLocation;
++import org.apache.hadoop.hdfs.server.datanode.UnexpectedReplicaStateException;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsDatasetSpi;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsVolumeSpi;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.LengthInputStream;
+@@ -1452,6 +1454,45 @@ private boolean delBlockFromDisk(File blockFile, File metaFile, Block b) {
+   }
+ 
+   /**
++   * Check if a block is valid.
++   *
++   * @param b           The block to check.
++   * @param minLength   The minimum length that the block must have.  May be 0.
++   * @param state       If this is null, it is ignored.  If it is non-null, we
++   *                        will check that the replica has this state.
++   *
++   * @throws ReplicaNotFoundException          If the replica is not found 
++   *
++   * @throws UnexpectedReplicaStateException   If the replica is not in the 
++   *                                             expected state.
++   * @throws FileNotFoundException             If the block file is not found or there
++   *                                              was an error locating it.
++   * @throws EOFException                      If the replica length is too short.
++   * 
++   * @throws IOException                       May be thrown from the methods called. 
++   */
++  public void checkBlock(ExtendedBlock b, long minLength, ReplicaState state)
++      throws ReplicaNotFoundException, UnexpectedReplicaStateException,
++      FileNotFoundException, EOFException, IOException {
++    final ReplicaInfo replicaInfo = volumeMap.get(b.getBlockPoolId(), 
++        b.getLocalBlock());
++    if (replicaInfo == null) {
++      throw new ReplicaNotFoundException(b);
++    }
++    if (replicaInfo.getState() != state) {
++      throw new UnexpectedReplicaStateException(b,state);
++    }
++    if (!replicaInfo.getBlockFile().exists()) {
++      throw new FileNotFoundException(replicaInfo.getBlockFile().getPath());
++    }
++    long onDiskLength = getLength(b);
++    if (onDiskLength < minLength) {
++      throw new EOFException(b + "'s on-disk length " + onDiskLength
++          + " is shorter than minLength " + minLength);
++    }
++  }
++
++  /**
+    * Check whether the given block is a valid one.
+    * valid means finalized
+    */
+@@ -1459,7 +1500,7 @@ private boolean delBlockFromDisk(File blockFile, File metaFile, Block b) {
+   public boolean isValidBlock(ExtendedBlock b) {
+     return isValid(b, ReplicaState.FINALIZED);
+   }
+-
++  
+   /**
+    * Check whether the given block is a valid RBW.
+    */
+@@ -1470,11 +1511,12 @@ public boolean isValidRbw(final ExtendedBlock b) {
+ 
+   /** Does the block exist and have the given state? */
+   private boolean isValid(final ExtendedBlock b, final ReplicaState state) {
+-    final ReplicaInfo replicaInfo = volumeMap.get(b.getBlockPoolId(), 
+-        b.getLocalBlock());
+-    return replicaInfo != null
+-        && replicaInfo.getState() == state
+-        && replicaInfo.getBlockFile().exists();
++    try {
++      checkBlock(b, 0, state);
++    } catch (IOException e) {
++      return false;
++    }
++    return true;
+   }
+ 
+   /**
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/MiniDFSCluster.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/MiniDFSCluster.java
+index bd8e390..c9b828d 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/MiniDFSCluster.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/MiniDFSCluster.java
+@@ -1825,23 +1825,40 @@ public synchronized void restartNameNode(int nnIndex, boolean waitActive,
+     }
+   }
+ 
+-  /**
+-   * Return the contents of the given block on the given datanode.
+-   *
+-   * @param block block to be corrupted
+-   * @throws IOException on error accessing the file for the given block
+-   */
+-  public int corruptBlockOnDataNodes(ExtendedBlock block) throws IOException{
++  private int corruptBlockOnDataNodesHelper(ExtendedBlock block,
++      boolean deleteBlockFile) throws IOException {
+     int blocksCorrupted = 0;
+     File[] blockFiles = getAllBlockFiles(block);
+     for (File f : blockFiles) {
+-      if (corruptBlock(f)) {
++      if ((deleteBlockFile && corruptBlockByDeletingBlockFile(f)) ||
++          (!deleteBlockFile && corruptBlock(f))) {
+         blocksCorrupted++;
+       }
+     }
+     return blocksCorrupted;
+   }
+ 
++  /**
++   * Return the number of corrupted replicas of the given block.
++   *
++   * @param block block to be corrupted
++   * @throws IOException on error accessing the file for the given block
++   */
++  public int corruptBlockOnDataNodes(ExtendedBlock block) throws IOException{
++    return corruptBlockOnDataNodesHelper(block, false);
++  }
++
++  /**
++   * Return the number of corrupted replicas of the given block.
++   *
++   * @param block block to be corrupted
++   * @throws IOException on error accessing the file for the given block
++   */
++  public int corruptBlockOnDataNodesByDeletingBlockFile(ExtendedBlock block)
++      throws IOException{
++    return corruptBlockOnDataNodesHelper(block, true);
++  }
++  
+   public String readBlockOnDataNode(int i, ExtendedBlock block)
+       throws IOException {
+     assert (i >= 0 && i < dataNodes.size()) : "Invalid datanode "+i;
+@@ -1887,7 +1904,18 @@ public static boolean corruptBlock(File blockFile) throws IOException {
+     LOG.warn("Corrupting the block " + blockFile);
+     return true;
+   }
+-  
++
++  /*
++   * Corrupt a block on a particular datanode by deleting the block file
++   */
++  public static boolean corruptBlockByDeletingBlockFile(File blockFile) 
++      throws IOException {
++    if (blockFile == null || !blockFile.exists()) {
++      return false;
++    }
++    return blockFile.delete();
++  }
++
+   public static boolean changeGenStampOfBlock(int dnIndex, ExtendedBlock blk,
+       long newGenStamp) throws IOException {
+     File blockFile = getBlockFile(dnIndex, blk);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestReplication.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestReplication.java
+index f65da4c..b878033 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestReplication.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestReplication.java
+@@ -151,11 +151,8 @@ private void cleanupFile(FileSystem fileSys, Path name) throws IOException {
+     assertTrue(!fileSys.exists(name));
+   }
+ 
+-  /* 
+-   * Test if Datanode reports bad blocks during replication request
+-   */
+-  @Test
+-  public void testBadBlockReportOnTransfer() throws Exception {
++  private void testBadBlockReportOnTransfer(
++      boolean corruptBlockByDeletingBlockFile) throws Exception {
+     Configuration conf = new HdfsConfiguration();
+     FileSystem fs = null;
+     DFSClient dfsClient = null;
+@@ -176,7 +173,11 @@ public void testBadBlockReportOnTransfer() throws Exception {
+     // Corrupt the block belonging to the created file
+     ExtendedBlock block = DFSTestUtil.getFirstBlock(fs, file1);
+ 
+-    int blockFilesCorrupted = cluster.corruptBlockOnDataNodes(block);
++    int blockFilesCorrupted =
++        corruptBlockByDeletingBlockFile?
++            cluster.corruptBlockOnDataNodesByDeletingBlockFile(block) :
++              cluster.corruptBlockOnDataNodes(block);       
++
+     assertEquals("Corrupted too few blocks", replFactor, blockFilesCorrupted); 
+ 
+     // Increase replication factor, this should invoke transfer request
+@@ -200,7 +201,24 @@ public void testBadBlockReportOnTransfer() throws Exception {
+     assertTrue(replicaCount == 1);
+     cluster.shutdown();
+   }
+-  
++
++  /* 
++   * Test if Datanode reports bad blocks during replication request
++   */
++  @Test
++  public void testBadBlockReportOnTransfer() throws Exception {
++    testBadBlockReportOnTransfer(false);
++  }
++
++  /* 
++   * Test if Datanode reports bad blocks during replication request
++   * with missing block file
++   */
++  @Test
++  public void testBadBlockReportOnTransferMissingBlockFile() throws Exception {
++    testBadBlockReportOnTransfer(true);
++  }
++
+   /**
+    * Tests replication in DFS.
+    */
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
+index 83b476f..46cb46a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
+@@ -724,17 +724,52 @@ public boolean contains(ExtendedBlock block) {
+     return getBInfo(block) != null;
+   }
+ 
++  /**
++   * Check if a block is valid.
++   *
++   * @param b           The block to check.
++   * @param minLength   The minimum length that the block must have.  May be 0.
++   * @param state       If this is null, it is ignored.  If it is non-null, we
++   *                        will check that the replica has this state.
++   *
++   * @throws ReplicaNotFoundException          If the replica is not found
++   *
++   * @throws UnexpectedReplicaStateException   If the replica is not in the 
++   *                                             expected state.
++   */
++  @Override // {@link FsDatasetSpi}
++  public void checkBlock(ExtendedBlock b, long minLength, ReplicaState state)
++      throws ReplicaNotFoundException, UnexpectedReplicaStateException {
++    final BInfo binfo = getBInfo(b);
++    
++    if (binfo == null) {
++      throw new ReplicaNotFoundException(b);
++    }
++    if ((state == ReplicaState.FINALIZED && !binfo.isFinalized()) ||
++        (state != ReplicaState.FINALIZED && binfo.isFinalized())) {
++      throw new UnexpectedReplicaStateException(b,state);
++    }
++  }
++
+   @Override // FsDatasetSpi
+   public synchronized boolean isValidBlock(ExtendedBlock b) {
+-    final BInfo binfo = getBInfo(b);
+-    return binfo != null && binfo.isFinalized();
++    try {
++      checkBlock(b, 0, ReplicaState.FINALIZED);
++    } catch (IOException e) {
++      return false;
++    }
++    return true;
+   }
+ 
+   /* check if a block is created but not finalized */
+   @Override
+   public synchronized boolean isValidRbw(ExtendedBlock b) {
+-    final BInfo binfo = getBInfo(b);
+-    return binfo != null && !binfo.isFinalized();  
++    try {
++      checkBlock(b, 0, ReplicaState.RBW);
++    } catch (IOException e) {
++      return false;
++    }
++    return true;
+   }
+ 
+   @Override
+-- 
+1.7.9.5
+

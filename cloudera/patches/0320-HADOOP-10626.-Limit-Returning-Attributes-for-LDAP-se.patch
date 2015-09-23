@@ -1,0 +1,32 @@
+From 2acf8f2859477ad7a63228c449f2ce3b37ab40ba Mon Sep 17 00:00:00 2001
+From: "Aaron T. Myers" <atm@apache.org>
+Date: Tue, 27 Jan 2015 13:50:45 -0800
+Subject: [PATCH 320/596] HADOOP-10626. Limit Returning Attributes for LDAP
+ search. Contributed by Jason Hubbard. (cherry
+ picked from commit
+ 8709751e1ee9a2c5553823dcd715bd077052ad7f)
+
+(cherry picked from commit 3c8d3816c67d5309c56f2ee08876967e34b65ab6)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+---
+ .../apache/hadoop/security/LdapGroupsMapping.java  |    2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/LdapGroupsMapping.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/LdapGroupsMapping.java
+index 76f5380..b505819 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/LdapGroupsMapping.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/LdapGroupsMapping.java
+@@ -338,6 +338,8 @@ public synchronized void setConf(Configuration conf) {
+ 
+     int dirSearchTimeout = conf.getInt(DIRECTORY_SEARCH_TIMEOUT, DIRECTORY_SEARCH_TIMEOUT_DEFAULT);
+     SEARCH_CONTROLS.setTimeLimit(dirSearchTimeout);
++    // Limit the attributes returned to only those required to speed up the search. See HADOOP-10626 for more details.
++    SEARCH_CONTROLS.setReturningAttributes(new String[] {groupNameAttr});
+ 
+     this.conf = conf;
+   }
+-- 
+1.7.9.5
+

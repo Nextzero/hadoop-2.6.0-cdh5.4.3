@@ -1,0 +1,97 @@
+From 4e4b096f98ca32f7bb59d055e0786295a6e15432 Mon Sep 17 00:00:00 2001
+From: "Aaron T. Myers" <atm@apache.org>
+Date: Tue, 3 Mar 2015 18:08:59 -0800
+Subject: [PATCH 447/596] HDFS-7682. {{DistributedFileSystem#getFileChecksum}}
+ of a snapshotted file includes non-snapshotted
+ content. Contributed by Charles Lamb. (cherry
+ picked from commit
+ f2d7a67a2c1d9dde10ed3171fdec65dff885afcc)
+
+(cherry picked from commit bce3d442ff08ee1e730b0bac112439d6a6931917)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../java/org/apache/hadoop/hdfs/DFSClient.java     |    3 +++
+ .../namenode/snapshot/TestSnapshotFileLength.java  |   25 +++++++++++++++++---
+ 2 files changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java
+index 02bf87b..d110748 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java
+@@ -2080,6 +2080,9 @@ public MD5MD5CRC32FileChecksum getFileChecksum(String src, long length)
+ 
+     // get block checksum for each block
+     long remaining = length;
++    if (src.contains(HdfsConstants.SEPARATOR_DOT_SNAPSHOT_DIR_SEPARATOR)) {
++      remaining = Math.min(length, blockLocations.getFileLength());
++    }
+     for(int i = 0; i < locatedblocks.size() && remaining > 0; i++) {
+       if (refetchBlocks) {  // refetch to get fresh tokens
+         blockLocations = callGetBlockLocations(namenode, src, 0, length);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/snapshot/TestSnapshotFileLength.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/snapshot/TestSnapshotFileLength.java
+index 98aafc1..d53140f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/snapshot/TestSnapshotFileLength.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/snapshot/TestSnapshotFileLength.java
+@@ -20,8 +20,8 @@
+ import java.io.ByteArrayOutputStream;
+ import java.io.PrintStream;
+ 
+-
+ import org.apache.hadoop.fs.FSDataOutputStream;
++import org.apache.hadoop.fs.FileChecksum;
+ import org.apache.hadoop.fs.FileStatus;
+ import org.apache.hadoop.hdfs.AppendTestUtil;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
+@@ -29,8 +29,9 @@
+ import org.junit.Before;
+ import org.junit.Test;
+ import static org.hamcrest.CoreMatchers.is;
+-import static org.junit.Assert.*;
+-
++import static org.hamcrest.CoreMatchers.not;
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertThat;
+ 
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataInputStream;
+@@ -103,17 +104,35 @@ public void testSnapshotfileLength() throws Exception {
+     Path file1snap1
+         = SnapshotTestHelper.getSnapshotPath(sub, snapshot1, file1Name);
+ 
++    final FileChecksum snapChksum1 = hdfs.getFileChecksum(file1snap1);
++    assertThat("file and snapshot file checksums are not equal",
++        hdfs.getFileChecksum(file1), is(snapChksum1));
++
+     // Append to the file.
+     FSDataOutputStream out = hdfs.append(file1);
++    // Nothing has been appended yet. All checksums should still be equal.
++    assertThat("file and snapshot checksums (open for append) are not equal",
++        hdfs.getFileChecksum(file1), is(snapChksum1));
++    assertThat("snapshot checksum (post-open for append) has changed",
++        hdfs.getFileChecksum(file1snap1), is(snapChksum1));
+     try {
+       AppendTestUtil.write(out, 0, toAppend);
+       // Test reading from snapshot of file that is open for append
+       byte[] dataFromSnapshot = DFSTestUtil.readFileBuffer(hdfs, file1snap1);
+       assertThat("Wrong data size in snapshot.",
+           dataFromSnapshot.length, is(origLen));
++      // Verify that checksum didn't change
++      assertThat("snapshot file checksum (pre-close) has changed",
++          hdfs.getFileChecksum(file1), is(snapChksum1));
++      assertThat("snapshot checksum (post-append) has changed",
++          hdfs.getFileChecksum(file1snap1), is(snapChksum1));
+     } finally {
+       out.close();
+     }
++    assertThat("file and snapshot file checksums (post-close) are equal",
++        hdfs.getFileChecksum(file1), not(snapChksum1));
++    assertThat("snapshot file checksum (post-close) has changed",
++        hdfs.getFileChecksum(file1snap1), is(snapChksum1));
+ 
+     // Make sure we can read the entire file via its non-snapshot path.
+     fileStatus = hdfs.getFileStatus(file1);
+-- 
+1.7.9.5
+

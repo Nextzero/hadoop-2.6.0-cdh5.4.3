@@ -1,0 +1,108 @@
+From a1ef4ccb619f317bfae2cb74cdc29e99d7c58829 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Thu, 18 Dec 2014 14:06:53 -0800
+Subject: [PATCH 372/596] HDFS-7530. Allow renaming of encryption zone roots.
+ Contributed by Charles Lamb.
+
+(cherry picked from commit b0b9084433d5e80131429e6e76858b099deb2dda)
+(cherry picked from commit 8d98d87745374090d83437705c928ab18c0b895a)
+---
+ .../server/namenode/EncryptionZoneManager.java     |    4 +++
+ .../apache/hadoop/hdfs/TestEncryptionZones.java    |   13 +++++++++
+ .../src/test/resources/testCryptoConf.xml          |   30 +++++++++++++++++---
+ 3 files changed, 43 insertions(+), 4 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/EncryptionZoneManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/EncryptionZoneManager.java
+index 0d7ced9..3c971c9 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/EncryptionZoneManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/EncryptionZoneManager.java
+@@ -249,6 +249,10 @@ void checkMoveValidity(INodesInPath srcIIP, INodesInPath dstIIP, String src)
+     final boolean dstInEZ = (dstEZI != null);
+     if (srcInEZ) {
+       if (!dstInEZ) {
++        if (srcEZI.getINodeId() == srcIIP.getLastINode().getId()) {
++          // src is ez root and dest is not in an ez. Allow the rename.
++          return;
++        }
+         throw new IOException(
+             src + " can't be moved from an encryption zone.");
+       }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZones.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZones.java
+index cffc501..46c5b01 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZones.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZones.java
+@@ -540,6 +540,19 @@ private void doRenameEncryptionZone(FSTestWrapper wrapper) throws Exception {
+         !wrapper.exists(pathFooBaz) && wrapper.exists(pathFooBar));
+     assertEquals("Renamed file contents not the same",
+         contents, DFSTestUtil.readFile(fs, pathFooBarFile));
++
++    // Verify that we can rename an EZ root
++    final Path newFoo = new Path(testRoot, "newfoo");
++    assertTrue("Rename of EZ root", fs.rename(pathFoo, newFoo));
++    assertTrue("Rename of EZ root failed",
++        !wrapper.exists(pathFoo) && wrapper.exists(newFoo));
++
++    // Verify that we can't rename an EZ root onto itself
++    try {
++      wrapper.rename(newFoo, newFoo);
++    } catch (IOException e) {
++      assertExceptionContains("are the same", e);
++    }
+   }
+ 
+   @Test(timeout = 60000)
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testCryptoConf.xml b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testCryptoConf.xml
+index ebbf773..89c93e2 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testCryptoConf.xml
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testCryptoConf.xml
+@@ -238,13 +238,35 @@
+     </test>
+ 
+     <test>
+-      <description>Test failure of renaming a non-EZ file from an EZ</description>
++        <description>Test failure of renaming an EZ file into a non-EZ</description>
++        <test-commands>
++            <command>-fs NAMENODE -mkdir /src</command>
++            <command>-fs NAMENODE -mkdir /dst</command>
++            <command>-fs NAMENODE -ls /</command>-
++            <crypto-admin-command>-createZone -path /src -keyName myKey</crypto-admin-command>
++            <command>-fs NAMENODE -touchz /src/foo</command>
++            <command>-fs NAMENODE -mv /src/foo /dst</command>-
++        </test-commands>
++        <cleanup-commands>
++            <command>-fs NAMENODE -rm /src/foo</command>
++            <command>-fs NAMENODE -rmdir /src</command>
++            <command>-fs NAMENODE -rmdir /dst</command>
++        </cleanup-commands>
++        <comparators>
++            <comparator>
++                <type>SubstringComparator</type>
++                <expected-output>/src/foo can't be moved from an encryption zone.</expected-output>
++            </comparator>
++        </comparators>
++    </test>
++
++    <test>
++      <description>Test success of renaming an EZ root</description>
+       <test-commands>
+         <command>-fs NAMENODE -mkdir /src</command>
+-        <command>-fs NAMENODE -mkdir /dst</command>
+-        <command>-fs NAMENODE -ls /</command>-
+         <crypto-admin-command>-createZone -path /src -keyName myKey</crypto-admin-command>
+         <command>-fs NAMENODE -mv /src /dst</command>-
++        <command>-fs NAMENODE -ls /</command>-
+       </test-commands>
+       <cleanup-commands>
+         <command>-fs NAMENODE -rmdir /src</command>
+@@ -253,7 +275,7 @@
+       <comparators>
+         <comparator>
+           <type>SubstringComparator</type>
+-          <expected-output>/src can't be moved from an encryption zone</expected-output>
++          <expected-output>/dst</expected-output>
+         </comparator>
+       </comparators>
+     </test>
+-- 
+1.7.9.5
+

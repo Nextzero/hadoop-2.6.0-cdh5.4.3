@@ -1,0 +1,46 @@
+From 059eb386ffec0dfee77fc7bbaf73c901a8c1d43f Mon Sep 17 00:00:00 2001
+From: Vinayakumar B <vinayakumarb@apache.org>
+Date: Thu, 19 Mar 2015 11:59:31 +0530
+Subject: [PATCH 562/596] HDFS-7869. Update action param from 'start' to
+ 'prepare' in rolling upgrade ( Contributed by
+ J.Andreina)
+
+(cherry picked from commit 338b477ff736cb6c8fb8204ab83fb038594dadf0)
+(cherry picked from commit 4527aa6f77ec817219951ddb6992d66fdf64fe91)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../apache/hadoop/hdfs/DistributedFileSystem.java  |    2 +-
+ .../hadoop/hdfs/protocol/ClientProtocol.java       |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DistributedFileSystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DistributedFileSystem.java
+index 673db89..bc7232e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DistributedFileSystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DistributedFileSystem.java
+@@ -1093,7 +1093,7 @@ public void finalizeUpgrade() throws IOException {
+   }
+ 
+   /**
+-   * Rolling upgrade: start/finalize/query.
++   * Rolling upgrade: prepare/finalize/query.
+    */
+   public RollingUpgradeInfo rollingUpgrade(RollingUpgradeAction action)
+       throws IOException {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientProtocol.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientProtocol.java
+index a5050b4..6c9fa56 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientProtocol.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/ClientProtocol.java
+@@ -814,7 +814,7 @@ public boolean restoreFailedStorage(String arg)
+ 
+   /**
+    * Rolling upgrade operations.
+-   * @param action either query, start or finailze.
++   * @param action either query, prepare or finalize.
+    * @return rolling upgrade information.
+    */
+   @Idempotent
+-- 
+1.7.9.5
+

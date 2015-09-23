@@ -1,0 +1,103 @@
+From f6d02d5d1495afd55be7b27e9fa1f34157db1e92 Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Mon, 7 Oct 2013 11:49:26 -0700
+Subject: [PATCH 112/596] MR1: MAPREDUCE-5508. JobTracker memory leak caused
+ by unreleased FileSystem objects in
+ JobInProgress#cleanupJob. Contributed by Xi Fang.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1525774 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 5673cad674fa56a2150ec235f6dc08dcb36c3a0f)
+(cherry picked from commit 2f05caf22241613b3a8df538316c2c2c88596beb)
+(cherry picked from commit 9c6ba84caea0e973e8262b5f9c2679a9dd4dcd0d)
+(cherry picked from commit df6988eb2d4fa7e480dc6cec3f76cded033f536f)
+---
+ .../org/apache/hadoop/mapred/CleanupQueue.java     |   13 +++++--------
+ .../org/apache/hadoop/mapred/JobInProgress.java    |   13 ++++++++++---
+ .../org/apache/hadoop/mapred/TestCleanupQueue.java |    2 +-
+ 3 files changed, 16 insertions(+), 12 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java
+index f70e877..fc329ee 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java
+@@ -60,14 +60,10 @@ protected CleanupQueue() { }
+     final Configuration conf;
+     final UserGroupInformation ugi;
+     final JobID jobIdTokenRenewalToCancel;
++    FileSystem fs;
+ 
+     public PathDeletionContext(Path fullPath, Configuration conf) {
+-      this(fullPath, conf, null, null);
+-    }
+-
+-    public PathDeletionContext(Path fullPath, Configuration conf,
+-        UserGroupInformation ugi) {
+-      this(fullPath, conf, ugi, null);
++      this(fullPath, conf, null, null, null);
+     }
+     
+     /**
+@@ -86,11 +82,12 @@ public PathDeletionContext(Path fullPath, Configuration conf,
+      *                                  <code>null</code>
+      */
+     public PathDeletionContext(Path fullPath, Configuration conf,
+-        UserGroupInformation ugi, JobID jobIdTokenRenewalToCancel) {
++        UserGroupInformation ugi, JobID jobIdTokenRenewalToCancel, FileSystem fs) {
+       this.fullPath = fullPath;
+       this.conf = conf;
+       this.ugi = ugi;
+       this.jobIdTokenRenewalToCancel = jobIdTokenRenewalToCancel;
++      this.fs = fs;
+     }
+     
+     protected Path getPathForCleanup() {
+@@ -106,7 +103,7 @@ protected void deletePath() throws IOException, InterruptedException {
+       (ugi == null ? UserGroupInformation.getLoginUser() : ugi).doAs(
+           new PrivilegedExceptionAction<Object>() {
+             public Object run() throws IOException {
+-              FileSystem fs = p.getFileSystem(conf);
++              fs = (fs == null ?  p.getFileSystem(conf) : fs);
+               try {
+                 fs.delete(p, true);
+                 return null;
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+index 012e91a..5a92909 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+@@ -3171,10 +3171,17 @@ void garbageCollect() {
+         String jobTempDir = conf.get("mapreduce.job.dir");
+         if (jobTempDir != null && conf.getKeepTaskFilesPattern() == null &&
+             !conf.getKeepFailedTaskFiles()) {
+-          Path jobTempDirPath = new Path(jobTempDir);
+-          tempDirFs = jobTempDirPath.getFileSystem(conf);
++          final Path jobTempDirPath = new Path(jobTempDir);
++          try {
++            tempDirFs = userUGI.doAs(new PrivilegedExceptionAction<FileSystem>() {
++              public FileSystem run() throws IOException {
++                return jobTempDirPath.getFileSystem(conf);
++              }});
++          } catch (InterruptedException e) {
++            Thread.currentThread().interrupt();
++          }
+           CleanupQueue.getInstance().addToQueue(
+-              new PathDeletionContext(jobTempDirPath, conf, userUGI, jobId));
++              new PathDeletionContext(jobTempDirPath, conf, userUGI, jobId, tempDirFs));
+         }
+ 
+       } catch (IOException e) {
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestCleanupQueue.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestCleanupQueue.java
+index a84160f..6bc47f0 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestCleanupQueue.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestCleanupQueue.java
+@@ -46,7 +46,7 @@ public void testCleanupQueueClosesFilesystem() throws IOException,
+     // With UGI, should close FileSystem
+     CleanupQueue cleanupQueue = new CleanupQueue();
+     PathDeletionContext context = new PathDeletionContext(path, conf,
+-        UserGroupInformation.getLoginUser());
++        UserGroupInformation.getLoginUser(), null, null);
+     cleanupQueue.addToQueue(context);
+     
+     while (getFileSystemCacheSize() > 0) {
+-- 
+1.7.9.5
+

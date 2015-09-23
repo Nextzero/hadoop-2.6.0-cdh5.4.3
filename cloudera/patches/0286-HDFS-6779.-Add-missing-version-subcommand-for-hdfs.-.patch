@@ -1,0 +1,38 @@
+From 643bc81be43008ef3253d57ae12e9c0866d04352 Mon Sep 17 00:00:00 2001
+From: Haohui Mai <wheat9@apache.org>
+Date: Mon, 29 Sep 2014 18:10:47 -0700
+Subject: [PATCH 286/596] HDFS-6779. Add missing version subcommand for hdfs.
+ Contributed by Sasaki Toru.
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+	hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs
+
+(cherry picked from commit c20b8afd9efe317f95a4951a09a6b489354244be)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/src/main/bin/hdfs
+---
+ .../hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm   |    6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
+index 08e08a4..8fab781 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
+@@ -120,6 +120,12 @@ HDFS Commands Guide
+ 
+    Usage: <<<hdfs version>>>
+ 
++** <<<version>>>
++
++   Prints the version.
++
++   Usage: <<<hdfs version>>>
++
+ * Administration Commands
+ 
+    Commands useful for administrators of a hadoop cluster.
+-- 
+1.7.9.5
+

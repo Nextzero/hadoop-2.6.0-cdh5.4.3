@@ -1,0 +1,174 @@
+From 5b281a4c2b84f81876faaf9c34c12396687b0660 Mon Sep 17 00:00:00 2001
+From: Todd Lipcon <todd@apache.org>
+Date: Thu, 14 Aug 2014 04:47:20 +0000
+Subject: [PATCH 338/596] MAPREDUCE-6006. native-task: add native tests to
+ maven and fix bug in pom.xml. Contributed by
+ Binglin Chang.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/MR-2841@1617877 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 886338ff80438b2daea3755f165cc411e39ef560)
+(cherry picked from commit b083ed0f125b65755380bcd717c04f8de68a2972)
+---
+ .../CHANGES.MAPREDUCE-2841.txt                     |    3 +-
+ .../hadoop-mapreduce-client-common/pom.xml         |   11 --------
+ .../hadoop-mapreduce-client-nativetask/pom.xml     |   16 +++++++++--
+ .../src/CMakeLists.txt                             |    4 +++
+ .../src/main/native/test.sh                        |   29 ++++++++++++--------
+ hadoop-project/pom.xml                             |    6 ----
+ 6 files changed, 38 insertions(+), 31 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+index 462ac8b..c3c6ab9 100644
+--- a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
++++ b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+@@ -11,4 +11,5 @@ MAPREDUCE-5995. native-task: Revert changes to Text internals (todd)
+ MAPREDUCE-6005. native-task: Fix some valgrind errors (Binglin Chang)
+ MAPREDUCE-5984. native-task: Reuse lz4 sources in hadoop-common (Binglin Chang)
+ MAPREDUCE-5976. native-task: should not fail to build if snappy is missing (Manu Zhang)
+-MAPREDUCE-5978. native-task: remove test case for not supported codec Bzip2Codec and DefaultCodec (Manu Zhang)
+\ No newline at end of file
++MAPREDUCE-5978. native-task: remove test case for not supported codec Bzip2Codec and DefaultCodec (Manu Zhang)
++MAPREDUCE-6006. native-task: add native tests to maven and fix bug in pom.xml (Binglin Chang via todd)
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml
+index f9e266b..0033488 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml
+@@ -85,17 +85,6 @@
+           </execution>
+         </executions>
+       </plugin>
+-      <plugin>
+-        <artifactId>maven-jar-plugin</artifactId>
+-        <executions>
+-          <execution>
+-            <goals>
+-              <goal>test-jar</goal>
+-            </goals>
+-            <phase>test-compile</phase>
+-          </execution>
+-        </executions>
+-      </plugin>
+     </plugins>
+   </build>
+ </project>
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+index e1b025b..122a5af 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+@@ -66,7 +66,6 @@
+     <dependency>
+       <groupId>org.apache.hadoop</groupId>
+       <artifactId>hadoop-mapreduce-client-common</artifactId>
+-      <type>test-jar</type>
+       <scope>test</scope>
+     </dependency>
+   </dependencies>
+@@ -173,7 +172,6 @@
+                       overwrite="true">
+                       <fileset dir="${basedir}/src/main/native/testData" />
+                     </copy>
+-                    <copy file="${basedir}/src/main/native/test.sh" todir="${project.build.directory}/native/test" />
+                     <exec executable="cmake" dir="${project.build.directory}/native"
+                       failonerror="true">
+                       <arg line="${basedir}/src/ -DGENERATED_JAVAH=${project.build.directory}/native/javah -DJVM_ARCH_DATA_MODEL=${sun.arch.data.model} -DREQUIRE_SNAPPY=${require.snappy} -DCUSTOM_SNAPPY_PREFIX=${snappy.prefix} -DCUSTOM_SNAPPY_LIB=${snappy.lib} -DCUSTOM_SNAPPY_INCLUDE=${snappy.include}" />
+@@ -187,6 +185,20 @@
+                   </target>
+                 </configuration>
+               </execution>
++              <execution>
++                <id>native_tests</id>
++                <phase>test</phase>
++                <goals><goal>run</goal></goals>
++                <configuration>
++                  <target>
++                    <exec executable="sh" failonerror="true" dir="${project.build.directory}/native/test">
++                      <arg value="-c"/>
++                      <arg value="[ x$SKIPTESTS = xtrue ] || sh test.sh"/>
++                      <env key="SKIPTESTS" value="${skipTests}"/>
++                    </exec>
++                  </target>
++                </configuration>
++              </execution>
+             </executions>
+           </plugin>
+           <plugin>
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/CMakeLists.txt b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/CMakeLists.txt
+index f38021d..77b6109 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/CMakeLists.txt
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/CMakeLists.txt
+@@ -167,10 +167,14 @@ SET(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+ if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+     # macosx does not have -lrt
+     set(NT_DEPEND_LIBRARY dl pthread z ${SNAPPY_LIBRARY} ${JAVA_JVM_LIBRARY})
++    set(SYSTEM_MAC TRUE)
+ else (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+     set(NT_DEPEND_LIBRARY dl rt pthread z ${SNAPPY_LIBRARY} ${JAVA_JVM_LIBRARY})
++    set(SYSTEM_MAC FALSE)
+ endif (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
+ 
++configure_file(main/native/test.sh test/test.sh)
++
+ add_dual_library(nativetask
+     ${CMAKE_BINARY_DIR}/lz4.c
+     ${D}/cityhash/city.cc
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test.sh b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test.sh
+index 7310c9d..01506e6 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test.sh
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test.sh
+@@ -1,18 +1,25 @@
+-#!/bin/bash
++#!/bin/sh
++
++# only do normal tests by default
++FILTER="--gtest_filter=-Perf.*"
+ 
+ # do all tests
+-if [ "$1" == "all" ]; then
+-shift
+-./nttest $@
+-exit $?
++if [ "$1" = "all" ]; then
++  shift
++  FILTER=""
+ fi
+ 
+ # do performance tests only
+-if [ "$1" == "perf" ]; then
+-shift
+-./nttest --gtest_filter=Perf.* $@
+-exit $?
++if [ "$1" = "perf" ]; then
++  shift
++  FILTER="--gtest_filter=Perf.*"
++fi
++
++if [ "${SYSTEM_MAC}" = "TRUE" ]; then
++  # MACOSX already setup RPATH, no extra help required
++  ./nttest $FILTER $@
++else
++  JAVA_JVM_LIBRARY_DIR=`dirname ${JAVA_JVM_LIBRARY}`
++  LD_LIBRARY_PATH=$JAVA_JVM_LIBRARY_DIR:$LD_LIBRARY_PATH ./nttest $FILTER $@
+ fi
+ 
+-# do not do performance test by default
+-./nttest --gtest_filter=-Perf.* $@
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index 679f031..9315ade 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -148,12 +148,6 @@
+       </dependency>
+       <dependency>
+         <groupId>org.apache.hadoop</groupId>
+-        <artifactId>hadoop-mapreduce-client-common</artifactId>
+-        <version>${project.version}</version>
+-        <type>test-jar</type>
+-      </dependency>
+-      <dependency>
+-        <groupId>org.apache.hadoop</groupId>
+         <artifactId>hadoop-yarn-api</artifactId>
+         <version>${project.version}</version>
+       </dependency>
+-- 
+1.7.9.5
+

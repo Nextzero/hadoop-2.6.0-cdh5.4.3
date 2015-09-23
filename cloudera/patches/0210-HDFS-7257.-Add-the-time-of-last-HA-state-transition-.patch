@@ -1,0 +1,139 @@
+From 4bdac4a1e989ad07d0418279b5bc6f4e207aa39a Mon Sep 17 00:00:00 2001
+From: Haohui Mai <wheat9@apache.org>
+Date: Thu, 23 Oct 2014 16:52:58 -0700
+Subject: [PATCH 210/596] HDFS-7257. Add the time of last HA state transition
+ to NN's /jmx page. Contributed by Charles Lamb.
+
+(cherry picked from commit 92ad210699633d22ff199a0408b6506934b72ca9)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../hadoop/hdfs/server/namenode/NameNode.java      |    5 +++++
+ .../hdfs/server/namenode/NameNodeStatusMXBean.java |    7 +++++++
+ .../hadoop/hdfs/server/namenode/ha/HAState.java    |   17 ++++++++++++++++-
+ .../hdfs/server/namenode/ha/TestHAMetrics.java     |   13 +++++++++++++
+ 4 files changed, 41 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
+index cb182c9..a984a42 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNode.java
+@@ -1614,6 +1614,11 @@ public boolean isSecurityEnabled() {
+     return UserGroupInformation.isSecurityEnabled();
+   }
+ 
++  @Override // NameNodeStatusMXBean
++  public long getLastHATransitionTime() {
++    return state.getLastHATransitionTime();
++  }
++
+   /**
+    * Shutdown the NN immediately in an ungraceful way. Used when it would be
+    * unsafe for the NN to continue operating, e.g. during a failed HA state
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeStatusMXBean.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeStatusMXBean.java
+index f52407f..e3f712a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeStatusMXBean.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeStatusMXBean.java
+@@ -54,4 +54,11 @@
+    * @return true, if security is enabled.
+    */
+   public boolean isSecurityEnabled();
++
++  /**
++   * Gets the most recent HA transition time in milliseconds from the epoch.
++   *
++   * @return the most recent HA transition time in milliseconds from the epoch.
++   */
++  public long getLastHATransitionTime();
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/HAState.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/HAState.java
+index 34a5da2..f300710 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/HAState.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/ha/HAState.java
+@@ -21,8 +21,8 @@
+ import org.apache.hadoop.ha.HAServiceProtocol.HAServiceState;
+ import org.apache.hadoop.ha.ServiceFailedException;
+ import org.apache.hadoop.hdfs.server.namenode.NameNode.OperationCategory;
+-import org.apache.hadoop.hdfs.server.namenode.UnsupportedActionException;
+ import org.apache.hadoop.ipc.StandbyException;
++import org.apache.hadoop.util.Time;
+ 
+ /**
+  * Namenode base state to implement state machine pattern.
+@@ -30,6 +30,7 @@
+ @InterfaceAudience.Private
+ abstract public class HAState {
+   protected final HAServiceState state;
++  private long lastHATransitionTime;
+ 
+   /**
+    * Constructor
+@@ -61,12 +62,26 @@ protected final void setStateInternal(final HAContext context, final HAState s)
+       exitState(context);
+       context.setState(s);
+       s.enterState(context);
++      s.updateLastHATransitionTime();
+     } finally {
+       context.writeUnlock();
+     }
+   }
+ 
+   /**
++   * Gets the most recent HA transition time in milliseconds from the epoch.
++   *
++   * @return the most recent HA transition time in milliseconds from the epoch.
++   */
++  public long getLastHATransitionTime() {
++    return lastHATransitionTime;
++  }
++
++  private void updateLastHATransitionTime() {
++    lastHATransitionTime = Time.now();
++  }
++
++  /**
+    * Method to be overridden by subclasses to prepare to enter a state.
+    * This method is called <em>without</em> the context being locked,
+    * and after {@link #prepareToExitState(HAContext)} has been called
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestHAMetrics.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestHAMetrics.java
+index 1cd76f4..6f9fc6e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestHAMetrics.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/ha/TestHAMetrics.java
+@@ -30,6 +30,10 @@
+ import org.apache.hadoop.io.IOUtils;
+ import org.junit.Test;
+ 
++import javax.management.MBeanServer;
++import javax.management.ObjectName;
++import java.lang.management.ManagementFactory;
++
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertTrue;
+ 
+@@ -62,6 +66,12 @@ public void testHAMetrics() throws Exception {
+       assertTrue(0 < nn1.getMillisSinceLastLoadedEdits());
+ 
+       cluster.transitionToActive(0);
++      final MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
++      final ObjectName mxbeanName =
++          new ObjectName("Hadoop:service=NameNode,name=NameNodeStatus");
++      final Long ltt1 =
++          (Long) mbs.getAttribute(mxbeanName, "LastHATransitionTime");
++      assertTrue("lastHATransitionTime should be > 0", ltt1 > 0);
+       
+       assertEquals("active", nn0.getHAState());
+       assertEquals(0, nn0.getMillisSinceLastLoadedEdits());
+@@ -69,6 +79,9 @@ public void testHAMetrics() throws Exception {
+       assertTrue(0 < nn1.getMillisSinceLastLoadedEdits());
+       
+       cluster.transitionToStandby(0);
++      final Long ltt2 =
++          (Long) mbs.getAttribute(mxbeanName, "LastHATransitionTime");
++      assertTrue("lastHATransitionTime should be > " + ltt1, ltt2 > ltt1);
+       cluster.transitionToActive(1);
+       
+       assertEquals("standby", nn0.getHAState());
+-- 
+1.7.9.5
+

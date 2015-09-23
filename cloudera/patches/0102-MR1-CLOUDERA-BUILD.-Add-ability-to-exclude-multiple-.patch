@@ -1,0 +1,29 @@
+From 85e6f9e12ddef1e1ce6f7d147a6281d66ed7f915 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Wed, 2 Oct 2013 11:08:37 -0700
+Subject: [PATCH 102/596] MR1: CLOUDERA-BUILD. Add ability to exclude multiple
+ MR1 tests from being executed (CDH-14677)
+
+(cherry picked from commit e56339642a01922a06bf2552eae23aecfeb2de09)
+(cherry picked from commit 524e7f34fa942cd7012b7260f1891b6e9ed2840c)
+(cherry picked from commit 05df9f46f09987895f99d529bd83276f852211e7)
+---
+ hadoop-mapreduce1-project/build.xml |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index 4b72074..09798df 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -904,7 +904,7 @@
+         <formatter type="${test.junit.output.format}" />
+         <batchtest todir="@{test.dir}" if="tests.notestcase">
+           <fileset dir="@{fileset.dir}"
+-                   excludes="**/${test.exclude}.java aop/** system/**">
++                   excludes="**/${test.exclude}.java aop/** system/** ${tests.exclude}">
+             <patternset>
+               <includesfile name="@{test.file}"/>
+             </patternset>
+-- 
+1.7.9.5
+

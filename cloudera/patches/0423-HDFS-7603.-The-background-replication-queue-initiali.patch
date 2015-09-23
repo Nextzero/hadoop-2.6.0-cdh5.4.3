@@ -1,0 +1,39 @@
+From 3abd23127c0882566bd8ed7c9c48eab8898ccf22 Mon Sep 17 00:00:00 2001
+From: Kihwal Lee <kihwal@apache.org>
+Date: Thu, 29 Jan 2015 12:37:34 -0600
+Subject: [PATCH 423/596] HDFS-7603. The background replication queue
+ initialization may not let others run. Contributed
+ by Kihwal Lee. (cherry picked from commit
+ 89b07490f8354bb83a67b7ffc917bfe99708e615)
+
+(cherry picked from commit 3b030731a066a06c8374327975771b60b7cfc6f0)
+---
+ .../hdfs/server/blockmanagement/BlockManager.java  |    5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index 46c6dc0..3c24d56 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -2614,6 +2614,9 @@ private void processMisReplicatesAsync() throws InterruptedException {
+     long totalBlocks = blocksMap.size();
+     replicationQueuesInitProgress = 0;
+     long totalProcessed = 0;
++    long sleepDuration =
++        Math.max(1, Math.min(numBlocksPerIteration/1000, 10000));
++
+     while (namesystem.isRunning() && !Thread.currentThread().isInterrupted()) {
+       int processed = 0;
+       namesystem.writeLockInterruptibly();
+@@ -2670,6 +2673,8 @@ private void processMisReplicatesAsync() throws InterruptedException {
+         }
+       } finally {
+         namesystem.writeUnlock();
++        // Make sure it is out of the write lock for sufficiently long time.
++        Thread.sleep(sleepDuration);
+       }
+     }
+     if (Thread.currentThread().isInterrupted()) {
+-- 
+1.7.9.5
+

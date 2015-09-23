@@ -1,0 +1,29 @@
+From e3a043c931ff370556c60f88125095505ea5af9b Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Sat, 16 Nov 2013 02:40:56 +0530
+Subject: [PATCH 117/596] MR1: CLOUDERA-BUILD. Add JobTokenIdentifier as a
+ provider for TokenIdentifier
+
+(cherry picked from commit 98d1bf08e6ce42df9fc3194c2d1037bc259707cf)
+(cherry picked from commit b6053867acec2854547ffe87fd8887ddc624e662)
+(cherry picked from commit 937d0b19d30f7377bb29ee18cde83f0833655217)
+(cherry picked from commit 2fc09d943de6b55a881631c6f419aaac7022c07d)
+---
+ hadoop-mapreduce1-project/build.xml |    1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index b54739c..3f33a7d 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -666,6 +666,7 @@
+         <provider classname="org.apache.hadoop.hdfs.HftpFileSystem$TokenManager"/>
+       </service>
+       <service type="org.apache.hadoop.security.token.TokenIdentifier">
++        <provider classname="org.apache.hadoop.mapreduce.security.token.JobTokenIdentifier"/>
+         <provider classname="org.apache.hadoop.mapreduce.security.token.delegation.DelegationTokenIdentifier"/>
+       </service>
+       <fileset dir="${conf.dir}" includes="${jar.properties.list}" />
+-- 
+1.7.9.5
+

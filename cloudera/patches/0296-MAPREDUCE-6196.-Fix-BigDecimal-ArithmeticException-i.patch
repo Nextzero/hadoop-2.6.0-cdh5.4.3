@@ -1,0 +1,58 @@
+From d1a7f335da51d618de720dd2d3a5a1f5a67288ec Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@apache.org>
+Date: Mon, 15 Dec 2014 17:54:31 -0800
+Subject: [PATCH 296/596] MAPREDUCE-6196. Fix BigDecimal ArithmeticException
+ in PiEstimator (rchiang via rkanter)
+
+(cherry picked from commit 0860d1a26bc1ea4a4d89d2c8bc7e6797553f656a)
+
+Conflicts:
+	CHANGES.txt
+
+(cherry picked from commit 5edde4f640fd2015001952e8d7f52ce9f56b904b)
+---
+ .../org/apache/hadoop/examples/PiEstimator.java    |   14 ++++++++++----
+ 1 file changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/examples/org/apache/hadoop/examples/PiEstimator.java b/hadoop-mapreduce1-project/src/examples/org/apache/hadoop/examples/PiEstimator.java
+index 7c3dd3e..c0a8c78 100644
+--- a/hadoop-mapreduce1-project/src/examples/org/apache/hadoop/examples/PiEstimator.java
++++ b/hadoop-mapreduce1-project/src/examples/org/apache/hadoop/examples/PiEstimator.java
+@@ -20,6 +20,7 @@
+ 
+ import java.io.IOException;
+ import java.math.BigDecimal;
++import java.math.MathContext;
+ import java.util.Iterator;
+ 
+ import org.apache.hadoop.conf.Configured;
+@@ -67,6 +68,9 @@
+   /** tmp directory for input/output */
+   static private final Path TMP_DIR = new Path(
+       PiEstimator.class.getSimpleName() + "_TMP_3_141592654");
++
++  /* Default value for maximum precision during estimation */
++  public static int DEFAULT_PRECISION = 20;
+   
+   /** 2-dimensional Halton sequence {H(i)},
+    * where H(i) is a 2-dimensional point and i >= 1 is the index.
+@@ -310,10 +314,12 @@ public static BigDecimal estimate(int numMaps, long numPoints, JobConf jobConf
+       }
+ 
+       //compute estimated value
+-      return BigDecimal.valueOf(4).setScale(20)
+-          .multiply(BigDecimal.valueOf(numInside.get()))
+-          .divide(BigDecimal.valueOf(numMaps))
+-          .divide(BigDecimal.valueOf(numPoints));
++      int precision = PiEstimator.DEFAULT_PRECISION;
++      MathContext mc = new MathContext(precision);
++      return BigDecimal.valueOf(4).setScale(precision)
++          .multiply(BigDecimal.valueOf(numInside.get()),mc)
++          .divide(BigDecimal.valueOf(numMaps),mc)
++          .divide(BigDecimal.valueOf(numPoints),mc);
+     } finally {
+       fs.delete(TMP_DIR, true);
+     }
+-- 
+1.7.9.5
+

@@ -1,0 +1,33 @@
+From ff0fbbc9f4ab91fe6d260ea3a9b63adde5cb8bff Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Mon, 5 Aug 2013 22:47:40 -0700
+Subject: [PATCH 095/596] MR1: MAPREDUCE-5367. Local jobs all use same local
+ working directory (Sandy Ryza)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1510613 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 31f3ce8926e4a89b53b5cc81f99ba14818d18bf4)
+(cherry picked from commit a1c17e9da89e94a48c38d9fe5c46504af84823fa)
+(cherry picked from commit d472102eaa332c76a178fb00a15243a6cca53a5b)
+(cherry picked from commit be57da53d6dfd9fcd8f6915a5ce9abd1e0e14035)
+---
+ .../org/apache/hadoop/mapred/LocalJobRunner.java   |    4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LocalJobRunner.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LocalJobRunner.java
+index 8d2e158..0088421 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LocalJobRunner.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LocalJobRunner.java
+@@ -137,7 +137,9 @@ public Job(JobID jobid, String jobSubmitDir) throws IOException {
+ 
+       this.localFs = FileSystem.getLocal(conf);
+ 
+-      this.localJobDir = localFs.makeQualified(conf.getLocalPath(jobDir));
++      String user = UserGroupInformation.getCurrentUser().getShortUserName();
++      this.localJobDir = localFs.makeQualified(new Path(
++          new Path(conf.getLocalPath(jobDir), user), jobid.toString()));
+       this.localJobFile = new Path(this.localJobDir, id + ".xml");
+ 
+       // Manage the distributed cache.  If there are files to be copied,
+-- 
+1.7.9.5
+

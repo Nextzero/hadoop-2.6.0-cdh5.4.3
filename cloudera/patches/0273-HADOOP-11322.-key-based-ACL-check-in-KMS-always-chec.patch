@@ -1,0 +1,96 @@
+From b3fd664c78f5a065aaae6ce020c16e0485cf78e9 Mon Sep 17 00:00:00 2001
+From: yliu <yliu@apache.org>
+Date: Tue, 25 Nov 2014 01:12:31 +0800
+Subject: [PATCH 273/596] HADOOP-11322. key based ACL check in KMS always
+ check KeyOpType.MANAGEMENT even actual KeyOpType is
+ not MANAGEMENT. (Dian Fu via yliu)
+
+(cherry picked from commit 4b62d6d2fd1c7740b7b768e3294ecd9572f94e98)
+(cherry picked from commit 81a067b0f83166b7b1a6235139229073d4eb1f25)
+---
+ .../kms/server/KeyAuthorizationKeyProvider.java    |    2 +-
+ .../hadoop/crypto/key/kms/server/TestKMS.java      |   38 +++++++++++++++++---
+ 2 files changed, 35 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KeyAuthorizationKeyProvider.java b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KeyAuthorizationKeyProvider.java
+index bccec4a..0e43b47 100644
+--- a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KeyAuthorizationKeyProvider.java
++++ b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KeyAuthorizationKeyProvider.java
+@@ -132,7 +132,7 @@ private void checkAccess(String aclName, UserGroupInformation ugi,
+       KeyOpType opType) throws AuthorizationException {
+     Preconditions.checkNotNull(aclName, "Key ACL name cannot be null");
+     Preconditions.checkNotNull(ugi, "UserGroupInformation cannot be null");
+-    if (acls.isACLPresent(aclName, KeyOpType.MANAGEMENT) &&
++    if (acls.isACLPresent(aclName, opType) &&
+         (acls.hasAccessToKey(aclName, ugi, opType)
+             || acls.hasAccessToKey(aclName, ugi, KeyOpType.ALL))) {
+       return;
+diff --git a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+index 86e0516..97901c8 100644
+--- a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
++++ b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+@@ -33,11 +33,9 @@
+ import org.apache.hadoop.security.Credentials;
+ import org.apache.hadoop.security.SecurityUtil;
+ import org.apache.hadoop.security.UserGroupInformation;
+-import org.apache.hadoop.security.authentication.client.AuthenticatedURL;
+ import org.apache.hadoop.security.authorize.AuthorizationException;
+ import org.apache.hadoop.security.ssl.KeyStoreTestUtil;
+ import org.apache.hadoop.security.token.Token;
+-import org.apache.hadoop.security.token.delegation.web.DelegationTokenAuthenticatedURL;
+ import org.junit.AfterClass;
+ import org.junit.Assert;
+ import org.junit.Before;
+@@ -53,8 +51,6 @@
+ import java.io.FileWriter;
+ import java.io.IOException;
+ import java.io.Writer;
+-import java.lang.reflect.Field;
+-import java.lang.reflect.Method;
+ import java.net.InetAddress;
+ import java.net.InetSocketAddress;
+ import java.net.ServerSocket;
+@@ -798,6 +794,40 @@ public Void run() throws Exception {
+         return null;
+       }
+     });
++
++    conf.set(KMSConfiguration.DEFAULT_KEY_ACL_PREFIX + "MANAGEMENT", "");
++    conf.set(KMSConfiguration.DEFAULT_KEY_ACL_PREFIX + "GENERATE_EEK", "*");
++    writeConf(testDir, conf);
++
++    runServer(null, null, testDir, new KMSCallable<Void>() {
++
++      @Override
++      public Void call() throws Exception {
++        final Configuration conf = new Configuration();
++        conf.setInt(KeyProvider.DEFAULT_BITLENGTH_NAME, 128);
++        final URI uri = createKMSUri(getKMSUrl());
++
++        doAs("GENERATE_EEK", new PrivilegedExceptionAction<Void>() {
++          @Override
++          public Void run() throws Exception {
++            KeyProvider kp = new KMSClientProvider(uri, conf);
++            try {
++              KeyProviderCryptoExtension kpce =
++                  KeyProviderCryptoExtension.createKeyProviderCryptoExtension(kp);
++              try {
++                kpce.generateEncryptedKey("k1");
++              } catch (Exception e) {
++                Assert.fail("User [GENERATE_EEK] should be allowed to generate_eek on k1");
++              }
++            } catch (Exception ex) {
++              Assert.fail(ex.getMessage());
++            }
++            return null;
++          }
++        });
++        return null;
++      }
++    });
+   }
+ 
+   @Test
+-- 
+1.7.9.5
+

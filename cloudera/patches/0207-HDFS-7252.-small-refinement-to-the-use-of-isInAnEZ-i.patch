@@ -1,0 +1,54 @@
+From bf53838bb9e005751381e7a693031a701c74a37b Mon Sep 17 00:00:00 2001
+From: Vinayakumar B <vinayakumarb@apache.org>
+Date: Fri, 17 Oct 2014 18:03:44 +0530
+Subject: [PATCH 207/596] HDFS-7252. small refinement to the use of isInAnEZ
+ in FSNamesystem. (Yi Liu via vinayakumarb) (cherry
+ picked from
+ 368743140dd076ecd5af309c1ed83c5ae2d59fc8)
+
+(cherry picked from commit 2c29e799335ef01ee634a21ab7c8cc9dc7e187ed)
+---
+ .../hadoop/hdfs/server/namenode/FSNamesystem.java  |   12 +++++++-----
+ 1 file changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index 0e84602..5d746a2 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -2613,11 +2613,11 @@ private HdfsFileStatus startFileInt(final String srcArg,
+         src = resolvePath(src, pathComponents);
+         INodesInPath iip = dir.getINodesInPath4Write(src);
+         // Nothing to do if the path is not within an EZ
+-        if (dir.isInAnEZ(iip)) {
+-          EncryptionZone zone = dir.getEZForPath(iip);
++        final EncryptionZone zone = dir.getEZForPath(iip);
++        if (zone != null) {
+           protocolVersion = chooseProtocolVersion(zone, supportedVersions);
+           suite = zone.getSuite();
+-          ezKeyName = dir.getKeyName(iip);
++          ezKeyName = zone.getKeyName();
+ 
+           Preconditions.checkNotNull(protocolVersion);
+           Preconditions.checkNotNull(suite);
+@@ -2700,14 +2700,16 @@ private BlocksMapUpdateInfo startFileInternal(FSPermissionChecker pc,
+     }
+ 
+     FileEncryptionInfo feInfo = null;
+-    if (dir.isInAnEZ(iip)) {
++
++    final EncryptionZone zone = dir.getEZForPath(iip);
++    if (zone != null) {
+       // The path is now within an EZ, but we're missing encryption parameters
+       if (suite == null || edek == null) {
+         throw new RetryStartFileException();
+       }
+       // Path is within an EZ and we have provided encryption parameters.
+       // Make sure that the generated EDEK matches the settings of the EZ.
+-      String ezKeyName = dir.getKeyName(iip);
++      final String ezKeyName = zone.getKeyName();
+       if (!ezKeyName.equals(edek.getEncryptionKeyName())) {
+         throw new RetryStartFileException();
+       }
+-- 
+1.7.9.5
+

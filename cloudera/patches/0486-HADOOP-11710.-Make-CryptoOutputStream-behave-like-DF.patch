@@ -1,0 +1,76 @@
+From 0c2aaa1a16711ec158b6ea271340009e89b15978 Mon Sep 17 00:00:00 2001
+From: yliu <yliu@apache.org>
+Date: Fri, 13 Mar 2015 02:26:16 +0800
+Subject: [PATCH 486/596] HADOOP-11710. Make CryptoOutputStream behave like
+ DFSOutputStream wrt synchronization. (Sean Busbey
+ via yliu)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit 813c93cb250d6d556604fe98845b979970bd5e18)
+
+Reason: Bug
+Author: Sean Busbey
+Ref: CDH-25801
+---
+ .../apache/hadoop/crypto/CryptoOutputStream.java   |   19 ++++++++++++-------
+ 1 file changed, 12 insertions(+), 7 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoOutputStream.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoOutputStream.java
+index f1b2737..9e79fbf 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoOutputStream.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoOutputStream.java
+@@ -40,6 +40,9 @@
+  * padding = pos%(algorithm blocksize); 
+  * <p/>
+  * The underlying stream offset is maintained as state.
++ *
++ * Note that while some of this class' methods are synchronized, this is just to
++ * match the threadsafety behavior of DFSOutputStream. See HADOOP-11710.
+  */
+ @InterfaceAudience.Private
+ @InterfaceStability.Evolving
+@@ -125,7 +128,7 @@ public OutputStream getWrappedStream() {
+    * @throws IOException
+    */
+   @Override
+-  public void write(byte[] b, int off, int len) throws IOException {
++  public synchronized void write(byte[] b, int off, int len) throws IOException {
+     checkStream();
+     if (b == null) {
+       throw new NullPointerException();
+@@ -212,14 +215,16 @@ private void updateEncryptor() throws IOException {
+   }
+   
+   @Override
+-  public void close() throws IOException {
++  public synchronized void close() throws IOException {
+     if (closed) {
+       return;
+     }
+-    
+-    super.close();
+-    freeBuffers();
+-    closed = true;
++    try {
++      super.close();
++      freeBuffers();
++    } finally {
++      closed = true;
++    }
+   }
+   
+   /**
+@@ -227,7 +232,7 @@ public void close() throws IOException {
+    * underlying stream, then do the flush.
+    */
+   @Override
+-  public void flush() throws IOException {
++  public synchronized void flush() throws IOException {
+     checkStream();
+     encrypt();
+     super.flush();
+-- 
+1.7.9.5
+

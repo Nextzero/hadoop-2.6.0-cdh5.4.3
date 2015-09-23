@@ -1,0 +1,37 @@
+From 8bafc0705e90bd589773f2f702ea045c4f82ff07 Mon Sep 17 00:00:00 2001
+From: Andrew Bayer <andrew@cloudera.com>
+Date: Fri, 14 Feb 2014 16:07:35 -0800
+Subject: [PATCH 169/596] CLOUDERA-BUILD. Removing upstream Maven deployment
+ repos
+
+(cherry picked from commit ad6e9c9946e9374c23ccc3bdc6a63aa7dfed6f16)
+(cherry picked from commit 9ae46da65a66bbd0fa0b3fcaaa971e5062e2ddee)
+(cherry picked from commit eb0cc244d95c97cdc3a56f5f4b02919ef4d49587)
+---
+ pom.xml |   10 ----------
+ 1 file changed, 10 deletions(-)
+
+diff --git a/pom.xml b/pom.xml
+index e551b60..3fa349c 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -40,16 +40,6 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
+   </dependencyManagement>
+ 
+   <distributionManagement>
+-    <repository>
+-      <id>${distMgmtStagingId}</id>
+-      <name>${distMgmtStagingName}</name>
+-      <url>${distMgmtStagingUrl}</url>
+-    </repository>
+-    <snapshotRepository>
+-      <id>${distMgmtSnapshotsId}</id>
+-      <name>${distMgmtSnapshotsName}</name>
+-      <url>${distMgmtSnapshotsUrl}</url>
+-    </snapshotRepository>
+     <site>
+       <id>apache.website</id>
+       <url>scpexe://people.apache.org/www/hadoop.apache.org/docs/r${project.version}</url>
+-- 
+1.7.9.5
+

@@ -1,0 +1,111 @@
+From 258ffaa4d2bd79b9766c57b750c95cf20dcb65ee Mon Sep 17 00:00:00 2001
+From: Haohui Mai <wheat9@apache.org>
+Date: Tue, 4 Nov 2014 17:52:03 -0800
+Subject: [PATCH 237/596] HADOOP-11230. Add missing dependency of bouncycastle
+ for kms, httpfs, hdfs, MR and YARN. Contributed by
+ Robert Kanter.
+
+(cherry picked from commit fa92b40f0950381b99160c77d295cc997e3d2e6c)
+
+Conflicts:
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/pom.xml
+
+(cherry picked from commit 68ad8379597f3a77f4eba7bf9218de248a0f70f1)
+
+Conflicts:
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/pom.xml
+---
+ hadoop-common-project/hadoop-kms/pom.xml           |    6 ++++++
+ hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml     |    6 ++++++
+ hadoop-hdfs-project/hadoop-hdfs/pom.xml            |    6 ++++++
+ .../hadoop-mapreduce-client-jobclient/pom.xml      |    6 ++++++
+ .../pom.xml                                        |    6 ++++++
+ 5 files changed, 30 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-kms/pom.xml b/hadoop-common-project/hadoop-kms/pom.xml
+index b50088b..7d83231 100644
+--- a/hadoop-common-project/hadoop-kms/pom.xml
++++ b/hadoop-common-project/hadoop-kms/pom.xml
+@@ -192,6 +192,12 @@
+       <artifactId>curator-test</artifactId>
+       <scope>test</scope>
+     </dependency>
++    <!-- 'mvn dependency:analyze' fails to detect use of this dependency -->
++    <dependency>
++      <groupId>org.bouncycastle</groupId>
++      <artifactId>bcprov-jdk16</artifactId>
++      <scope>test</scope>
++    </dependency>
+   </dependencies>
+ 
+   <build>
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml b/hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml
+index dce6fde..4d1e362 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml
++++ b/hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml
+@@ -255,6 +255,12 @@
+       <artifactId>slf4j-log4j12</artifactId>
+       <scope>runtime</scope>
+     </dependency>
++    <!-- 'mvn dependency:analyze' fails to detect use of this dependency -->
++    <dependency>
++      <groupId>org.bouncycastle</groupId>
++      <artifactId>bcprov-jdk16</artifactId>
++      <scope>test</scope>
++    </dependency>
+   </dependencies>
+ 
+   <build>
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/pom.xml b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+index 2941027..5caca67 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/pom.xml
++++ b/hadoop-hdfs-project/hadoop-hdfs/pom.xml
+@@ -207,6 +207,12 @@ http://maven.apache.org/xsd/maven-4.0.0.xsd">
+       <type>test-jar</type>
+       <scope>test</scope>
+     </dependency>
++    <!-- 'mvn dependency:analyze' fails to detect use of this dependency -->
++    <dependency>
++      <groupId>org.bouncycastle</groupId>
++      <artifactId>bcprov-jdk16</artifactId>
++      <scope>test</scope>
++    </dependency>
+   </dependencies>
+ 
+   <build>
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/pom.xml
+index 9635f19..a491960 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/pom.xml
+@@ -102,6 +102,12 @@
+       <artifactId>hsqldb</artifactId>
+       <scope>test</scope>
+     </dependency>
++    <!-- 'mvn dependency:analyze' fails to detect use of this dependency -->
++    <dependency>
++      <groupId>org.bouncycastle</groupId>
++      <artifactId>bcprov-jdk16</artifactId>
++      <scope>test</scope>
++    </dependency>
+   </dependencies>
+ 
+  <profiles>
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/pom.xml b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/pom.xml
+index ba9347e..2da9fcb 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/pom.xml
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-applicationhistoryservice/pom.xml
+@@ -191,5 +191,11 @@
+       <scope>test</scope>
+       <type>test-jar</type>
+     </dependency>
++
++    <dependency>
++      <groupId>org.bouncycastle</groupId>
++      <artifactId>bcprov-jdk16</artifactId>
++      <scope>test</scope>
++    </dependency>
+   </dependencies>
+ </project>
+-- 
+1.7.9.5
+

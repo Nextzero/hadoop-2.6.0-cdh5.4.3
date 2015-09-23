@@ -1,0 +1,56 @@
+From 41f382301c38006cf5697b64e63908567428fc4a Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Wed, 29 Oct 2014 10:24:57 -0700
+Subject: [PATCH 257/596] YARN-2742. FairSchedulerConfiguration should allow
+ extra spaces between value and unit. (Wei Yan via
+ kasha) (cherry picked from commit
+ 782971ae7a0247bcf5920e10b434b7e0954dd868)
+
+(cherry picked from commit e88832dfb3db170b890dbab47dede97ad52a980d)
+(cherry picked from commit 546810ad46b665402061170032cadf58f97f8699)
+---
+ .../scheduler/fair/FairSchedulerConfiguration.java |    3 ++-
+ .../fair/TestFairSchedulerConfiguration.java       |    6 ++++++
+ 2 files changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairSchedulerConfiguration.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairSchedulerConfiguration.java
+index a96952d..32ef906 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairSchedulerConfiguration.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/FairSchedulerConfiguration.java
+@@ -241,6 +241,7 @@ public boolean getUsePortForNodeName() {
+   public static Resource parseResourceConfigValue(String val)
+       throws AllocationConfigurationException {
+     try {
++      val = val.toLowerCase();
+       int memory = findResource(val, "mb");
+       int vcores = findResource(val, "vcores");
+       return BuilderUtils.newResource(memory, vcores);
+@@ -258,7 +259,7 @@ public long getUpdateInterval() {
+   
+   private static int findResource(String val, String units)
+     throws AllocationConfigurationException {
+-    Pattern pattern = Pattern.compile("(\\d+) ?" + units);
++    Pattern pattern = Pattern.compile("(\\d+)\\s*" + units);
+     Matcher matcher = pattern.matcher(val);
+     if (!matcher.find()) {
+       throw new AllocationConfigurationException("Missing resource: " + units);
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairSchedulerConfiguration.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairSchedulerConfiguration.java
+index 3db87f6..82b50a6 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairSchedulerConfiguration.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/fair/TestFairSchedulerConfiguration.java
+@@ -39,6 +39,12 @@ public void testParseResourceConfigValue() throws Exception {
+         parseResourceConfigValue("2vcores,1024mb"));
+     assertEquals(BuilderUtils.newResource(1024, 2),
+         parseResourceConfigValue("1024mb,2vcores"));
++    assertEquals(BuilderUtils.newResource(1024, 2),
++        parseResourceConfigValue("1024   mb, 2    vcores"));
++    assertEquals(BuilderUtils.newResource(1024, 2),
++        parseResourceConfigValue("1024 Mb, 2 vCores"));
++    assertEquals(BuilderUtils.newResource(1024, 2),
++        parseResourceConfigValue("  1024 mb, 2 vcores  "));
+   }
+   
+   @Test(expected = AllocationConfigurationException.class)
+-- 
+1.7.9.5
+

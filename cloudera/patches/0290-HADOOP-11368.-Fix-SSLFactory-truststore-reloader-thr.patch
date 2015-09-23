@@ -1,0 +1,70 @@
+From 6e444c43d932847ebd7ab4005a84283ce8034d50 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Tue, 9 Dec 2014 10:46:50 -0800
+Subject: [PATCH 290/596] HADOOP-11368. Fix SSLFactory truststore reloader
+ thread leak in KMSClientProvider. Contributed by
+ Arun Suresh.
+
+(cherry picked from commit 74d4bfded98239507511dedb515bc6a54958d5a8)
+(cherry picked from commit deaa172e7a2ab09656cc9eb431a3e68a73e0bd96)
+(cherry picked from commit f7b8b04e988da8790806bb42d05f263930227a8e)
+---
+ .../hadoop/crypto/key/kms/KMSClientProvider.java   |    4 +++
+ .../hadoop/crypto/key/kms/server/TestKMS.java      |   26 ++++++++++++++++++++
+ 2 files changed, 30 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
+index 357f419..760d1bd 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
+@@ -827,6 +827,10 @@ public void close() throws IOException {
+       encKeyVersionQueue.shutdown();
+     } catch (Exception e) {
+       throw new IOException(e);
++    } finally {
++      if (sslFactory != null) {
++        sslFactory.destroy();
++      }
+     }
+   }
+ }
+diff --git a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+index 61ce807..f487e98 100644
+--- a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
++++ b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+@@ -303,6 +303,32 @@ public Void call() throws Exception {
+             url.getProtocol().equals("https"));
+         final URI uri = createKMSUri(getKMSUrl());
+ 
++        if (ssl) {
++          KeyProvider testKp = new KMSClientProvider(uri, conf);
++          ThreadGroup threadGroup = Thread.currentThread().getThreadGroup();
++          while (threadGroup.getParent() != null) {
++            threadGroup = threadGroup.getParent();
++          }
++          Thread[] threads = new Thread[threadGroup.activeCount()];
++          threadGroup.enumerate(threads);
++          Thread reloaderThread = null;
++          for (Thread thread : threads) {
++            if ((thread.getName() != null)
++                && (thread.getName().contains("Truststore reloader thread"))) {
++              reloaderThread = thread;
++            }
++          }
++          Assert.assertTrue("Reloader is not alive", reloaderThread.isAlive());
++          testKp.close();
++          boolean reloaderStillAlive = true;
++          for (int i = 0; i < 10; i++) {
++            reloaderStillAlive = reloaderThread.isAlive();
++            if (!reloaderStillAlive) break;
++            Thread.sleep(1000);
++          }
++          Assert.assertFalse("Reloader is still alive", reloaderStillAlive);
++        }
++
+         if (kerberos) {
+           for (String user : new String[]{"client", "client/host"}) {
+             doAs(user, new PrivilegedExceptionAction<Void>() {
+-- 
+1.7.9.5
+

@@ -1,0 +1,211 @@
+From 59e0e797b296fb51d0ad837c1b76f2110046017a Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Fri, 29 Aug 2014 17:15:38 -0700
+Subject: [PATCH 200/596] YARN-2360. Fair Scheduler: Display dynamic fair
+ share for queues on the scheduler page. (Ashwin
+ Shankar and Wei Yan via kasha)
+
+(cherry picked from commit 270a271f53f52a1f33e63a0520ae6032536dd4c6)
+
+Conflicts:
+(cherry picked from commit 3f591ec2b5e64d2b17af8d6292c20a3c2cadca6b)
+---
+ .../resourcemanager/webapp/FairSchedulerPage.java  |   31 ++++++++++++------
+ .../webapp/dao/FairSchedulerQueueInfo.java         |   34 ++++++++++++++++----
+ .../src/site/apt/FairScheduler.apt.vm              |   20 ++++++++----
+ 3 files changed, 62 insertions(+), 23 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/FairSchedulerPage.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/FairSchedulerPage.java
+index 0d3c297..8c54f4e 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/FairSchedulerPage.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/FairSchedulerPage.java
+@@ -44,10 +44,12 @@
+   static final float Q_MAX_WIDTH = 0.8f;
+   static final float Q_STATS_POS = Q_MAX_WIDTH + 0.05f;
+   static final String Q_END = "left:101%";
+-  static final String Q_GIVEN = "left:0%;background:none;border:1px dashed rgba(0,0,0,0.25)";
++  static final String Q_GIVEN = "left:0%;background:none;border:1px solid rgba(0,0,0,1)";
++  static final String Q_INSTANTANEOUS_FS = "left:0%;background:none;border:1px dashed rgba(0,0,0,1)";
+   static final String Q_OVER = "background:rgba(255, 140, 0, 0.8)";
+   static final String Q_UNDER = "background:rgba(50, 205, 50, 0.8)";
+-  
++  static final String STEADY_FAIR_SHARE = "Steady Fair Share";
++  static final String INSTANTANEOUS_FAIR_SHARE = "Instantaneous Fair Share";
+   @RequestScoped
+   static class FSQInfo {
+     FairSchedulerQueueInfo qinfo;
+@@ -73,8 +75,8 @@ protected void render(Block html) {
+       if (maxApps < Integer.MAX_VALUE) {
+           ri._("Max Running Applications:", qinfo.getMaxApplications());
+       }
+-      ri._("Fair Share:", qinfo.getFairShare().toString());
+-
++      ri._(STEADY_FAIR_SHARE + ":", qinfo.getSteadyFairShare().toString());
++      ri._(INSTANTANEOUS_FAIR_SHARE + ":", qinfo.getFairShare().toString());
+       html._(InfoBlock.class);
+ 
+       // clear the info contents so this queue's info doesn't accumulate into another queue's info
+@@ -95,16 +97,21 @@ public void render(Block html) {
+       UL<Hamlet> ul = html.ul("#pq");
+       for (FairSchedulerQueueInfo info : subQueues) {
+         float capacity = info.getMaxResourcesFraction();
+-        float fairShare = info.getFairShareMemoryFraction();
++        float steadyFairShare = info.getSteadyFairShareMemoryFraction();
++        float instantaneousFairShare = info.getFairShareMemoryFraction();
+         float used = info.getUsedMemoryFraction();
+         LI<UL<Hamlet>> li = ul.
+           li().
+             a(_Q).$style(width(capacity * Q_MAX_WIDTH)).
+-              $title(join("Fair Share:", percent(fairShare))).
+-              span().$style(join(Q_GIVEN, ";font-size:1px;", width(fairShare/capacity))).
++              $title(join(join(STEADY_FAIR_SHARE + ":", percent(steadyFairShare)),
++                  join(" " + INSTANTANEOUS_FAIR_SHARE + ":", percent(instantaneousFairShare)))).
++              span().$style(join(Q_GIVEN, ";font-size:1px;", width(steadyFairShare / capacity))).
++                _('.')._().
++              span().$style(join(Q_INSTANTANEOUS_FS, ";font-size:1px;",
++                  width(instantaneousFairShare/capacity))).
+                 _('.')._().
+               span().$style(join(width(used/capacity),
+-                ";font-size:1px;left:0%;", used > fairShare ? Q_OVER : Q_UNDER)).
++                ";font-size:1px;left:0%;", used > instantaneousFairShare ? Q_OVER : Q_UNDER)).
+                 _('.')._().
+               span(".q", info.getQueueName())._().
+             span().$class("qstats").$style(left(Q_STATS_POS)).
+@@ -156,7 +163,13 @@ public void render(Block html) {
+           li().$style("margin-bottom: 1em").
+             span().$style("font-weight: bold")._("Legend:")._().
+             span().$class("qlegend ui-corner-all").$style(Q_GIVEN).
+-              _("Fair Share")._().
++              $title("The steady fair shares consider all queues, " +
++                  "both active (with running applications) and inactive.").
++              _(STEADY_FAIR_SHARE)._().
++            span().$class("qlegend ui-corner-all").$style(Q_INSTANTANEOUS_FS).
++              $title("The instantaneous fair shares consider only active " +
++                  "queues (with running applications).").
++              _(INSTANTANEOUS_FAIR_SHARE)._().
+             span().$class("qlegend ui-corner-all").$style(Q_UNDER).
+               _("Used")._().
+             span().$class("qlegend ui-corner-all").$style(Q_OVER).
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/dao/FairSchedulerQueueInfo.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/dao/FairSchedulerQueueInfo.java
+index 2c1bc47..c62aaf0 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/dao/FairSchedulerQueueInfo.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/webapp/dao/FairSchedulerQueueInfo.java
+@@ -28,7 +28,6 @@
+ import javax.xml.bind.annotation.XmlSeeAlso;
+ import javax.xml.bind.annotation.XmlTransient;
+ 
+-import org.apache.hadoop.yarn.api.records.Resource;
+ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.AllocationConfiguration;
+ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FSLeafQueue;
+ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.fair.FSQueue;
+@@ -44,6 +43,8 @@
+   @XmlTransient
+   private float fractionMemUsed;
+   @XmlTransient
++  private float fractionMemSteadyFairShare;
++  @XmlTransient
+   private float fractionMemFairShare;
+   @XmlTransient
+   private float fractionMemMinShare;
+@@ -53,6 +54,7 @@
+   private ResourceInfo minResources;
+   private ResourceInfo maxResources;
+   private ResourceInfo usedResources;
++  private ResourceInfo steadyFairResources;
+   private ResourceInfo fairResources;
+   private ResourceInfo clusterResources;
+   
+@@ -75,15 +77,19 @@ public FairSchedulerQueueInfo(FSQueue queue, FairScheduler scheduler) {
+     usedResources = new ResourceInfo(queue.getResourceUsage());
+     fractionMemUsed = (float)usedResources.getMemory() /
+         clusterResources.getMemory();
+-    
++
++    steadyFairResources = new ResourceInfo(queue.getSteadyFairShare());
+     fairResources = new ResourceInfo(queue.getFairShare());
+     minResources = new ResourceInfo(queue.getMinShare());
+     maxResources = new ResourceInfo(queue.getMaxShare());
+     maxResources = new ResourceInfo(
+         Resources.componentwiseMin(queue.getMaxShare(),
+             scheduler.getClusterResource()));
+-    
+-    fractionMemFairShare = (float)fairResources.getMemory() / clusterResources.getMemory();
++
++    fractionMemSteadyFairShare =
++        (float)steadyFairResources.getMemory() / clusterResources.getMemory();
++    fractionMemFairShare = (float) fairResources.getMemory()
++        / clusterResources.getMemory();
+     fractionMemMinShare = (float)minResources.getMemory() / clusterResources.getMemory();
+     fractionMemMaxShare = (float)maxResources.getMemory() / clusterResources.getMemory();
+     
+@@ -101,19 +107,33 @@ public FairSchedulerQueueInfo(FSQueue queue, FairScheduler scheduler) {
+   }
+   
+   /**
++   * Returns the steady fair share as a fraction of the entire cluster capacity.
++   */
++  public float getSteadyFairShareMemoryFraction() {
++    return fractionMemSteadyFairShare;
++  }
++
++  /**
+    * Returns the fair share as a fraction of the entire cluster capacity.
+    */
+   public float getFairShareMemoryFraction() {
+     return fractionMemFairShare;
+   }
+-  
++
++  /**
++   * Returns the steady fair share of this queue in megabytes.
++   */
++  public ResourceInfo getSteadyFairShare() {
++    return steadyFairResources;
++  }
++
+   /**
+-   * Returns the fair share of this queue in megabytes.
++   * Returns the fair share of this queue in megabytes
+    */
+   public ResourceInfo getFairShare() {
+     return fairResources;
+   }
+-    
++
+   public ResourceInfo getMinResources() {
+     return minResources;
+   }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/apt/FairScheduler.apt.vm b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/apt/FairScheduler.apt.vm
+index ce56b49..2ae8722 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/apt/FairScheduler.apt.vm
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-site/src/site/apt/FairScheduler.apt.vm
+@@ -445,13 +445,19 @@ Monitoring through web UI
+   	
+  * Max Resources - The configured maximum resources that are allowed to the queue.
+  
+- * Fair Share - The queue's fair share of resources.  Queues may be allocated
+-   resources beyond their fair share when other queues aren't using them.  A
+-   queue whose resource consumption lies at or below its fair share will never
+-   have its containers preempted.  
+-
+-  In addition to the information that the ResourceManager normally displays
+-  about each application, the web interface includes the application's fair share.
++ * Instantaneous Fair Share - The queue's instantaneous fair share of resources.
++   These shares consider only actives queues (those with running applications),
++   and are used for scheduling decisions. Queues may be allocated resources
++   beyond their shares when other queues aren't using them. A queue whose
++   resource consumption lies at or below its instantaneous fair share will never
++   have its containers preempted.
++
++ * Steady Fair Share - The queue's steady fair share of resources. These shares
++   consider all the queues irrespective of whether they are active (have
++   running applications) or not. These are computed less frequently and
++   change only when the configuration or capacity changes.They are meant to
++   provide visibility into resources the user can expect, and hence displayed
++   in the Web UI.
+ 
+ Moving applications between queues
+ 
+-- 
+1.7.9.5
+

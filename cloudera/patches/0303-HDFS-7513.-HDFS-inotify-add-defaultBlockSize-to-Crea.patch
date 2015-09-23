@@ -1,0 +1,323 @@
+From 131ee3cfa643d1e4dd9199a73c18f09646e8073b Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Mon, 15 Dec 2014 10:00:25 -0800
+Subject: [PATCH 303/596] HDFS-7513. HDFS inotify: add defaultBlockSize to
+ CreateEvent (cmccabe)
+
+(cherry picked from commit 6e13fc62e1f284f22fd0089f06ce281198bc7c2a)
+(cherry picked from commit c9950f00a33d6088e5b8f310799ae889c7d8e88a)
+(cherry picked from commit d50ed14e0f7ca1ff267afdeec0685aa0c843c615)
+---
+ .../java/org/apache/hadoop/hdfs/inotify/Event.java |   87 ++++++++++++++++++--
+ .../apache/hadoop/hdfs/protocolPB/PBHelper.java    |   19 +++--
+ .../namenode/InotifyFSEditLogOpTranslator.java     |   34 ++++++--
+ .../hadoop-hdfs/src/main/proto/inotify.proto       |    1 +
+ .../hdfs/TestDFSInotifyEventInputStream.java       |    4 +-
+ 5 files changed, 122 insertions(+), 23 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/inotify/Event.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/inotify/Event.java
+index e8a34e7..5ceff1b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/inotify/Event.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/inotify/Event.java
+@@ -101,6 +101,7 @@ public long getTimestamp() {
+     private FsPermission perms;
+     private String symlinkTarget;
+     private boolean overwrite;
++    private long defaultBlockSize;
+ 
+     public static class Builder {
+       private INodeType iNodeType;
+@@ -112,6 +113,7 @@ public long getTimestamp() {
+       private FsPermission perms;
+       private String symlinkTarget;
+       private boolean overwrite;
++      private long defaultBlockSize = 0;
+ 
+       public Builder iNodeType(INodeType type) {
+         this.iNodeType = type;
+@@ -158,6 +160,11 @@ public Builder overwrite(boolean overwrite) {
+         return this;
+       }
+ 
++      public Builder defaultBlockSize(long defaultBlockSize) {
++        this.defaultBlockSize = defaultBlockSize;
++        return this;
++      }
++
+       public CreateEvent build() {
+         return new CreateEvent(this);
+       }
+@@ -174,6 +181,7 @@ private CreateEvent(Builder b) {
+       this.perms = b.perms;
+       this.symlinkTarget = b.symlinkTarget;
+       this.overwrite = b.overwrite;
++      this.defaultBlockSize = b.defaultBlockSize;
+     }
+ 
+     public INodeType getiNodeType() {
+@@ -220,6 +228,10 @@ public String getSymlinkTarget() {
+     public boolean getOverwrite() {
+       return overwrite;
+     }
++
++    public long getDefaultBlockSize() {
++      return defaultBlockSize;
++    }
+   }
+ 
+   /**
+@@ -398,11 +410,36 @@ public boolean isxAttrsRemoved() {
+     private String dstPath;
+     private long timestamp;
+ 
+-    public RenameEvent(String srcPath, String dstPath, long timestamp) {
++    public static class Builder {
++      private String srcPath;
++      private String dstPath;
++      private long timestamp;
++
++      public Builder srcPath(String srcPath) {
++        this.srcPath = srcPath;
++        return this;
++      }
++
++      public Builder dstPath(String dstPath) {
++        this.dstPath = dstPath;
++        return this;
++      }
++
++      public Builder timestamp(long timestamp) {
++        this.timestamp = timestamp;
++        return this;
++      }
++
++      public RenameEvent build() {
++        return new RenameEvent(this);
++      }
++    }
++
++    private RenameEvent(Builder builder) {
+       super(EventType.RENAME);
+-      this.srcPath = srcPath;
+-      this.dstPath = dstPath;
+-      this.timestamp = timestamp;
++      this.srcPath = builder.srcPath;
++      this.dstPath = builder.dstPath;
++      this.timestamp = builder.timestamp;
+     }
+ 
+     public String getSrcPath() {
+@@ -427,9 +464,22 @@ public long getTimestamp() {
+   public static class AppendEvent extends Event {
+     private String path;
+ 
+-    public AppendEvent(String path) {
++    public static class Builder {
++      private String path;
++
++      public Builder path(String path) {
++        this.path = path;
++        return this;
++      }
++
++      public AppendEvent build() {
++        return new AppendEvent(this);
++      }
++    }
++
++    private AppendEvent(Builder b) {
+       super(EventType.APPEND);
+-      this.path = path;
++      this.path = b.path;
+     }
+ 
+     public String getPath() {
+@@ -444,10 +494,29 @@ public String getPath() {
+     private String path;
+     private long timestamp;
+ 
+-    public UnlinkEvent(String path, long timestamp) {
++    public static class Builder {
++      private String path;
++      private long timestamp;
++
++      public Builder path(String path) {
++        this.path = path;
++        return this;
++      }
++
++      public Builder timestamp(long timestamp) {
++        this.timestamp = timestamp;
++        return this;
++      }
++
++      public UnlinkEvent build() {
++        return new UnlinkEvent(this);
++      }
++    }
++
++    private UnlinkEvent(Builder builder) {
+       super(EventType.UNLINK);
+-      this.path = path;
+-      this.timestamp = timestamp;
++      this.path = builder.path;
++      this.timestamp = builder.timestamp;
+     }
+ 
+     public String getPath() {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/PBHelper.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/PBHelper.java
+index 9d277bc..a91c48d 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/PBHelper.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/PBHelper.java
+@@ -2558,6 +2558,7 @@ public static EventBatchList convert(GetEditsFromTxidResponseProto resp) throws
+                 .replication(create.getReplication())
+                 .symlinkTarget(create.getSymlinkTarget().isEmpty() ? null :
+                     create.getSymlinkTarget())
++                .defaultBlockSize(create.getDefaultBlockSize())
+                 .overwrite(create.getOverwrite()).build());
+             break;
+           case EVENT_METADATA:
+@@ -2584,19 +2585,26 @@ public static EventBatchList convert(GetEditsFromTxidResponseProto resp) throws
+           case EVENT_RENAME:
+             InotifyProtos.RenameEventProto rename =
+                 InotifyProtos.RenameEventProto.parseFrom(p.getContents());
+-            events.add(new Event.RenameEvent(rename.getSrcPath(),
+-                rename.getDestPath(), rename.getTimestamp()));
++            events.add(new Event.RenameEvent.Builder()
++                  .srcPath(rename.getSrcPath())
++                  .dstPath(rename.getDestPath())
++                  .timestamp(rename.getTimestamp())
++                  .build());
+             break;
+           case EVENT_APPEND:
+             InotifyProtos.AppendEventProto reopen =
+                 InotifyProtos.AppendEventProto.parseFrom(p.getContents());
+-            events.add(new Event.AppendEvent(reopen.getPath()));
++            events.add(new Event.AppendEvent.Builder()
++                  .path(reopen.getPath())
++                  .build());
+             break;
+           case EVENT_UNLINK:
+             InotifyProtos.UnlinkEventProto unlink =
+                 InotifyProtos.UnlinkEventProto.parseFrom(p.getContents());
+-            events.add(new Event.UnlinkEvent(unlink.getPath(),
+-                unlink.getTimestamp()));
++            events.add(new Event.UnlinkEvent.Builder()
++                  .path(unlink.getPath())
++                  .timestamp(unlink.getTimestamp())
++                  .build());
+             break;
+           default:
+             throw new RuntimeException("Unexpected inotify event type: " +
+@@ -2642,6 +2650,7 @@ public static GetEditsFromTxidResponseProto convertEditsResponse(EventBatchList
+                         .setReplication(ce2.getReplication())
+                         .setSymlinkTarget(ce2.getSymlinkTarget() == null ?
+                             "" : ce2.getSymlinkTarget())
++                        .setDefaultBlockSize(ce2.getDefaultBlockSize())
+                         .setOverwrite(ce2.getOverwrite()).build().toByteString()
+                 ).build());
+             break;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/InotifyFSEditLogOpTranslator.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/InotifyFSEditLogOpTranslator.java
+index cd3fc23..f265340 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/InotifyFSEditLogOpTranslator.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/InotifyFSEditLogOpTranslator.java
+@@ -53,10 +53,13 @@ public static EventBatch translate(FSEditLogOp op) {
+             .groupName(addOp.permissions.getGroupName())
+             .perms(addOp.permissions.getPermission())
+             .overwrite(addOp.overwrite)
++            .defaultBlockSize(addOp.blockSize)
+             .iNodeType(Event.CreateEvent.INodeType.FILE).build() });
+-      } else {
++      } else { // append
+         return new EventBatch(op.txid,
+-            new Event[] { new Event.AppendEvent(addOp.path) });
++            new Event[]{new Event.AppendEvent.Builder()
++                .path(addOp.path)
++                .build()});
+       }
+     case OP_CLOSE:
+       FSEditLogOp.CloseOp cOp = (FSEditLogOp.CloseOp) op;
+@@ -72,25 +75,40 @@ public static EventBatch translate(FSEditLogOp op) {
+     case OP_CONCAT_DELETE:
+       FSEditLogOp.ConcatDeleteOp cdOp = (FSEditLogOp.ConcatDeleteOp) op;
+       List<Event> events = Lists.newArrayList();
+-      events.add(new Event.AppendEvent(cdOp.trg));
++      events.add(new Event.AppendEvent.Builder()
++          .path(cdOp.trg)
++          .build());
+       for (String src : cdOp.srcs) {
+-        events.add(new Event.UnlinkEvent(src, cdOp.timestamp));
++        events.add(new Event.UnlinkEvent.Builder()
++          .path(src)
++          .timestamp(cdOp.timestamp)
++          .build());
+       }
+       events.add(new Event.CloseEvent(cdOp.trg, -1, cdOp.timestamp));
+       return new EventBatch(op.txid, events.toArray(new Event[0]));
+     case OP_RENAME_OLD:
+       FSEditLogOp.RenameOldOp rnOpOld = (FSEditLogOp.RenameOldOp) op;
+       return new EventBatch(op.txid, new Event[] {
+-          new Event.RenameEvent(rnOpOld.src,
+-              rnOpOld.dst, rnOpOld.timestamp) });
++          new Event.RenameEvent.Builder()
++              .srcPath(rnOpOld.src)
++              .dstPath(rnOpOld.dst)
++              .timestamp(rnOpOld.timestamp)
++              .build() });
+     case OP_RENAME:
+       FSEditLogOp.RenameOp rnOp = (FSEditLogOp.RenameOp) op;
+       return new EventBatch(op.txid, new Event[] {
+-          new Event.RenameEvent(rnOp.src, rnOp.dst, rnOp.timestamp) });
++          new Event.RenameEvent.Builder()
++            .srcPath(rnOp.src)
++            .dstPath(rnOp.dst)
++            .timestamp(rnOp.timestamp)
++            .build() });
+     case OP_DELETE:
+       FSEditLogOp.DeleteOp delOp = (FSEditLogOp.DeleteOp) op;
+       return new EventBatch(op.txid, new Event[] {
+-          new Event.UnlinkEvent(delOp.path, delOp.timestamp) });
++          new Event.UnlinkEvent.Builder()
++            .path(delOp.path)
++            .timestamp(delOp.timestamp)
++            .build() });
+     case OP_MKDIR:
+       FSEditLogOp.MkdirOp mkOp = (FSEditLogOp.MkdirOp) op;
+       return new EventBatch(op.txid,
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/proto/inotify.proto b/hadoop-hdfs-project/hadoop-hdfs/src/main/proto/inotify.proto
+index e51c02c..e50f14b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/proto/inotify.proto
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/proto/inotify.proto
+@@ -78,6 +78,7 @@ message CreateEventProto {
+   optional int32 replication = 7;
+   optional string symlinkTarget = 8;
+   optional bool overwrite = 9;
++  optional int64 defaultBlockSize = 10 [default=0];
+ }
+ 
+ message CloseEventProto {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDFSInotifyEventInputStream.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDFSInotifyEventInputStream.java
+index 82db110..77a17ed 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDFSInotifyEventInputStream.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDFSInotifyEventInputStream.java
+@@ -170,6 +170,7 @@ public void testBasic() throws IOException, URISyntaxException,
+       Assert.assertTrue(ce.getReplication() > 0);
+       Assert.assertTrue(ce.getSymlinkTarget() == null);
+       Assert.assertTrue(ce.getOverwrite());
++      Assert.assertEquals(BLOCK_SIZE, ce.getDefaultBlockSize());
+ 
+       // CloseOp
+       batch = waitForNextEvents(eis);
+@@ -186,7 +187,8 @@ public void testBasic() throws IOException, URISyntaxException,
+       Assert.assertEquals(1, batch.getEvents().length);
+       txid = checkTxid(batch, txid);
+       Assert.assertTrue(batch.getEvents()[0].getEventType() == Event.EventType.APPEND);
+-      Assert.assertTrue(((Event.AppendEvent) batch.getEvents()[0]).getPath().equals("/file2"));
++      Event.AppendEvent append2 = (Event.AppendEvent)batch.getEvents()[0];
++      Assert.assertEquals("/file2", append2.getPath());
+ 
+       // CloseOp
+       batch = waitForNextEvents(eis);
+-- 
+1.7.9.5
+

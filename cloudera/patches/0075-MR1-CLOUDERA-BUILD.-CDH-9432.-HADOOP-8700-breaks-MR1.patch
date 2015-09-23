@@ -1,0 +1,46 @@
+From f269d595705c3a4cd1c08b555990248f6814b7f9 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Thu, 13 Jun 2013 11:40:07 -0700
+Subject: [PATCH 075/596] MR1: CLOUDERA-BUILD. CDH-9432. HADOOP-8700 breaks
+ MR1 (cherry picked from commit
+ 768379937cfcd9d15d2f1d2567e7b35696401ee3)
+
+(cherry picked from commit 3f4d5c94c1fcf46fdd3ac60e575ff4b64dbabeee)
+(cherry picked from commit 4d759a74785a3615cb38eb09269baf1d30e2c72d)
+(cherry picked from commit 564ee5f633c13d5e5d13b92e5a71b0e921818e7e)
+---
+ .../org/apache/hadoop/mapred/IFileInputStream.java |    3 ++-
+ .../apache/hadoop/mapred/IFileOutputStream.java    |    3 ++-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFileInputStream.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFileInputStream.java
+index 5495e4a..2febf25 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFileInputStream.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFileInputStream.java
+@@ -83,7 +83,8 @@
+   public IFileInputStream(InputStream in, long len, Configuration conf) {
+     this.in = in;
+     this.inFd = getFileDescriptorIfAvail(in);
+-    sum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_CRC32, 
++    sum = DataChecksum.newDataChecksum(
++        DataChecksum.Type.valueOf(DataChecksum.CHECKSUM_CRC32),
+         Integer.MAX_VALUE);
+     checksumSize = sum.getChecksumSize();
+     length = len;
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFileOutputStream.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFileOutputStream.java
+index 84e022a..b1c9eb9 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFileOutputStream.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/IFileOutputStream.java
+@@ -45,7 +45,8 @@
+    */
+   public IFileOutputStream(OutputStream out) {
+     super(out);
+-    sum = DataChecksum.newDataChecksum(DataChecksum.CHECKSUM_CRC32,
++    sum = DataChecksum.newDataChecksum(
++        DataChecksum.Type.valueOf(DataChecksum.CHECKSUM_CRC32),
+         Integer.MAX_VALUE);
+     barray = new byte[sum.getChecksumSize()];
+   }
+-- 
+1.7.9.5
+

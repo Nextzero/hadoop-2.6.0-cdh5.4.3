@@ -1,0 +1,117 @@
+From 90890c0310a29ed898619d07a9c31fdf6032589a Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Thu, 21 Aug 2014 17:37:34 +0000
+Subject: [PATCH 349/596] MAPREDUCE-5974. Allow specifying multiple
+ MapOutputCollectors with fallback. (Todd Lipcon via
+ kasha)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/trunk@1619492 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 549ad6ad74b89fcc530525f793a6cfb056971865)
+(cherry picked from commit 28fcdb50900923cf4067ad0e1b82d0f37ced3983)
+---
+ .../java/org/apache/hadoop/mapred/MapTask.java     |   41 +++++++++++++-------
+ .../src/main/resources/mapred-default.xml          |    4 +-
+ .../apt/PluggableShuffleAndPluggableSort.apt.vm    |    8 +++-
+ 3 files changed, 35 insertions(+), 18 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/MapTask.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/MapTask.java
+index 2bd3b4c..75b4141 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/MapTask.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/MapTask.java
+@@ -381,24 +381,35 @@ public Progress getSortPhase() {
+   private <KEY, VALUE> MapOutputCollector<KEY, VALUE>
+           createSortingCollector(JobConf job, TaskReporter reporter)
+     throws IOException, ClassNotFoundException {
+-    MapOutputCollector<KEY, VALUE> collector
+-      = (MapOutputCollector<KEY, VALUE>)
+-       ReflectionUtils.newInstance(
+-                        job.getClass(JobContext.MAP_OUTPUT_COLLECTOR_CLASS_ATTR,
+-                        MapOutputBuffer.class, MapOutputCollector.class), job);
+     MapOutputCollector.Context context =
+-                           new MapOutputCollector.Context(this, job, reporter);
++      new MapOutputCollector.Context(this, job, reporter);
+ 
+-    try {
+-      collector.init(context);
+-    } catch (Exception e) {
+-      LOG.warn("Nativetask falling back to Java MapOutputCollector", e);
+-      collector = new MapOutputBuffer();
+-      collector.init(context);
+-    } finally {
+-      LOG.info("Map output collector class = " + collector.getClass().getName());
+-      return collector;
++    Class<?>[] collectorClasses = job.getClasses(
++      JobContext.MAP_OUTPUT_COLLECTOR_CLASS_ATTR, MapOutputBuffer.class);
++    int remainingCollectors = collectorClasses.length;
++    for (Class clazz : collectorClasses) {
++      try {
++        if (!MapOutputCollector.class.isAssignableFrom(clazz)) {
++          throw new IOException("Invalid output collector class: " + clazz.getName() +
++            " (does not implement MapOutputCollector)");
++        }
++        Class<? extends MapOutputCollector> subclazz =
++          clazz.asSubclass(MapOutputCollector.class);
++        LOG.debug("Trying map output collector class: " + subclazz.getName());
++        MapOutputCollector<KEY, VALUE> collector =
++          ReflectionUtils.newInstance(subclazz, job);
++        collector.init(context);
++        LOG.info("Map output collector class = " + collector.getClass().getName());
++        return collector;
++      } catch (Exception e) {
++        String msg = "Unable to initialize MapOutputCollector " + clazz.getName();
++        if (--remainingCollectors > 0) {
++          msg += " (" + remainingCollectors + " more collector(s) to try)";
++        }
++        LOG.warn(msg, e);
++      }
+     }
++    throw new IOException("Unable to initialize any output collector");
+   }
+ 
+   @SuppressWarnings("unchecked")
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml
+index 4b3581a..7075d7d 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml
+@@ -755,7 +755,9 @@
+   <name>mapreduce.job.map.output.collector.class</name>
+   <value>org.apache.hadoop.mapred.MapTask$MapOutputBuffer</value>
+   <description>
+-    It defines the MapOutputCollector implementation to use.
++    The MapOutputCollector implementation(s) to use. This may be a comma-separated
++    list of class names, in which case the map task will try to initialize each
++    of the collectors in turn. The first to successfully initialize will be used.
+   </description>
+ </property>
+  
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/site/apt/PluggableShuffleAndPluggableSort.apt.vm b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/site/apt/PluggableShuffleAndPluggableSort.apt.vm
+index 1b06ca9..06d8022 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/site/apt/PluggableShuffleAndPluggableSort.apt.vm
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/site/apt/PluggableShuffleAndPluggableSort.apt.vm
+@@ -71,11 +71,16 @@ Hadoop MapReduce Next Generation - Pluggable Shuffle and Pluggable Sort
+ *--------------------------------------+---------------------+-----------------+
+ | <<<mapreduce.job.reduce.shuffle.consumer.plugin.class>>> | <<<org.apache.hadoop.mapreduce.task.reduce.Shuffle>>>         | The <<<ShuffleConsumerPlugin>>> implementation to use |
+ *--------------------------------------+---------------------+-----------------+
+-| <<<mapreduce.job.map.output.collector.class>>>   | <<<org.apache.hadoop.mapred.MapTask$MapOutputBuffer>>> | The <<<MapOutputCollector>>> implementation to use |
++| <<<mapreduce.job.map.output.collector.class>>>   | <<<org.apache.hadoop.mapred.MapTask$MapOutputBuffer>>> | The <<<MapOutputCollector>>> implementation(s) to use |
+ *--------------------------------------+---------------------+-----------------+
+ 
+   These properties can also be set in the <<<mapred-site.xml>>> to change the default values for all jobs.
+ 
++  The collector class configuration may specify a comma-separated list of collector implementations.
++  In this case, the map task will attempt to instantiate each in turn until one of the
++  implementations successfully initializes. This can be useful if a given collector
++  implementation is only compatible with certain types of keys or values, for example.
++
+ ** NodeManager Configuration properties, <<<yarn-site.xml>>> in all nodes:
+ 
+ *--------------------------------------+---------------------+-----------------+
+@@ -91,4 +96,3 @@ Hadoop MapReduce Next Generation - Pluggable Shuffle and Pluggable Sort
+   <<<yarn.nodemanager.aux-services>>> property, for example <<<mapred.shufflex>>>.
+   Then the property defining the corresponding class must be
+   <<<yarn.nodemanager.aux-services.mapreduce_shufflex.class>>>.
+-  
+\ No newline at end of file
+-- 
+1.7.9.5
+

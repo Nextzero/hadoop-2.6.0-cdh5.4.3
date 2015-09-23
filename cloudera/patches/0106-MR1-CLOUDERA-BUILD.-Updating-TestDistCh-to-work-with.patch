@@ -1,0 +1,61 @@
+From a143843891d78fac1f739478cc0a97725d404cdc Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Fri, 4 Oct 2013 15:44:17 -0700
+Subject: [PATCH 106/596] MR1: CLOUDERA-BUILD. Updating TestDistCh to work
+ with HDFS changes (CDH-14763)
+
+(cherry picked from commit d208cf4cb6972d25d778d7bf32470d8b5d63ad18)
+(cherry picked from commit d825b9c80284d280f1d1a6b75bea7645e6a4d842)
+(cherry picked from commit 9497e6605a201494666d1b5da0f955fc39d753a1)
+---
+ .../test/org/apache/hadoop/tools/TestDistCh.java   |   11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/tools/TestDistCh.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/tools/TestDistCh.java
+index 4ec3a9f..d0a2e47 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/tools/TestDistCh.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/tools/TestDistCh.java
+@@ -116,6 +116,8 @@ Path mkdir(Path dir) throws IOException {
+   }
+ 
+   static class ChPermissionStatus extends PermissionStatus {
++    private final boolean defaultPerm;
++
+     ChPermissionStatus(FileStatus filestatus) {
+       this(filestatus, "", "", "");
+     }
+@@ -124,6 +126,7 @@ Path mkdir(Path dir) throws IOException {
+       super("".equals(owner)? filestatus.getOwner(): owner, 
+           "".equals(group)? filestatus.getGroup(): group,
+           "".equals(permission)? filestatus.getPermission(): new FsPermission(Short.parseShort(permission, 8)));
++      defaultPerm = (permission == null) || ("".equals(permission));
+     }
+   }
+   
+@@ -142,7 +145,7 @@ public void testDistCh() throws Exception {
+ 
+       //generate random arguments
+       final String[] args = new String[RANDOM.nextInt(NUN_SUBS-1) + 1];
+-      final PermissionStatus[] newstatus = new PermissionStatus[NUN_SUBS];
++      final ChPermissionStatus[] newstatus = new ChPermissionStatus[NUN_SUBS];
+       final List<Integer> indices = new LinkedList<Integer>();
+       for(int i = 0; i < NUN_SUBS; i++) {
+         indices.add(i);
+@@ -188,11 +191,11 @@ public void testDistCh() throws Exception {
+ 
+   static final FsPermission UMASK = FsPermission.createImmutable((short)0111);
+ 
+-  static void checkFileStatus(PermissionStatus expected, FileStatus actual) {
++  static void checkFileStatus(ChPermissionStatus expected, FileStatus actual) {
+     assertEquals(expected.getUserName(), actual.getOwner());
+     assertEquals(expected.getGroupName(), actual.getGroup());
+-    FsPermission perm = expected.getPermission(); 
+-    if (!actual.isDir()) {
++    FsPermission perm = expected.getPermission();
++    if (actual.isFile() && expected.defaultPerm) {
+       perm = perm.applyUMask(UMASK);
+     }
+     assertEquals(perm, actual.getPermission());
+-- 
+1.7.9.5
+

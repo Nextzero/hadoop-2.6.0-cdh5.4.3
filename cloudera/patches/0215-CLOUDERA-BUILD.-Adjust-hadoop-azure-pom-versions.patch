@@ -1,0 +1,30 @@
+From 0513550f3d304a0cc2c51ce38a8a655396370dc5 Mon Sep 17 00:00:00 2001
+From: Stephen Chu <schu@cloudera.com>
+Date: Tue, 27 Jan 2015 16:00:35 -0800
+Subject: [PATCH 215/596] CLOUDERA-BUILD. Adjust hadoop-azure pom versions
+
+---
+ hadoop-tools/hadoop-azure/pom.xml |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-tools/hadoop-azure/pom.xml b/hadoop-tools/hadoop-azure/pom.xml
+index 0d4785a..46a65c7 100644
+--- a/hadoop-tools/hadoop-azure/pom.xml
++++ b/hadoop-tools/hadoop-azure/pom.xml
+@@ -19,11 +19,11 @@
+   <parent>
+     <groupId>org.apache.hadoop</groupId>
+     <artifactId>hadoop-project</artifactId>
+-    <version>2.5.0-cdh5.4.0-SNAPSHOT</version>
++    <version>2.6.0-cdh5.4.0-SNAPSHOT</version>
+     <relativePath>../../hadoop-project</relativePath>
+   </parent>
+   <artifactId>hadoop-azure</artifactId>
+-  <version>2.5.0-cdh5.4.0-SNAPSHOT</version>
++  <version>2.6.0-cdh5.4.0-SNAPSHOT</version>
+   <name>Apache Hadoop Azure support</name>
+   <description>
+     This module contains code to support integration with Azure.
+-- 
+1.7.9.5
+

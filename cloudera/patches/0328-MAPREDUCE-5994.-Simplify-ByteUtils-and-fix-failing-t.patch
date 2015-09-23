@@ -1,0 +1,471 @@
+From b6137567f361d9b660609c2b95ff9f772e35c9c1 Mon Sep 17 00:00:00 2001
+From: Todd Lipcon <todd@apache.org>
+Date: Thu, 24 Jul 2014 06:14:27 +0000
+Subject: [PATCH 328/596] MAPREDUCE-5994. Simplify ByteUtils and fix failing
+ test. Contributed by Todd Lipcon.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/MR-2841@1613003 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit d468a9244740fcdeacf23b3aa08ab1c457e050ca)
+(cherry picked from commit cd27d5e2e9bc717a450cf2b8bc91ea8fd8f935a8)
+---
+ .../CHANGES.MAPREDUCE-2841.txt                     |    1 +
+ .../hadoop/mapred/nativetask/NativeRuntime.java    |   10 +-
+ .../hadoop/mapred/nativetask/util/BytesUtil.java   |  148 +++-----------------
+ .../hadoop/mapred/nativetask/util/ConfigUtil.java  |    5 +-
+ .../mapred/nativetask/util/ReadWriteBuffer.java    |    6 +-
+ .../mapred/nativetask/utils/TestBytesUtil.java     |   19 +--
+ .../hadoop/mapred/nativetask/kvtest/KVJob.java     |    4 +-
+ .../mapred/nativetask/testutil/BytesFactory.java   |   23 +--
+ 8 files changed, 55 insertions(+), 161 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+index 18bf029..166d68d 100644
+--- a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
++++ b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+@@ -2,3 +2,4 @@ Changes for Hadoop Native Map Output Collector
+ ------------------------------------------------
+ 
+ MAPREDUCE-5985. native-task: Fix build on macosx. Contributed by Binglin Chang
++MAPREDUCE-5994. Simplify ByteUtils and fix failing test. (todd)
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/NativeRuntime.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/NativeRuntime.java
+index 53b1acd..65ce652 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/NativeRuntime.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/NativeRuntime.java
+@@ -20,20 +20,16 @@
+ 
+ import java.io.IOException;
+ 
++import com.google.common.base.Charsets;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+-import org.apache.hadoop.fs.FSDataInputStream;
+-import org.apache.hadoop.fs.FSDataOutputStream;
+-import org.apache.hadoop.fs.FileSystem;
+-import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.io.DataInputBuffer;
+ import org.apache.hadoop.io.FloatWritable;
+ import org.apache.hadoop.io.IntWritable;
+ import org.apache.hadoop.io.LongWritable;
+ import org.apache.hadoop.io.Text;
+ import org.apache.hadoop.mapred.Task.TaskReporter;
+-import org.apache.hadoop.mapred.nativetask.util.BytesUtil;
+ import org.apache.hadoop.mapred.nativetask.util.ConfigUtil;
+ import org.apache.hadoop.mapred.nativetask.util.SnappyUtil;
+ import org.apache.hadoop.util.VersionInfo;
+@@ -93,7 +89,7 @@ public static void configure(Configuration jobConf) {
+    */
+   public synchronized static long createNativeObject(String clazz) {
+     assertNativeLibraryLoaded();
+-    final long ret = JNICreateNativeObject(BytesUtil.toBytes(clazz));
++    final long ret = JNICreateNativeObject(clazz.getBytes(Charsets.UTF_8));
+     if (ret == 0) {
+       LOG.warn("Can't create NativeObject for class " + clazz + ", probably not exist.");
+     }
+@@ -108,7 +104,7 @@ public synchronized static long createNativeObject(String clazz) {
+    */
+   public synchronized static long registerLibrary(String libraryName, String clazz) {
+     assertNativeLibraryLoaded();
+-    final long ret = JNIRegisterModule(BytesUtil.toBytes(libraryName), BytesUtil.toBytes(clazz));
++    final long ret = JNIRegisterModule(libraryName.getBytes(Charsets.UTF_8), clazz.getBytes(Charsets.UTF_8));
+     if (ret != 0) {
+       LOG.warn("Can't create NativeObject for class " + clazz + ", probably not exist.");
+     }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/BytesUtil.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/BytesUtil.java
+index 9653baa..d90ae8d 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/BytesUtil.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/BytesUtil.java
+@@ -18,107 +18,38 @@
+ 
+ package org.apache.hadoop.mapred.nativetask.util;
+ 
+-import java.io.UnsupportedEncodingException;
++import com.google.common.primitives.Ints;
++import com.google.common.primitives.Longs;
+ 
+ public class BytesUtil {
+ 
+-  public static final int SIZEOF_INT = Integer.SIZE / Byte.SIZE;
+-  public static final int SIZEOF_LONG = Long.SIZE / Byte.SIZE;
+-
+-  public static byte[] toBytes(String str) {
+-    if (str == null) {
+-      return null;
+-    }
+-    try {
+-      return str.getBytes("utf-8");
+-    } catch (final UnsupportedEncodingException e) {
+-      throw new RuntimeException(e.getMessage());
+-    }
+-  }
+-
+-  public static String fromBytes(byte[] data) {
+-    if (data == null) {
+-      return null;
+-    }
+-    try {
+-      return new String(data, "utf-8");
+-    } catch (final UnsupportedEncodingException e) {
+-      throw new RuntimeException(e.getMessage());
+-    }
+-  }
+-
+-  /**
+-   * Converts a byte array to an int value
+-   * @param bytes byte array
+-   * @return the int value
+-   */
+-  public static int toInt(byte[] bytes) {
+-    return toInt(bytes, 0, SIZEOF_INT);
+-  }
+-
+-  /**
+-   * Converts a byte array to an int value
+-   * @param bytes byte array
+-   * @param offset offset into array
+-   * @param length length of int (has to be {@link #SIZEOF_INT})
+-   * @return the int value
+-   * @throws RuntimeException if length is not {@link #SIZEOF_INT} or
+-   * if there's not enough room in the array at the offset indicated.
+-   */
+-  public static int toInt(byte[] bytes, int offset, final int length) {
+-    if (length != SIZEOF_INT || offset + length > bytes.length) {
+-      throw new RuntimeException(
+-        "toInt exception. length not equals to SIZE of Int or buffer overflow");
+-    }
+-    int n = 0;
+-    for (int i = offset; i< offset + length; i++) {
+-      n <<= 4;
+-      n ^= bytes[i] & 0xff;
+-    }
+-    return n;
+-  }
+-
+   /**
+-   * Converts a byte array to a long value.
+-   * @param bytes array
+-   * @return the long value
+-   */
+-  public static long toLong(byte[] bytes) {
+-    return toLong(bytes, 0, SIZEOF_LONG);
+-  }
+-
+-   /**
+-   * Converts a byte array to a long value.
++   * Converts a big-endian byte array to a long value.
+    *
+    * @param bytes array of bytes
+    * @param offset offset into array
+-   * @return the long value
+    */
+   public static long toLong(byte[] bytes, int offset) {
+-    return toLong(bytes, offset, SIZEOF_LONG);
++    return Longs.fromBytes(bytes[offset],
++      bytes[offset + 1],
++      bytes[offset + 2],
++      bytes[offset + 3],
++      bytes[offset + 4],
++      bytes[offset + 5],
++      bytes[offset + 6],
++      bytes[offset + 7]);
+   }
+ 
+   /**
+-   * Converts a byte array to a long value.
+-   *
+-   * @param bytes array of bytes
+-   * @param offset offset into array
+-   * @param length length of data (must be {@link #SIZEOF_LONG})
+-   * @return the long value
+-   * @throws RuntimeException if length is not {@link #SIZEOF_LONG} or
+-   * if there's not enough room in the array at the offset indicated.
++   * Convert a big-endian integer from a byte array to a primitive value.
++   * @param bytes the array to parse from
++   * @param offset the offset in the array
+    */
+-  public static long toLong(byte[] bytes, int offset, final int length) {
+-    if (length != SIZEOF_LONG || offset + length > bytes.length) {
+-      throw new RuntimeException(
+-        "toLong exception. length not equals to SIZE of Long or buffer overflow");
+-    }
+-    long l = 0;
+-    for (int i = offset; i < offset + length; i++) {
+-      l <<= 8;
+-      l ^= bytes[i] & 0xff;
+-    }
+-    return l;
++  public static int toInt(byte[] bytes, int offset) {
++    return Ints.fromBytes(bytes[offset],
++      bytes[offset + 1],
++      bytes[offset + 2],
++      bytes[offset + 3]);
+   }
+ 
+   /**
+@@ -137,7 +68,7 @@ public static float toFloat(byte [] bytes) {
+    * @return Float made from passed byte array.
+    */
+   public static float toFloat(byte [] bytes, int offset) {
+-    return Float.intBitsToFloat(toInt(bytes, offset, SIZEOF_INT));
++    return Float.intBitsToFloat(toInt(bytes, offset));
+   }
+ 
+   /**
+@@ -154,7 +85,7 @@ public static double toDouble(final byte [] bytes) {
+    * @return Return double made from passed bytes.
+    */
+   public static double toDouble(final byte [] bytes, final int offset) {
+-    return Double.longBitsToDouble(toLong(bytes, offset, SIZEOF_LONG));
++    return Double.longBitsToDouble(toLong(bytes, offset));
+   }
+ 
+   /**
+@@ -211,45 +142,12 @@ public static String toStringBinary(final byte [] b, int off, int len) {
+   }
+ 
+   /**
+-   * Convert an int value to a byte array.  Big-endian.  Same as what DataOutputStream.writeInt
+-   * does.
+-   *
+-   * @param val value
+-   * @return the byte array
+-   */
+-  public static byte[] toBytes(int val) {
+-    byte [] b = new byte[4];
+-    for(int i = 3; i > 0; i--) {
+-      b[i] = (byte) val;
+-      val >>>= 8;
+-    }
+-    b[0] = (byte) val;
+-    return b;
+-  }
+-
+-  /**
+-   * Convert a long value to a byte array using big-endian.
+-   *
+-   * @param val value to convert
+-   * @return the byte array
+-   */
+-  public static byte[] toBytes(long val) {
+-    byte [] b = new byte[8];
+-    for (int i = 7; i > 0; i--) {
+-      b[i] = (byte) val;
+-      val >>>= 8;
+-    }
+-    b[0] = (byte) val;
+-    return b;
+-  }
+-
+-  /**
+    * @param f float value
+    * @return the float represented as byte []
+    */
+   public static byte [] toBytes(final float f) {
+     // Encode it as int
+-    return toBytes(Float.floatToRawIntBits(f));
++    return Ints.toByteArray(Float.floatToRawIntBits(f));
+   }
+ 
+   /**
+@@ -261,7 +159,7 @@ public static String toStringBinary(final byte [] b, int off, int len) {
+    */
+   public static byte [] toBytes(final double d) {
+     // Encode it as a long
+-    return toBytes(Double.doubleToRawLongBits(d));
++    return Longs.toByteArray(Double.doubleToRawLongBits(d));
+   }
+ 
+ }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/ConfigUtil.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/ConfigUtil.java
+index 50db44c..d7cf00a 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/ConfigUtil.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/ConfigUtil.java
+@@ -21,14 +21,15 @@
+ import java.util.List;
+ import java.util.Map;
+ 
++import com.google.common.base.Charsets;
+ import org.apache.hadoop.conf.Configuration;
+ 
+ public class ConfigUtil {
+   public static byte[][] toBytes(Configuration conf) {
+     List<byte[]> nativeConfigs = new ArrayList<byte[]>();
+     for (Map.Entry<String, String> e : conf) {
+-      nativeConfigs.add(BytesUtil.toBytes(e.getKey()));
+-      nativeConfigs.add(BytesUtil.toBytes(e.getValue()));
++      nativeConfigs.add(e.getKey().getBytes(Charsets.UTF_8));
++      nativeConfigs.add(e.getValue().getBytes(Charsets.UTF_8));
+     }
+     return nativeConfigs.toArray(new byte[nativeConfigs.size()][]);
+   }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/ReadWriteBuffer.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/ReadWriteBuffer.java
+index 5dcae14..dd73c1e 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/ReadWriteBuffer.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/util/ReadWriteBuffer.java
+@@ -18,6 +18,8 @@
+ 
+ package org.apache.hadoop.mapred.nativetask.util;
+ 
++import com.google.common.base.Charsets;
++
+ public class ReadWriteBuffer {
+   private byte[] _buff;
+   private int _writePoint;
+@@ -127,13 +129,13 @@ public long readLong() {
+   }
+ 
+   public void writeString(String str) {
+-    final byte[] bytes = BytesUtil.toBytes(str);
++    final byte[] bytes = str.getBytes(Charsets.UTF_8);
+     writeBytes(bytes, 0, bytes.length);
+   }
+ 
+   public String readString() {
+     final byte[] bytes = readBytes();
+-    return BytesUtil.fromBytes(bytes);
++    return new String(bytes, Charsets.UTF_8);
+   }
+ 
+   private void checkWriteSpaceAndResizeIfNecessary(int toBeWritten) {
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/utils/TestBytesUtil.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/utils/TestBytesUtil.java
+index 8d74d63..57b77cd 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/utils/TestBytesUtil.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/utils/TestBytesUtil.java
+@@ -17,6 +17,8 @@
+  */
+ package org.apache.hadoop.mapred.nativetask.utils;
+ 
++import com.google.common.primitives.Ints;
++import com.google.common.primitives.Longs;
+ import junit.framework.Assert;
+ import junit.framework.TestCase;
+ 
+@@ -24,27 +26,18 @@
+ 
+ @SuppressWarnings({ "deprecation" })
+ public class TestBytesUtil extends TestCase {
+-
+-  public void testBytesStringConversion() {
+-
+-    final String str = "I am good!";
+-    final byte[] bytes = BytesUtil.toBytes(str);
+-
+-    Assert.assertEquals(str, BytesUtil.fromBytes(bytes));
+- }
+-
+   public void testBytesIntConversion() {
+     final int a = 1000;
+-    final byte[] intBytes = BytesUtil.toBytes(a);
++    final byte[] intBytes = Ints.toByteArray(a);
+ 
+-    Assert.assertEquals(a, BytesUtil.toInt(intBytes));
++    Assert.assertEquals(a, BytesUtil.toInt(intBytes, 0));
+   }
+ 
+   public void testBytesLongConversion() {
+     final long l = 1000000L;
+-    final byte[] longBytes = BytesUtil.toBytes(l);
++    final byte[] longBytes = Longs.toByteArray(l);
+ 
+-    Assert.assertEquals(l, BytesUtil.toLong(longBytes));
++    Assert.assertEquals(l, BytesUtil.toLong(longBytes, 0));
+   }
+ 
+   public void testBytesFloatConversion() {
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/system/function/org/apache/hadoop/mapred/nativetask/kvtest/KVJob.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/system/function/org/apache/hadoop/mapred/nativetask/kvtest/KVJob.java
+index c6ec9c2..6d683f8 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/system/function/org/apache/hadoop/mapred/nativetask/kvtest/KVJob.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/system/function/org/apache/hadoop/mapred/nativetask/kvtest/KVJob.java
+@@ -20,12 +20,12 @@
+ import java.io.IOException;
+ import java.util.zip.CRC32;
+ 
++import com.google.common.primitives.Longs;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.mapred.nativetask.testutil.BytesFactory;
+ import org.apache.hadoop.mapred.nativetask.testutil.TestConstants;
+-import org.apache.hadoop.mapred.nativetask.util.BytesUtil;
+ import org.apache.hadoop.mapreduce.Job;
+ import org.apache.hadoop.mapreduce.Mapper;
+ import org.apache.hadoop.mapreduce.Reducer;
+@@ -63,7 +63,7 @@ public void reduce(KTYPE key, Iterable<VTYPE> values, Context context) throws IO
+         resultlong += crc32.getValue();
+       }
+       final VTYPE V = null;
+-      context.write(key, (VTYPE) BytesFactory.newObject(BytesUtil.toBytes(resultlong), V.getClass().getName()));
++      context.write(key, (VTYPE) BytesFactory.newObject(Longs.toByteArray(resultlong), V.getClass().getName()));
+     }
+   }
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/system/function/org/apache/hadoop/mapred/nativetask/testutil/BytesFactory.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/system/function/org/apache/hadoop/mapred/nativetask/testutil/BytesFactory.java
+index 5ad35d6..5185371 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/system/function/org/apache/hadoop/mapred/nativetask/testutil/BytesFactory.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/system/function/org/apache/hadoop/mapred/nativetask/testutil/BytesFactory.java
+@@ -19,6 +19,8 @@
+ 
+ import java.util.Random;
+ 
++import com.google.common.primitives.Ints;
++import com.google.common.primitives.Longs;
+ import org.apache.hadoop.io.BooleanWritable;
+ import org.apache.hadoop.io.ByteWritable;
+ import org.apache.hadoop.io.BytesWritable;
+@@ -39,17 +41,17 @@
+   public static Object newObject(byte[] seed, String className) {
+     r.setSeed(seed.hashCode());
+     if (className.equals(IntWritable.class.getName())) {
+-      return new IntWritable(BytesUtil.toInt(seed));
++      return new IntWritable(Ints.fromByteArray(seed));
+     } else if (className.equals(FloatWritable.class.getName())) {
+       return new FloatWritable(r.nextFloat());
+     } else if (className.equals(DoubleWritable.class.getName())) {
+       return new DoubleWritable(r.nextDouble());
+     } else if (className.equals(LongWritable.class.getName())) {
+-      return new LongWritable(BytesUtil.toLong(seed));
++      return new LongWritable(Longs.fromByteArray(seed));
+     } else if (className.equals(VIntWritable.class.getName())) {
+-      return new VIntWritable(BytesUtil.toInt(seed));
++      return new VIntWritable(Ints.fromByteArray(seed));
+     } else if (className.equals(VLongWritable.class.getName())) {
+-      return new VLongWritable(BytesUtil.toLong(seed));
++      return new VLongWritable(Longs.fromByteArray(seed));
+     } else if (className.equals(BooleanWritable.class.getName())) {
+       return new BooleanWritable(seed[0] % 2 == 1 ? true : false);
+     } else if (className.equals(Text.class.getName())) {
+@@ -75,24 +77,25 @@ public static Object newObject(byte[] seed, String className) {
+   public static <VTYPE> byte[] toBytes(VTYPE obj) {
+     final String className = obj.getClass().getName();
+     if (className.equals(IntWritable.class.getName())) {
+-      return BytesUtil.toBytes(((IntWritable) obj).get());
++      return Ints.toByteArray(((IntWritable) obj).get());
+     } else if (className.equals(FloatWritable.class.getName())) {
+       return BytesUtil.toBytes(((FloatWritable) obj).get());
+     } else if (className.equals(DoubleWritable.class.getName())) {
+       return BytesUtil.toBytes(((DoubleWritable) obj).get());
+     } else if (className.equals(LongWritable.class.getName())) {
+-      return BytesUtil.toBytes(((LongWritable) obj).get());
++      return Longs.toByteArray(((LongWritable) obj).get());
+     } else if (className.equals(VIntWritable.class.getName())) {
+-      return BytesUtil.toBytes(((VIntWritable) obj).get());
++      return Ints.toByteArray(((VIntWritable) obj).get());
+     } else if (className.equals(VLongWritable.class.getName())) {
+-      return BytesUtil.toBytes(((VLongWritable) obj).get());
++      return Longs.toByteArray(((VLongWritable) obj).get());
+     } else if (className.equals(BooleanWritable.class.getName())) {
+       return BytesUtil.toBytes(((BooleanWritable) obj).get());
+     } else if (className.equals(Text.class.getName())) {
+-      return BytesUtil.toBytes(((Text) obj).toString());
++      return ((Text)obj).copyBytes();
+     } else if (className.equals(ByteWritable.class.getName())) {
+-      return BytesUtil.toBytes(((ByteWritable) obj).get());
++      return Ints.toByteArray((int) ((ByteWritable) obj).get());
+     } else if (className.equals(BytesWritable.class.getName())) {
++      // TODO: copyBytes instead?
+       return ((BytesWritable) obj).getBytes();
+     } else {
+       return new byte[0];
+-- 
+1.7.9.5
+

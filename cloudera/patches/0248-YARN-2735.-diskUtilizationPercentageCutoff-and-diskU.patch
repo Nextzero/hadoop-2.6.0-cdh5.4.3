@@ -1,0 +1,33 @@
+From d0f2bbbfd4cafb2c97f266c7096d572c07546de7 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Tue, 11 Nov 2014 10:31:39 -0800
+Subject: [PATCH 248/596] YARN-2735. diskUtilizationPercentageCutoff and
+ diskUtilizationSpaceCutoff are initialized twice in
+ DirectoryCollection. (Zhihai Xu via kasha)
+
+(cherry picked from commit 061bc293c8dd3e2605cf150568988bde18407af6)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+
+(cherry picked from commit ea541e1f5e6c23c91d27f12d492f9a0a82e1f9f0)
+---
+ .../server/nodemanager/DirectoryCollection.java    |    2 --
+ 1 file changed, 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/DirectoryCollection.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/DirectoryCollection.java
+index 279787b..c019aa9 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/DirectoryCollection.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/DirectoryCollection.java
+@@ -146,8 +146,6 @@ public DirectoryCollection(String[] dirs,
+     errorDirs = new CopyOnWriteArrayList<String>();
+     fullDirs = new CopyOnWriteArrayList<String>();
+ 
+-    diskUtilizationPercentageCutoff = utilizationPercentageCutOff;
+-    diskUtilizationSpaceCutoff = utilizationSpaceCutOff;
+     diskUtilizationPercentageCutoff =
+         utilizationPercentageCutOff < 0.0F ? 0.0F
+             : (utilizationPercentageCutOff > 100.0F ? 100.0F
+-- 
+1.7.9.5
+

@@ -1,0 +1,40 @@
+From 7a3a447cf60bdd2ac43f42d53b5a84539e829803 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Tue, 10 Feb 2015 13:24:40 -0800
+Subject: [PATCH 379/596] HADOOP-10953. NetworkTopology#add calls
+ NetworkTopology#toString without holding the
+ netlock (Liang Xie via Colin P. McCabe)
+
+(cherry picked from commit 6338ce3ae8870548cac5abe2f685748b5efb13c1)
+(cherry picked from commit 5e7deba1f4e73d15f15320e317d7c4be21b783b3)
+---
+ .../org/apache/hadoop/net/NetworkTopology.java     |   10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/net/NetworkTopology.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/net/NetworkTopology.java
+index a11ba9c..dedcb50 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/net/NetworkTopology.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/net/NetworkTopology.java
+@@ -394,14 +394,14 @@ public NetworkTopology() {
+    */
+   public void add(Node node) {
+     if (node==null) return;
+-    String oldTopoStr = this.toString();
+-    if( node instanceof InnerNode ) {
+-      throw new IllegalArgumentException(
+-        "Not allow to add an inner node: "+NodeBase.getPath(node));
+-    }
+     int newDepth = NodeBase.locationToDepth(node.getNetworkLocation()) + 1;
+     netlock.writeLock().lock();
+     try {
++      String oldTopoStr = this.toString();
++      if( node instanceof InnerNode ) {
++        throw new IllegalArgumentException(
++          "Not allow to add an inner node: "+NodeBase.getPath(node));
++      }
+       if ((depthOfAllLeaves != -1) && (depthOfAllLeaves != newDepth)) {
+         LOG.error("Error: can't add leaf node " + NodeBase.getPath(node) +
+             " at depth " + newDepth + " to topology:\n" + oldTopoStr);
+-- 
+1.7.9.5
+

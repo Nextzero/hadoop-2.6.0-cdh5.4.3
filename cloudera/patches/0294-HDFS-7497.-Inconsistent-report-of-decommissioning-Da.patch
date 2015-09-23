@@ -1,0 +1,70 @@
+From 4c29e078eabe367ac50e9aabea4e688710c2d746 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Thu, 11 Dec 2014 18:12:47 -0800
+Subject: [PATCH 294/596] HDFS-7497. Inconsistent report of decommissioning
+ DataNodes between dfsadmin and NameNode webui.
+ Contributed by Yongjun Zhang.
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+
+(cherry picked from commit 641dcbd0aab39830e17ff3f266912056300c41e7)
+---
+ .../server/blockmanagement/DatanodeManager.java    |   12 ++----------
+ .../server/namenode/TestDecommissioningStatus.java |    7 ++++++-
+ 2 files changed, 8 insertions(+), 11 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+index 19101ea..83ca65a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+@@ -1104,16 +1104,8 @@ public int getNumDeadDataNodes() {
+   public List<DatanodeDescriptor> getDecommissioningNodes() {
+     // There is no need to take namesystem reader lock as
+     // getDatanodeListForReport will synchronize on datanodeMap
+-    final List<DatanodeDescriptor> decommissioningNodes
+-        = new ArrayList<DatanodeDescriptor>();
+-    final List<DatanodeDescriptor> results = getDatanodeListForReport(
+-        DatanodeReportType.LIVE);
+-    for(DatanodeDescriptor node : results) {
+-      if (node.isDecommissionInProgress()) {
+-        decommissioningNodes.add(node);
+-      }
+-    }
+-    return decommissioningNodes;
++    // A decommissioning DN may be "alive" or "dead".
++    return getDatanodeListForReport(DatanodeReportType.DECOMMISSIONING);
+   }
+   
+   /* Getter and Setter for stale DataNodes related attributes */
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
+index a2b7b87..b7ba38c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
+@@ -252,10 +252,10 @@ private void checkDFSAdminDecommissionStatus(
+       System.setOut(oldOut);
+     }
+   }
++
+   /**
+    * Tests Decommissioning Status in DFS.
+    */
+-
+   @Test
+   public void testDecommissionStatus() throws IOException, InterruptedException {
+     InetSocketAddress addr = new InetSocketAddress("localhost", cluster
+@@ -363,6 +363,11 @@ public void testDecommissionStatusAfterDNRestart()
+     assertTrue("the node should be DECOMMISSION_IN_PROGRESSS",
+         dead.get(0).isDecommissionInProgress());
+ 
++    // Check DatanodeManager#getDecommissionNodes, make sure it returns
++    // the node as decommissioning, even if it's dead
++    List<DatanodeDescriptor> decomlist = dm.getDecommissioningNodes();
++    assertTrue("The node should be be decommissioning", decomlist.size() == 1);
++    
+     // Delete the under-replicated file, which should let the 
+     // DECOMMISSION_IN_PROGRESS node become DECOMMISSIONED
+     cleanupFile(fileSys, f);
+-- 
+1.7.9.5
+

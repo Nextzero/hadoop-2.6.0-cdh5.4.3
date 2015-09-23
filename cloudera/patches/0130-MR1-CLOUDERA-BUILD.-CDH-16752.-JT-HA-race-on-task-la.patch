@@ -1,0 +1,58 @@
+From 44d3cf5703119387991a0f54e37276fe4b6a8e8a Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Fri, 4 Apr 2014 18:02:38 -0700
+Subject: [PATCH 130/596] MR1: CLOUDERA-BUILD. CDH-16752. JT HA race on task
+ launch timeout
+
+(cherry picked from commit 0c760be0b52d3452a8c565edea0eb28a04ba33c6)
+(cherry picked from commit 777e3b9b69dbea6b29a89552c2aa1f9c1777f3e1)
+(cherry picked from commit c2fa761d6bd7e8b62465224698c78781a7cff538)
+---
+ .../org/apache/hadoop/mapred/JobTracker.java       |   11 +++++------
+ .../org/apache/hadoop/mapred/TaskTracker.java      |    1 +
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
+index a8c17fe..b223359 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTracker.java
+@@ -2029,6 +2029,7 @@ public FileContext run() throws IOException {
+     // Same with 'localDir' except it's always on the local disk.
+     asyncDiskService.moveAndDeleteFromEachVolume(SUBDIR);
+ 
++    LOG.info("JobTracker restarted = " + hasRestarted());
+     if (!hasRestarted) {
+       jobConf.deleteLocalFiles(SUBDIR);
+     }
+@@ -4264,12 +4265,10 @@ void updateTaskStatuses(TaskTrackerStatus status) {
+     for (TaskStatus report : status.getTaskReports()) {
+       report.setTaskTracker(trackerName);
+       TaskAttemptID taskId = report.getTaskID();
+-      
+-      // don't expire the task if it is not unassigned
+-      if (report.getRunState() != TaskStatus.State.UNASSIGNED) {
+-        expireLaunchingTasks.removeTask(taskId);
+-      }
+-      
++
++      // Remove task from the list of tasks to be expired.
++      expireLaunchingTasks.removeTask(taskId);
++
+       JobInProgress job = getJob(taskId.getJobID());
+       if (job == null) {
+         // if job is not there in the cleanup list ... add it
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+index d47ce1a..967f4a5 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+@@ -2381,6 +2381,7 @@ private synchronized void markUnresponsiveTasks() throws IOException {
+     long now = System.currentTimeMillis();
+     for (TaskInProgress tip: runningTasks.values()) {
+       if (tip.getRunState() == TaskStatus.State.RUNNING ||
++          tip.getRunState() == TaskStatus.State.UNASSIGNED ||
+           tip.getRunState() == TaskStatus.State.COMMIT_PENDING ||
+           tip.isCleaningup()) {
+         // Check the per-job timeout interval for tasks;
+-- 
+1.7.9.5
+

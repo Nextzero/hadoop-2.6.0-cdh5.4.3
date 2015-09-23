@@ -1,0 +1,31 @@
+From 4dd0823084566f7b52bf190890350a0c4c49a6e2 Mon Sep 17 00:00:00 2001
+From: Yongjun Zhang <yzhang@cloudera.com>
+Date: Wed, 25 Mar 2015 15:45:45 -0700
+Subject: [PATCH 522/596] HADOOP-11724. DistCp throws NPE when the target
+ directory is root. (Lei Eddy Xu via Yongjun Zhang)
+
+(cherry-picked from commit 65ee02d9ed50e026c2d37ec80babd4176075ff84)
+(cherry picked from commit be0d228ed100b84a2427045ea2900e9fdf241973)
+
+(cherry picked from commit 1a36b22563ed80a022bb24ab3682978783e989cd)
+---
+ .../apache/hadoop/tools/mapred/CopyCommitter.java  |    3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/hadoop-tools/hadoop-distcp/src/main/java/org/apache/hadoop/tools/mapred/CopyCommitter.java b/hadoop-tools/hadoop-distcp/src/main/java/org/apache/hadoop/tools/mapred/CopyCommitter.java
+index 197edd9..0fdcef9 100644
+--- a/hadoop-tools/hadoop-distcp/src/main/java/org/apache/hadoop/tools/mapred/CopyCommitter.java
++++ b/hadoop-tools/hadoop-distcp/src/main/java/org/apache/hadoop/tools/mapred/CopyCommitter.java
+@@ -132,6 +132,9 @@ private void cleanupTempFiles(JobContext context) {
+   private void deleteAttemptTempFiles(Path targetWorkPath,
+                                       FileSystem targetFS,
+                                       String jobId) throws IOException {
++    if (targetWorkPath == null) {
++      return;
++    }
+ 
+     FileStatus[] tempFiles = targetFS.globStatus(
+         new Path(targetWorkPath, ".distcp.tmp." + jobId.replaceAll("job","attempt") + "*"));
+-- 
+1.7.9.5
+

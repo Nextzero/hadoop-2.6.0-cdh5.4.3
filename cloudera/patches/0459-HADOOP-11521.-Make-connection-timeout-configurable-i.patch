@@ -1,0 +1,80 @@
+From 6ebd7988fc4f1483ee3fe3e9a0fe4a1354e7865d Mon Sep 17 00:00:00 2001
+From: Steve Loughran <stevel@apache.org>
+Date: Tue, 17 Feb 2015 20:00:00 +0000
+Subject: [PATCH 459/596] HADOOP-11521. Make connection timeout configurable
+ in s3a. (Thomas Demoor via stevel) (cherry picked
+ from commit
+ 411c8a7cda0d72f7e0a34fa1e273a065bb620293)
+
+---
+ .../src/main/resources/core-default.xml            |    6 ++++++
+ .../java/org/apache/hadoop/fs/s3a/Constants.java   |    4 ++++
+ .../org/apache/hadoop/fs/s3a/S3AFileSystem.java    |    2 ++
+ .../main/site/markdown/tools/hadoop-aws/index.md   |    6 ++++++
+ 4 files changed, 18 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml b/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml
+index 262e904..2d08631 100644
+--- a/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml
++++ b/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml
+@@ -750,6 +750,12 @@ for ldap providers in the same way as above does.
+ </property>
+ 
+ <property>
++  <name>fs.s3a.connection.establish.timeout</name>
++  <value>5000</value>
++  <description>Socket connection setup timeout in seconds.</description>
++</property>
++
++<property>
+   <name>fs.s3a.connection.timeout</name>
+   <value>5000</value>
+   <description>Socket connection timeout in seconds.</description>
+diff --git a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/Constants.java b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/Constants.java
+index f1b5d3d..c0fd4cf 100644
+--- a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/Constants.java
++++ b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/Constants.java
+@@ -32,6 +32,10 @@
+   // number of times we should retry errors
+   public static final String MAX_ERROR_RETRIES = "fs.s3a.attempts.maximum";
+   public static final int DEFAULT_MAX_ERROR_RETRIES = 10;
++
++  // seconds until we give up trying to establish a connection to s3
++  public static final String ESTABLISH_TIMEOUT = "fs.s3a.connection.establish.timeout";
++  public static final int DEFAULT_ESTABLISH_TIMEOUT = 50000;
+   
+   // seconds until we give up on a connection to s3
+   public static final String SOCKET_TIMEOUT = "fs.s3a.connection.timeout";
+diff --git a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+index 2fe4b91..ae161b9 100644
+--- a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
++++ b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+@@ -176,6 +176,8 @@ public void initialize(URI name, Configuration conf) throws IOException {
+       DEFAULT_SECURE_CONNECTIONS) ?  Protocol.HTTPS : Protocol.HTTP);
+     awsConf.setMaxErrorRetry(conf.getInt(MAX_ERROR_RETRIES, 
+       DEFAULT_MAX_ERROR_RETRIES));
++    awsConf.setConnectionTimeout(conf.getInt(ESTABLISH_TIMEOUT,
++        DEFAULT_ESTABLISH_TIMEOUT));
+     awsConf.setSocketTimeout(conf.getInt(SOCKET_TIMEOUT, 
+       DEFAULT_SOCKET_TIMEOUT));
+ 
+diff --git a/hadoop-tools/hadoop-aws/src/main/site/markdown/tools/hadoop-aws/index.md b/hadoop-tools/hadoop-aws/src/main/site/markdown/tools/hadoop-aws/index.md
+index 2c78f58..9848c02 100644
+--- a/hadoop-tools/hadoop-aws/src/main/site/markdown/tools/hadoop-aws/index.md
++++ b/hadoop-tools/hadoop-aws/src/main/site/markdown/tools/hadoop-aws/index.md
+@@ -211,6 +211,12 @@ If you do any of these: change your credentials immediately!
+     </property>
+ 
+     <property>
++      <name>fs.s3a.connection.establish.timeout</name>
++      <value>5000</value>
++      <description>Socket connection setup timeout in seconds.</description>
++    </property>
++
++    <property>
+       <name>fs.s3a.connection.timeout</name>
+       <value>5000</value>
+       <description>Socket connection timeout in seconds.</description>
+-- 
+1.7.9.5
+

@@ -1,0 +1,45 @@
+From 2942e012a72c70080f1e7455a30f3897731f49a1 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Thu, 13 Jun 2013 19:41:23 -0700
+Subject: [PATCH 158/596] CLOUDERA-BUILD. Revert "CLOUDERA-BUILD. Revert
+ "HADOOP-8912. Merging changes 1397437 and 1397438
+ from trunk"" 		IOW. Reapply HADOOP-8912
+
+This reverts commit 0f1a867b5d7b122f90698f341aec44f46d592e81.
+(cherry picked from commit 680a6f4fc34ff7d3fba9ad05e5beb025493d5563)
+
+(cherry picked from commit 24f0893ac458ba8e0bcb04f1796bbd8a4c07b069)
+(cherry picked from commit c6675f69300b5550f50270a9d4a2315436ffe534)
+(cherry picked from commit 7ff64d5c8eb2233d07b299fdb4d216533bc613cf)
+---
+ .gitattributes |   18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+ create mode 100644 .gitattributes
+
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 0000000..851d236
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1,18 @@
++# Auto detect text files and perform LF normalization
++*        text=auto
++
++*.cs     text diff=csharp
++*.java   text diff=java
++*.html   text diff=html
++*.py     text diff=python
++*.pl     text diff=perl
++*.pm     text diff=perl
++*.css    text
++*.js     text
++*.sql    text
++
++*.sh     text eol=lf
++
++*.bat    text eol=crlf
++*.csproj text merge=union eol=crlf
++*.sln    text merge=union eol=crlf
+-- 
+1.7.9.5
+

@@ -1,0 +1,313 @@
+From aa4be428f8f5c06d932476c2513635a6209188fe Mon Sep 17 00:00:00 2001
+From: "Aaron T. Myers" <atm@apache.org>
+Date: Fri, 21 Nov 2014 16:34:08 -0800
+Subject: [PATCH 368/596] HDFS-7331. Add Datanode network counts to datanode
+ jmx page. Contributed by Charles Lamb. (cherry
+ picked from commit
+ ffa8c1a1b437cf0dc6d98a9b29161d12919e5afa) (cherry
+ picked from commit
+ 3de3640e4c1172f1e47565ac61a1f3183c354c79)
+
+Conflicts:
+
+hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiver.java
+---
+ .../java/org/apache/hadoop/hdfs/DFSConfigKeys.java |    2 +
+ .../hadoop/hdfs/server/datanode/DataNode.java      |   47 ++++++++++++++++++++
+ .../hdfs/server/datanode/DataNodeMXBean.java       |    7 +++
+ .../hadoop/hdfs/server/datanode/DataXceiver.java   |   25 +++++++----
+ .../hdfs/server/datanode/TestDataNodeMetrics.java  |   18 ++++++++
+ 5 files changed, 90 insertions(+), 9 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+index cf80340..574405b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+@@ -157,6 +157,8 @@
+   public static final float   DFS_DATANODE_RAM_DISK_LOW_WATERMARK_PERCENT_DEFAULT = 10.0f;
+   public static final String  DFS_DATANODE_RAM_DISK_LOW_WATERMARK_BYTES = "dfs.datanode.ram.disk.low.watermark.bytes";
+   public static final long    DFS_DATANODE_RAM_DISK_LOW_WATERMARK_BYTES_DEFAULT = DFS_BLOCK_SIZE_DEFAULT;
++  public static final String  DFS_DATANODE_NETWORK_COUNTS_CACHE_MAX_SIZE_KEY = "dfs.datanode.network.counts.cache.max.size";
++  public static final int     DFS_DATANODE_NETWORK_COUNTS_CACHE_MAX_SIZE_DEFAULT = Integer.MAX_VALUE;
+ 
+   // This setting is for testing/internal use only.
+   public static final String  DFS_DATANODE_DUPLICATE_REPLICA_DELETION = "dfs.datanode.duplicate.replica.deletion";
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index d8eef80..ad376e5 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -40,6 +40,8 @@
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_KERBEROS_PRINCIPAL_KEY;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_KEYTAB_FILE_KEY;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_MAX_LOCKED_MEMORY_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_NETWORK_COUNTS_CACHE_MAX_SIZE_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_NETWORK_COUNTS_CACHE_MAX_SIZE_DEFAULT;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_PLUGINS_KEY;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_SCAN_PERIOD_HOURS_DEFAULT;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_DATANODE_SCAN_PERIOD_HOURS_KEY;
+@@ -78,6 +80,7 @@
+ import java.util.Set;
+ import java.util.UUID;
+ import java.util.concurrent.Callable;
++import java.util.concurrent.ExecutionException;
+ import java.util.concurrent.ExecutorService;
+ import java.util.concurrent.Executors;
+ import java.util.concurrent.Future;
+@@ -85,6 +88,9 @@
+ 
+ import javax.management.ObjectName;
+ 
++import com.google.common.cache.CacheBuilder;
++import com.google.common.cache.CacheLoader;
++import com.google.common.cache.LoadingCache;
+ import com.google.common.collect.Lists;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+@@ -304,6 +310,9 @@ public static InetSocketAddress createSocketAddr(String target) {
+   DataNodeMetrics metrics;
+   private InetSocketAddress streamingAddr;
+   
++  // See the note below in incrDatanodeNetworkErrors re: concurrency.
++  private LoadingCache<String, Map<String, Long>> datanodeNetworkCounts;
++
+   private String hostName;
+   private DatanodeID id;
+   
+@@ -419,6 +428,20 @@ public static InetSocketAddress createSocketAddr(String target) {
+       shutdown();
+       throw ie;
+     }
++    final int dncCacheMaxSize =
++        conf.getInt(DFS_DATANODE_NETWORK_COUNTS_CACHE_MAX_SIZE_KEY,
++            DFS_DATANODE_NETWORK_COUNTS_CACHE_MAX_SIZE_DEFAULT) ;
++    datanodeNetworkCounts =
++        CacheBuilder.newBuilder()
++            .maximumSize(dncCacheMaxSize)
++            .build(new CacheLoader<String, Map<String, Long>>() {
++              @Override
++              public Map<String, Long> load(String key) throws Exception {
++                final Map<String, Long> ret = new HashMap<String, Long>();
++                ret.put("networkErrors", 0L);
++                return ret;
++              }
++            });
+   }
+ 
+   @Override
+@@ -1799,6 +1822,30 @@ private void handleDiskError(String errMsgr) {
+   public int getXceiverCount() {
+     return threadGroup == null ? 0 : threadGroup.activeCount();
+   }
++
++  @Override // DataNodeMXBean
++  public Map<String, Map<String, Long>> getDatanodeNetworkCounts() {
++    return datanodeNetworkCounts.asMap();
++  }
++
++  void incrDatanodeNetworkErrors(String host) {
++    metrics.incrDatanodeNetworkErrors();
++
++    /*
++     * Synchronizing on the whole cache is a big hammer, but since it's only
++     * accumulating errors, it should be ok. If this is ever expanded to include
++     * non-error stats, then finer-grained concurrency should be applied.
++     */
++    synchronized (datanodeNetworkCounts) {
++      try {
++        final Map<String, Long> curCount = datanodeNetworkCounts.get(host);
++        curCount.put("networkErrors", curCount.get("networkErrors") + 1L);
++        datanodeNetworkCounts.put(host, curCount);
++      } catch (ExecutionException e) {
++        LOG.warn("failed to increment network error counts for " + host);
++      }
++    }
++  }
+   
+   int getXmitsInProgress() {
+     return xmitsInProgress.get();
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNodeMXBean.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNodeMXBean.java
+index 8e80c58..92abd88 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNodeMXBean.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNodeMXBean.java
+@@ -20,6 +20,8 @@
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.classification.InterfaceStability;
+ 
++import java.util.Map;
++
+ /**
+  * 
+  * This is the JMX management interface for data node information
+@@ -76,4 +78,9 @@
+    * actively transferring blocks.
+    */
+   public int getXceiverCount();
++
++  /**
++   * Gets the network error counts on a per-Datanode basis.
++   */
++  public Map<String, Map<String, Long>> getDatanodeNetworkCounts();
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiver.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiver.java
+index e94bb3a..744a57c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiver.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataXceiver.java
+@@ -96,6 +96,7 @@
+   
+   private Peer peer;
+   private final String remoteAddress; // address of remote side
++  private final String remoteAddressWithoutPort; // only the address, no port
+   private final String localAddress;  // local address of this daemon
+   private final DataNode datanode;
+   private final DNConf dnConf;
+@@ -128,6 +129,9 @@ private DataXceiver(Peer peer, DataNode datanode,
+     this.dataXceiverServer = dataXceiverServer;
+     this.connectToDnViaHostname = datanode.getDnConf().connectToDnViaHostname;
+     remoteAddress = peer.getRemoteAddressString();
++    final int colonIdx = remoteAddress.indexOf(':');
++    remoteAddressWithoutPort =
++        (colonIdx < 0) ? remoteAddress : remoteAddress.substring(0, colonIdx);
+     localAddress = peer.getLocalAddressString();
+ 
+     if (LOG.isDebugEnabled()) {
+@@ -221,7 +225,7 @@ public void run() {
+               LOG.debug("Cached " + peer + " closing after " + opsProcessed + " ops");
+             }
+           } else {
+-            datanode.metrics.incrDatanodeNetworkErrors();
++            incrDatanodeNetworkErrors();
+             throw err;
+           }
+           break;
+@@ -511,7 +515,7 @@ public void readBlock(final ExtendedBlock block,
+         } catch (IOException ioe) {
+           LOG.debug("Error reading client status response. Will close connection.", ioe);
+           IOUtils.closeStream(out);
+-          datanode.metrics.incrDatanodeNetworkErrors();
++          incrDatanodeNetworkErrors();
+         }
+       } else {
+         IOUtils.closeStream(out);
+@@ -710,7 +714,7 @@ public void writeBlock(final ExtendedBlock block,
+             LOG.info(datanode + ":Exception transfering " +
+                      block + " to mirror " + mirrorNode +
+                      "- continuing without the mirror", e);
+-            datanode.metrics.incrDatanodeNetworkErrors();
++            incrDatanodeNetworkErrors();
+           }
+         }
+       }
+@@ -765,7 +769,7 @@ public void writeBlock(final ExtendedBlock block,
+       
+     } catch (IOException ioe) {
+       LOG.info("opWriteBlock " + block + " received exception " + ioe);
+-      datanode.metrics.incrDatanodeNetworkErrors();
++      incrDatanodeNetworkErrors();
+       throw ioe;
+     } finally {
+       // close all opened streams
+@@ -801,7 +805,7 @@ public void transferBlock(final ExtendedBlock blk,
+       writeResponse(Status.SUCCESS, null, out);
+     } catch (IOException ioe) {
+       LOG.info("transferBlock " + blk + " received exception " + ioe);
+-      datanode.metrics.incrDatanodeNetworkErrors();
++      incrDatanodeNetworkErrors();
+       throw ioe;
+     } finally {
+       IOUtils.closeStream(out);
+@@ -896,7 +900,7 @@ public void blockChecksum(final ExtendedBlock block,
+       out.flush();
+     } catch (IOException ioe) {
+       LOG.info("blockChecksum " + block + " received exception " + ioe);
+-      datanode.metrics.incrDatanodeNetworkErrors();
++      incrDatanodeNetworkErrors();
+       throw ioe;
+     } finally {
+       IOUtils.closeStream(out);
+@@ -963,7 +967,7 @@ public void copyBlock(final ExtendedBlock block,
+     } catch (IOException ioe) {
+       isOpSuccess = false;
+       LOG.info("opCopyBlock " + block + " received exception " + ioe);
+-      datanode.metrics.incrDatanodeNetworkErrors();
++      incrDatanodeNetworkErrors();
+       throw ioe;
+     } finally {
+       dataXceiverServer.balanceThrottler.release();
+@@ -1096,7 +1100,7 @@ public void replaceBlock(final ExtendedBlock block,
+       LOG.info(errMsg);
+       if (!IoeDuringCopyBlockOperation) {
+         // Don't double count IO errors
+-        datanode.metrics.incrDatanodeNetworkErrors();
++        incrDatanodeNetworkErrors();
+       }
+       throw ioe;
+     } finally {
+@@ -1116,7 +1120,7 @@ public void replaceBlock(final ExtendedBlock block,
+         sendResponse(opStatus, errMsg);
+       } catch (IOException ioe) {
+         LOG.warn("Error writing reply back to " + peer.getRemoteAddressString());
+-        datanode.metrics.incrDatanodeNetworkErrors();
++        incrDatanodeNetworkErrors();
+       }
+       IOUtils.closeStream(proxyOut);
+       IOUtils.closeStream(blockReceiver);
+@@ -1170,6 +1174,9 @@ private void writeSuccessWithChecksumInfo(BlockSender blockSender,
+     out.flush();
+   }
+   
++  private void incrDatanodeNetworkErrors() {
++    datanode.incrDatanodeNetworkErrors(remoteAddressWithoutPort);
++  }
+ 
+   private void checkAccess(OutputStream out, final boolean reply, 
+       final ExtendedBlock blk,
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeMetrics.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeMetrics.java
+index 90112af..0b85d35 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeMetrics.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeMetrics.java
+@@ -27,7 +27,9 @@
+ 
+ import java.io.Closeable;
+ import java.io.IOException;
++import java.lang.management.ManagementFactory;
+ import java.util.List;
++import java.util.Map;
+ 
+ import com.google.common.collect.Lists;
+ import org.apache.commons.logging.Log;
+@@ -48,6 +50,9 @@
+ import org.junit.Test;
+ import org.mockito.Mockito;
+ 
++import javax.management.MBeanServer;
++import javax.management.ObjectName;
++
+ public class TestDataNodeMetrics {
+   private static final Log LOG = LogFactory.getLog(TestDataNodeMetrics.class);
+ 
+@@ -217,9 +222,22 @@ public void testTimeoutMetric() throws Exception {
+       out.writeBytes("old gs data\n");
+       out.hflush();
+ 
++      /* Test the metric. */
+       final MetricsRecordBuilder dnMetrics =
+           getMetrics(cluster.getDataNodes().get(0).getMetrics().name());
+       assertCounter("DatanodeNetworkErrors", 1L, dnMetrics);
++
++      /* Test JMX datanode network counts. */
++      final MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
++      final ObjectName mxbeanName =
++          new ObjectName("Hadoop:service=DataNode,name=DataNodeInfo");
++      final Object dnc =
++          mbs.getAttribute(mxbeanName, "DatanodeNetworkCounts");
++      final String allDnc = dnc.toString();
++      assertTrue("expected to see loopback address",
++          allDnc.indexOf("127.0.0.1") >= 0);
++      assertTrue("expected to see networkErrors",
++          allDnc.indexOf("networkErrors") >= 0);
+     } finally {
+       IOUtils.cleanup(LOG, streams.toArray(new Closeable[0]));
+       if (cluster != null) {
+-- 
+1.7.9.5
+

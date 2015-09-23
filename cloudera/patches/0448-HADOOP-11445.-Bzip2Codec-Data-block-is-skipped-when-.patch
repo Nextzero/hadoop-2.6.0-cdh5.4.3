@@ -1,0 +1,66 @@
+From 561d1beaa8d998f506bf05cf243e7a8b4734f402 Mon Sep 17 00:00:00 2001
+From: Jason Lowe <jlowe@apache.org>
+Date: Tue, 6 Jan 2015 21:19:10 +0000
+Subject: [PATCH 448/596] HADOOP-11445. Bzip2Codec: Data block is skipped when
+ position of newly created stream is equal to start
+ of split. Contributed by Ankit Kamboj
+
+(cherry picked from commit d02fb53750bc592c23ba470ae82eb6f47d9a00ec)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit 3f9eeda47916af0ea1f6434785c68c1e53f2a8d2)
+---
+ .../org/apache/hadoop/io/compress/BZip2Codec.java  |    2 +-
+ .../apache/hadoop/mapred/TestLineRecordReader.java |   21 ++++++++++++++++++++
+ 2 files changed, 22 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/compress/BZip2Codec.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/compress/BZip2Codec.java
+index 37b97f2..b07004d 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/compress/BZip2Codec.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/compress/BZip2Codec.java
+@@ -224,7 +224,7 @@ public SplitCompressionInputStream createInputStream(InputStream seekableIn,
+     // ........................................^^[We align at wrong position!]
+     // ...........................................................^^[While this pos is correct]
+ 
+-    if (in.getPos() <= start) {
++    if (in.getPos() < start) {
+       ((Seekable)seekableIn).seek(start);
+       in = new BZip2CompressionInputStream(seekableIn, start, end, readMode);
+     }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestLineRecordReader.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestLineRecordReader.java
+index 7b664e9..452d62d 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestLineRecordReader.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestLineRecordReader.java
+@@ -101,6 +101,27 @@ public void testBzip2SplitEndsAtCRThenLF() throws IOException {
+     testSplitRecords("blockEndingInCRThenLF.txt.bz2", 136498);
+   }
+ 
++  //This test ensures record reader doesn't lose records when it starts
++  //exactly at the starting byte of a bz2 compressed block
++  @Test
++  public void testBzip2SplitStartAtBlockMarker() throws IOException {
++    //136504 in blockEndingInCR.txt.bz2 is the byte at which the bz2 block ends
++    //In the following test cases record readers should iterate over all the records
++    //and should not miss any record.
++
++    //Start next split at just the start of the block.
++    testSplitRecords("blockEndingInCR.txt.bz2", 136504);
++
++    //Start next split a byte forward in next block.
++    testSplitRecords("blockEndingInCR.txt.bz2", 136505);
++
++    //Start next split 3 bytes forward in next block.
++    testSplitRecords("blockEndingInCR.txt.bz2", 136508);
++
++    //Start next split 10 bytes from behind the end marker.
++    testSplitRecords("blockEndingInCR.txt.bz2", 136494);
++  }
++
+   // Use the LineRecordReader to read records from the file
+   public ArrayList<String> readRecords(URL testFileUrl, int splitSize)
+       throws IOException {
+-- 
+1.7.9.5
+

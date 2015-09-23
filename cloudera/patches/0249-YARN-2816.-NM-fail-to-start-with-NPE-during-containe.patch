@@ -1,0 +1,87 @@
+From 781e4f065d1fcaef6de18120892c03a3ee15b516 Mon Sep 17 00:00:00 2001
+From: Jason Lowe <jlowe@apache.org>
+Date: Fri, 14 Nov 2014 21:25:59 +0000
+Subject: [PATCH 249/596] YARN-2816. NM fail to start with NPE during
+ container recovery. Contributed by Zhihai Xu
+
+(cherry picked from commit 49c38898b0be64fc686d039ed2fb2dea1378df02)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+
+(cherry picked from commit 41bc8c094df49d745f6ab623f25b5ab4ac428f81)
+---
+ .../recovery/NMLeveldbStateStoreService.java       |   24 +++++++++++++++++++-
+ .../recovery/TestNMLeveldbStateStoreService.java   |    7 ++++++
+ 2 files changed, 30 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/recovery/NMLeveldbStateStoreService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/recovery/NMLeveldbStateStoreService.java
+index 7cf4921..9d54688 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/recovery/NMLeveldbStateStoreService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/recovery/NMLeveldbStateStoreService.java
+@@ -146,6 +146,8 @@ public boolean isNewlyCreated() {
+       throws IOException {
+     ArrayList<RecoveredContainerState> containers =
+         new ArrayList<RecoveredContainerState>();
++    ArrayList<ContainerId> containersToRemove =
++              new ArrayList<ContainerId>();
+     LeveldbIterator iter = null;
+     try {
+       iter = new LeveldbIterator(db);
+@@ -165,7 +167,14 @@ public boolean isNewlyCreated() {
+         ContainerId containerId = ConverterUtils.toContainerId(
+             key.substring(CONTAINERS_KEY_PREFIX.length(), idEndPos));
+         String keyPrefix = key.substring(0, idEndPos+1);
+-        containers.add(loadContainerState(containerId, iter, keyPrefix));
++        RecoveredContainerState rcs = loadContainerState(containerId,
++            iter, keyPrefix);
++        // Don't load container without StartContainerRequest
++        if (rcs.startRequest != null) {
++          containers.add(rcs);
++        } else {
++          containersToRemove.add(containerId);
++        }
+       }
+     } catch (DBException e) {
+       throw new IOException(e);
+@@ -175,6 +184,19 @@ public boolean isNewlyCreated() {
+       }
+     }
+ 
++    // remove container without StartContainerRequest
++    for (ContainerId containerId : containersToRemove) {
++      LOG.warn("Remove container " + containerId +
++          " with incomplete records");
++      try {
++        removeContainer(containerId);
++        // TODO: kill and cleanup the leaked container
++      } catch (IOException e) {
++        LOG.error("Unable to remove container " + containerId +
++            " in store", e);
++      }
++    }
++
+     return containers;
+   }
+ 
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/recovery/TestNMLeveldbStateStoreService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/recovery/TestNMLeveldbStateStoreService.java
+index 438cec3..f7f43cc 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/recovery/TestNMLeveldbStateStoreService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/recovery/TestNMLeveldbStateStoreService.java
+@@ -274,6 +274,13 @@ public void testContainerStorage() throws IOException {
+     assertEquals(containerReq, rcs.getStartRequest());
+     assertTrue(rcs.getDiagnostics().isEmpty());
+ 
++    // store a new container record without StartContainerRequest
++    ContainerId containerId1 = ContainerId.newContainerId(appAttemptId, 6);
++    stateStore.storeContainerLaunched(containerId1);
++    recoveredContainers = stateStore.loadContainersState();
++    // check whether the new container record is discarded
++    assertEquals(1, recoveredContainers.size());
++
+     // launch the container, add some diagnostics, and verify recovered
+     StringBuilder diags = new StringBuilder();
+     stateStore.storeContainerLaunched(containerId);
+-- 
+1.7.9.5
+

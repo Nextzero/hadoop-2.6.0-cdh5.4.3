@@ -1,0 +1,24 @@
+From 6595efe420b5ba86e38741b187c540b097b2dd18 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Tue, 15 Oct 2013 11:05:57 -0700
+Subject: [PATCH 107/596] MR1: CLOUDERA-BUILD.
+ fix-git-line-ending-confusion-in-mapreduce1-project
+
+(cherry picked from commit d23d5387b8f4de4c698c50a756bb200af6b56345)
+(cherry picked from commit 7a67c3b6c9c6d9e2a372a62d44401d242cec0825)
+(cherry picked from commit e47c688e44f39b6fcabe4292a49991a144847d41)
+---
+ hadoop-mapreduce1-project/.gitattributes |    1 +
+ 1 file changed, 1 insertion(+)
+ create mode 100644 hadoop-mapreduce1-project/.gitattributes
+
+diff --git a/hadoop-mapreduce1-project/.gitattributes b/hadoop-mapreduce1-project/.gitattributes
+new file mode 100644
+index 0000000..7d07d70
+--- /dev/null
++++ b/hadoop-mapreduce1-project/.gitattributes
+@@ -0,0 +1 @@
++* text=lf
+-- 
+1.7.9.5
+

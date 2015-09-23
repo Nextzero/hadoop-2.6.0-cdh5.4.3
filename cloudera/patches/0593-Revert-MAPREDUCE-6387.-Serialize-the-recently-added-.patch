@@ -1,0 +1,39 @@
+From 3db8dbcc859182e0937fb78145b81a97c54f2a8f Mon Sep 17 00:00:00 2001
+From: Arun Suresh <asuresh@cloudera.com>
+Date: Tue, 9 Jun 2015 23:46:53 -0700
+Subject: [PATCH 593/596] Revert "MAPREDUCE-6387. Serialize the recently added
+ Task#encryptedSpillKey field at the end. (Arun
+ Suresh via kasha)"
+
+This reverts commit 3f60a888a6ad1d7238628692ad01cde2eed2a492.
+---
+ .../main/java/org/apache/hadoop/mapred/Task.java   |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java
+index 7c055a6..1494a27 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java
+@@ -507,8 +507,8 @@ public void write(DataOutput out) throws IOException {
+     out.writeBoolean(taskCleanup);
+     Text.writeString(out, user);
+     out.writeInt(encryptedSpillKey.length);
+-    extraData.write(out);
+     out.write(encryptedSpillKey);
++    extraData.write(out);
+   }
+   
+   public void readFields(DataInput in) throws IOException {
+@@ -535,8 +535,8 @@ public void readFields(DataInput in) throws IOException {
+     user = StringInterner.weakIntern(Text.readString(in));
+     int len = in.readInt();
+     encryptedSpillKey = new byte[len];
+-    extraData.readFields(in);
+     in.readFully(encryptedSpillKey);
++    extraData.readFields(in);
+   }
+ 
+   @Override
+-- 
+1.7.9.5
+

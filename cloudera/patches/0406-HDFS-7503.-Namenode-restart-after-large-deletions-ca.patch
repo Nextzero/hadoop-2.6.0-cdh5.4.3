@@ -1,0 +1,83 @@
+From ae4a6b3dc5136c6412397852fcbe4931b6814ea3 Mon Sep 17 00:00:00 2001
+From: arp <arp@apache.org>
+Date: Wed, 10 Dec 2014 23:37:26 -0800
+Subject: [PATCH 406/596] HDFS-7503. Namenode restart after large deletions
+ can cause slow processReport (Arpit Agarwal)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+
+(cherry picked from commit ec2bba21ebbd250b9c1daa82b4795ee4f0f59a12)
+---
+ .../hdfs/server/blockmanagement/BlockManager.java  |   22 ++++++++++++++------
+ 1 file changed, 16 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index 91f5445..2cf4854 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -1773,6 +1773,8 @@ public boolean processReport(final DatanodeID nodeID,
+     final long startTime = Time.now(); //after acquiring write lock
+     final long endTime;
+     DatanodeDescriptor node;
++    Collection<Block> invalidatedBlocks = null;
++
+     try {
+       node = datanodeManager.getDatanode(nodeID);
+       if (node == null || !node.isAlive) {
+@@ -1801,7 +1803,7 @@ public boolean processReport(final DatanodeID nodeID,
+         // ordinary block reports.  This shortens restart times.
+         processFirstBlockReport(storageInfo, newReport);
+       } else {
+-        processReport(storageInfo, newReport);
++        invalidatedBlocks = processReport(storageInfo, newReport);
+       }
+       
+       storageInfo.receivedBlockReport();
+@@ -1810,6 +1812,14 @@ public boolean processReport(final DatanodeID nodeID,
+       namesystem.writeUnlock();
+     }
+ 
++    if (invalidatedBlocks != null) {
++      for (Block b : invalidatedBlocks) {
++        blockLog.info("BLOCK* processReport: " + b + " on " + node
++                          + " size " + b.getNumBytes()
++                          + " does not belong to any file");
++      }
++    }
++
+     // Log the block report processing stats from Namenode perspective
+     final NameNodeMetrics metrics = NameNode.getNameNodeMetrics();
+     if (metrics != null) {
+@@ -1896,8 +1906,9 @@ void rescanPostponedMisreplicatedBlocks() {
+     }
+   }
+   
+-  private void processReport(final DatanodeStorageInfo storageInfo,
+-                             final BlockListAsLongs report) throws IOException {
++  private Collection<Block> processReport(
++      final DatanodeStorageInfo storageInfo,
++      final BlockListAsLongs report) throws IOException {
+     // Normal case:
+     // Modify the (block-->datanode) map, according to the difference
+     // between the old and new block report.
+@@ -1928,14 +1939,13 @@ private void processReport(final DatanodeStorageInfo storageInfo,
+           + " of " + numBlocksLogged + " reported.");
+     }
+     for (Block b : toInvalidate) {
+-      blockLog.info("BLOCK* processReport: "
+-          + b + " on " + node + " size " + b.getNumBytes()
+-          + " does not belong to any file");
+       addToInvalidates(b, node);
+     }
+     for (BlockToMarkCorrupt b : toCorrupt) {
+       markBlockAsCorrupt(b, storageInfo, node);
+     }
++
++    return toInvalidate;
+   }
+ 
+   /**
+-- 
+1.7.9.5
+

@@ -1,0 +1,58 @@
+From 90b629413873efaa378f7f0bf2522a8415d6e00c Mon Sep 17 00:00:00 2001
+From: Anubhav Dhoot <adhoot@cloudera.com>
+Date: Thu, 19 Mar 2015 15:47:02 -0700
+Subject: [PATCH 512/596] CLOUDERA-BUILD Revert YARN-2581 NMs need to find a
+ way to get LogAggregationContext
+
+(cherry picked from commit 588e68371609337a60367afd7280900cc557a939)
+---
+ .../yarn/security/ContainerTokenIdentifier.java    |   19 -------------------
+ 1 file changed, 19 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/ContainerTokenIdentifier.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/ContainerTokenIdentifier.java
+index bc6a764..3e73a8e 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/ContainerTokenIdentifier.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/security/ContainerTokenIdentifier.java
+@@ -37,8 +37,6 @@
+ import org.apache.hadoop.yarn.api.records.LogAggregationContext;
+ import org.apache.hadoop.yarn.api.records.Priority;
+ import org.apache.hadoop.yarn.api.records.Resource;
+-import org.apache.hadoop.yarn.api.records.impl.pb.LogAggregationContextPBImpl;
+-import org.apache.hadoop.yarn.proto.YarnProtos.LogAggregationContextProto;
+ 
+ /**
+  * TokenIdentifier for a container. Encodes {@link ContainerId},
+@@ -155,15 +153,6 @@ public void write(DataOutput out) throws IOException {
+     out.writeLong(this.rmIdentifier);
+     out.writeInt(this.priority.getPriority());
+     out.writeLong(this.creationTime);
+-    if (this.logAggregationContext == null) {
+-      out.writeInt(-1);
+-    } else {
+-      byte[] logAggregationContext =
+-          ((LogAggregationContextPBImpl) this.logAggregationContext).getProto()
+-            .toByteArray();
+-      out.writeInt(logAggregationContext.length);
+-      out.write(logAggregationContext);
+-    }
+   }
+ 
+   @Override
+@@ -184,14 +173,6 @@ public void readFields(DataInput in) throws IOException {
+     this.rmIdentifier = in.readLong();
+     this.priority = Priority.newInstance(in.readInt());
+     this.creationTime = in.readLong();
+-    int size = in.readInt();
+-    if (size != -1) {
+-      byte[] bytes = new byte[size];
+-      in.readFully(bytes);
+-      this.logAggregationContext =
+-          new LogAggregationContextPBImpl(
+-            LogAggregationContextProto.parseFrom(bytes));
+-    }
+   }
+ 
+   @Override
+-- 
+1.7.9.5
+

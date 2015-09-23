@@ -1,0 +1,27 @@
+From 3fd00896adf7100296e2703b03a994d999d78ebd Mon Sep 17 00:00:00 2001
+From: Juan Yu <jyu@cloudera.com>
+Date: Tue, 2 Sep 2014 18:13:43 -0700
+Subject: [PATCH 143/596] MR1: CLOUDERA-BUILD update cdh version for
+ packaging.
+
+(cherry picked from commit 2db30fe4bd382089a3aec3d847fa7140f89bba9d)
+---
+ .../cloudera/maven-packaging/pom.xml               |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml
+index d0a4bba..7c7f650 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml
+@@ -21,7 +21,7 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>cdh-root</artifactId>
+-    <version>5.0.0-SNAPSHOT</version>
++    <version>5.2.0-SNAPSHOT</version>
+     <relativePath>../../../../../pom.xml</relativePath>
+   </parent>
+   
+-- 
+1.7.9.5
+

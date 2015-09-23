@@ -1,0 +1,542 @@
+From 4ffc138eb0da4706df3bc0af844046737818ccee Mon Sep 17 00:00:00 2001
+From: Gera Shegalov <gera@apache.org>
+Date: Wed, 21 Jan 2015 18:41:43 -0800
+Subject: [PATCH 456/596] MAPREDUCE-5785. Derive heap size or
+ mapreduce.*.memory.mb automatically. (Gera Shegalov
+ and Karthik Kambatla via gera)
+
+(cherry picked from commit a003f71cacd35834a1abbc2ffb5446a1166caf73)
+
+Conflicts:
+	hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/MapReduceChildJVM.java
+	hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TestMapReduceChildJVM.java
+	hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/MRJobConfig.java
+---
+ .../apache/hadoop/mapred/MapReduceChildJVM.java    |   32 +----
+ .../mapreduce/v2/app/job/impl/TaskAttemptImpl.java |   15 +--
+ .../v2/app/job/impl/TestMapReduceChildJVM.java     |   87 +++++++++++--
+ .../java/org/apache/hadoop/mapred/JobConf.java     |  129 +++++++++++++++++++-
+ .../main/java/org/apache/hadoop/mapred/Task.java   |    6 +-
+ .../org/apache/hadoop/mapreduce/MRJobConfig.java   |    5 +
+ .../src/main/resources/mapred-default.xml          |   38 ++++--
+ 7 files changed, 247 insertions(+), 65 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/MapReduceChildJVM.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/MapReduceChildJVM.java
+index c790c57..bf0ceb9 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/MapReduceChildJVM.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapred/MapReduceChildJVM.java
+@@ -30,6 +30,7 @@
+ import org.apache.hadoop.mapred.TaskLog.LogName;
+ import org.apache.hadoop.mapreduce.ID;
+ import org.apache.hadoop.mapreduce.MRJobConfig;
++import org.apache.hadoop.mapreduce.TaskType;
+ import org.apache.hadoop.mapreduce.v2.util.MRApps;
+ import org.apache.hadoop.yarn.api.ApplicationConstants;
+ import org.apache.hadoop.yarn.api.ApplicationConstants.Environment;
+@@ -115,36 +116,7 @@ public static void setVMEnv(Map<String, String> environment,
+   }
+ 
+   private static String getChildJavaOpts(JobConf jobConf, boolean isMapTask) {
+-    String userClasspath = "";
+-    String adminClasspath = "";
+-    if (isMapTask) {
+-      userClasspath = 
+-          jobConf.get(
+-              JobConf.MAPRED_MAP_TASK_JAVA_OPTS, 
+-              jobConf.get(
+-                  JobConf.MAPRED_TASK_JAVA_OPTS, 
+-                  JobConf.DEFAULT_MAPRED_TASK_JAVA_OPTS)
+-          );
+-      adminClasspath = 
+-          jobConf.get(
+-              MRJobConfig.MAPRED_MAP_ADMIN_JAVA_OPTS,
+-              MRJobConfig.DEFAULT_MAPRED_ADMIN_JAVA_OPTS);
+-    } else {
+-      userClasspath =
+-          jobConf.get(
+-              JobConf.MAPRED_REDUCE_TASK_JAVA_OPTS, 
+-              jobConf.get(
+-                  JobConf.MAPRED_TASK_JAVA_OPTS,
+-                  JobConf.DEFAULT_MAPRED_TASK_JAVA_OPTS)
+-              );
+-      adminClasspath =
+-          jobConf.get(
+-              MRJobConfig.MAPRED_REDUCE_ADMIN_JAVA_OPTS,
+-              MRJobConfig.DEFAULT_MAPRED_ADMIN_JAVA_OPTS);
+-    }
+-    
+-    // Add admin classpath first so it can be overridden by user.
+-    return adminClasspath + " " + userClasspath;
++    return jobConf.getTaskJavaOpts(isMapTask ? TaskType.MAP : TaskType.REDUCE);
+   }
+ 
+   private static void setupLog4jProperties(Task task,
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java
+index 5a8a658..bc029de 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java
+@@ -559,19 +559,8 @@ public TaskAttemptImpl(TaskId taskId, int i,
+     stateMachine = stateMachineFactory.make(this);
+   }
+ 
+-  private int getMemoryRequired(Configuration conf, TaskType taskType) {
+-    int memory = 1024;
+-    if (taskType == TaskType.MAP)  {
+-      memory =
+-          conf.getInt(MRJobConfig.MAP_MEMORY_MB,
+-              MRJobConfig.DEFAULT_MAP_MEMORY_MB);
+-    } else if (taskType == TaskType.REDUCE) {
+-      memory =
+-          conf.getInt(MRJobConfig.REDUCE_MEMORY_MB,
+-              MRJobConfig.DEFAULT_REDUCE_MEMORY_MB);
+-    }
+-    
+-    return memory;
++  private int getMemoryRequired(JobConf conf, TaskType taskType) {
++    return conf.getMemoryRequired(TypeConverter.fromYarn(taskType));
+   }
+ 
+   private int getCpuRequired(Configuration conf, TaskType taskType) {
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TestMapReduceChildJVM.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TestMapReduceChildJVM.java
+index 8e146b9..8c14048 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TestMapReduceChildJVM.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/test/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TestMapReduceChildJVM.java
+@@ -18,8 +18,10 @@
+ 
+ package org.apache.hadoop.mapreduce.v2.app.job.impl;
+ 
++import java.util.ArrayList;
+ import java.util.Map;
+ 
++import org.apache.hadoop.mapreduce.TaskType;
+ import org.junit.Assert;
+ 
+ import org.apache.commons.logging.Log;
+@@ -56,8 +58,8 @@ public void testCommandLine() throws Exception {
+     Assert.assertEquals(
+       "[" + MRApps.crossPlatformify("JAVA_HOME") + "/bin/java" +
+       " -Djava.net.preferIPv4Stack=true" +
+-      " -Dhadoop.metrics.log.level=WARN" +
+-      "  -Xmx200m -Djava.io.tmpdir=" + MRApps.crossPlatformify("PWD") + "/tmp" +
++      " -Dhadoop.metrics.log.level=WARN " +
++      "  -Xmx820m -Djava.io.tmpdir=" + MRApps.crossPlatformify("PWD") + "/tmp" +
+       " -Dlog4j.configuration=container-log4j.properties" +
+       " -Dyarn.app.container.log.dir=<LOG_DIR>" +
+       " -Dyarn.app.container.log.filesize=0" +
+@@ -67,7 +69,7 @@ public void testCommandLine() throws Exception {
+       " attempt_0_0000_m_000000_0" +
+       " 0" +
+       " 1><LOG_DIR>/stdout" +
+-      " 2><LOG_DIR>/stderr ]", app.myCommandLine);
++      " 2><LOG_DIR>/stderr ]", app.launchCmdList.get(0));
+     
+     Assert.assertTrue("HADOOP_ROOT_LOGGER not set for job",
+       app.cmdEnvironment.containsKey("HADOOP_ROOT_LOGGER"));
+@@ -94,8 +96,8 @@ public void testCommandLineWithLog4JConifg() throws Exception {
+     Assert.assertEquals(
+       "[" + MRApps.crossPlatformify("JAVA_HOME") + "/bin/java" +
+       " -Djava.net.preferIPv4Stack=true" +
+-      " -Dhadoop.metrics.log.level=WARN" +
+-      "  -Xmx200m -Djava.io.tmpdir=" + MRApps.crossPlatformify("PWD") + "/tmp" +
++      " -Dhadoop.metrics.log.level=WARN " +
++      "  -Xmx820m -Djava.io.tmpdir=" + MRApps.crossPlatformify("PWD") + "/tmp" +
+       " -Dlog4j.configuration=" + testLogPropertieFile +
+       " -Dyarn.app.container.log.dir=<LOG_DIR>" +
+       " -Dyarn.app.container.log.filesize=0" +
+@@ -105,12 +107,81 @@ public void testCommandLineWithLog4JConifg() throws Exception {
+       " attempt_0_0000_m_000000_0" +
+       " 0" +
+       " 1><LOG_DIR>/stdout" +
+-      " 2><LOG_DIR>/stderr ]", app.myCommandLine);
++      " 2><LOG_DIR>/stderr ]", app.launchCmdList.get(0));
++  }
++
++  @Test
++  public void testAutoHeapSizes() throws Exception {
++    // Don't specify heap size or memory-mb
++    testAutoHeapSize(-1, -1, null);
++
++    // Don't specify heap size
++    testAutoHeapSize(512, 768, null);
++    testAutoHeapSize(100, 768, null);
++    testAutoHeapSize(512, 100, null);
++    // Specify heap size
++    testAutoHeapSize(512, 768, "-Xmx100m");
++    testAutoHeapSize(512, 768, "-Xmx500m");
++
++    // Specify heap size but not the memory
++    testAutoHeapSize(-1, -1, "-Xmx100m");
++    testAutoHeapSize(-1, -1, "-Xmx500m");
++  }
++
++  private void testAutoHeapSize(int mapMb, int redMb, String xmxArg)
++      throws Exception {
++    JobConf conf = new JobConf();
++    float heapRatio = conf.getFloat(MRJobConfig.HEAP_MEMORY_MB_RATIO,
++        MRJobConfig.DEFAULT_HEAP_MEMORY_MB_RATIO);
++
++    // Verify map and reduce java opts are not set by default
++    Assert.assertNull("Default map java opts!",
++        conf.get(MRJobConfig.MAP_JAVA_OPTS));
++    Assert.assertNull("Default reduce java opts!",
++        conf.get(MRJobConfig.REDUCE_JAVA_OPTS));
++    // Set the memory-mbs and java-opts
++    if (mapMb > 0) {
++      conf.setInt(MRJobConfig.MAP_MEMORY_MB, mapMb);
++    } else {
++      mapMb = conf.getMemoryRequired(TaskType.MAP);
++    }
++
++    if (redMb > 0) {
++      conf.setInt(MRJobConfig.REDUCE_MEMORY_MB, redMb);
++    } else {
++      redMb = conf.getMemoryRequired(TaskType.REDUCE);
++    }
++    if (xmxArg != null) {
++      conf.set(MRJobConfig.MAP_JAVA_OPTS, xmxArg);
++      conf.set(MRJobConfig.REDUCE_JAVA_OPTS, xmxArg);
++    }
++
++    // Submit job to let unspecified fields be picked up
++    MyMRApp app = new MyMRApp(1, 1, true, this.getClass().getName(), true);
++    Job job = app.submit(conf);
++    app.waitForState(job, JobState.SUCCEEDED);
++    app.verifyCompleted();
++
++    // Go through the tasks and verify the values are as expected
++    for (String cmd : app.launchCmdList) {
++      final boolean isMap = cmd.contains("_m_");
++      int heapMb;
++      if (xmxArg == null) {
++        heapMb = (int)(Math.ceil((isMap ? mapMb : redMb) * heapRatio));
++      } else {
++        final String javaOpts = conf.get(isMap
++            ? MRJobConfig.MAP_JAVA_OPTS
++            : MRJobConfig.REDUCE_JAVA_OPTS);
++        heapMb = JobConf.parseMaximumHeapSizeMB(javaOpts);
++      }
++      Assert.assertEquals("Incorrect heapsize in the command opts",
++          heapMb, JobConf.parseMaximumHeapSizeMB(cmd));
++    }
+   }
+ 
+   private static final class MyMRApp extends MRApp {
+ 
+-    private String myCommandLine;
++    private ArrayList<String> launchCmdList = new ArrayList<>();
+     private Map<String, String> cmdEnvironment;
+ 
+     public MyMRApp(int maps, int reduces, boolean autoComplete,
+@@ -129,7 +200,7 @@ public void handle(ContainerLauncherEvent event) {
+                 launchEvent.getContainerLaunchContext();
+             String cmdString = launchContext.getCommands().toString();
+             LOG.info("launchContext " + cmdString);
+-            myCommandLine = cmdString;
++            launchCmdList.add(cmdString);
+             cmdEnvironment = launchContext.getEnvironment();
+           }
+           super.handle(event);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JobConf.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JobConf.java
+index 4dda76a..ed0014e 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JobConf.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JobConf.java
+@@ -20,8 +20,10 @@
+ 
+ 
+ import java.io.IOException;
++import java.util.regex.Matcher;
+ import java.util.regex.Pattern;
+ 
++import com.google.common.annotations.VisibleForTesting;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -44,6 +46,7 @@
+ import org.apache.hadoop.mapred.lib.KeyFieldBasedPartitioner;
+ import org.apache.hadoop.mapreduce.MRConfig;
+ import org.apache.hadoop.mapreduce.MRJobConfig;
++import org.apache.hadoop.mapreduce.TaskType;
+ import org.apache.hadoop.mapreduce.filecache.DistributedCache;
+ import org.apache.hadoop.mapreduce.util.ConfigUtil;
+ import org.apache.hadoop.security.Credentials;
+@@ -114,6 +117,8 @@
+ public class JobConf extends Configuration {
+ 
+   private static final Log LOG = LogFactory.getLog(JobConf.class);
++  private static final Pattern JAVA_OPTS_XMX_PATTERN =
++          Pattern.compile(".*(?:^|\\s)-Xmx(\\d+)([gGmMkK]?)(?:$|\\s).*");
+ 
+   static{
+     ConfigUtil.loadResources();
+@@ -247,9 +252,9 @@
+    */
+   public static final String MAPRED_REDUCE_TASK_JAVA_OPTS = 
+     JobContext.REDUCE_JAVA_OPTS;
+-  
+-  public static final String DEFAULT_MAPRED_TASK_JAVA_OPTS = "-Xmx200m";
+-  
++
++  public static final String DEFAULT_MAPRED_TASK_JAVA_OPTS = "";
++
+   /**
+    * @deprecated
+    * Configuration key to set the maximum virtual memory available to the child
+@@ -2041,7 +2046,123 @@ private void checkAndWarnDeprecation() {
+       LOG.warn(JobConf.deprecatedString(JobConf.MAPRED_REDUCE_TASK_ULIMIT));
+     }
+   }
+-  
++
++  private String getConfiguredTaskJavaOpts(TaskType taskType) {
++    String userClasspath = "";
++    String adminClasspath = "";
++    if (taskType == TaskType.MAP) {
++      userClasspath = get(MAPRED_MAP_TASK_JAVA_OPTS,
++          get(MAPRED_TASK_JAVA_OPTS, DEFAULT_MAPRED_TASK_JAVA_OPTS));
++      adminClasspath = get(MRJobConfig.MAPRED_MAP_ADMIN_JAVA_OPTS,
++          MRJobConfig.DEFAULT_MAPRED_ADMIN_JAVA_OPTS);
++    } else {
++      userClasspath = get(MAPRED_REDUCE_TASK_JAVA_OPTS,
++          get(MAPRED_TASK_JAVA_OPTS, DEFAULT_MAPRED_TASK_JAVA_OPTS));
++      adminClasspath = get(MRJobConfig.MAPRED_REDUCE_ADMIN_JAVA_OPTS,
++          MRJobConfig.DEFAULT_MAPRED_ADMIN_JAVA_OPTS);
++    }
++
++    return adminClasspath + " " + userClasspath;
++  }
++
++  @Private
++  public String getTaskJavaOpts(TaskType taskType) {
++    String javaOpts = getConfiguredTaskJavaOpts(taskType);
++
++    if (!javaOpts.contains("-Xmx")) {
++      float heapRatio = getFloat(MRJobConfig.HEAP_MEMORY_MB_RATIO,
++          MRJobConfig.DEFAULT_HEAP_MEMORY_MB_RATIO);
++
++      if (heapRatio > 1.0f || heapRatio < 0) {
++        LOG.warn("Invalid value for " + MRJobConfig.HEAP_MEMORY_MB_RATIO
++            + ", using the default.");
++        heapRatio = MRJobConfig.DEFAULT_HEAP_MEMORY_MB_RATIO;
++      }
++
++      int taskContainerMb = getMemoryRequired(taskType);
++      int taskHeapSize = (int)Math.ceil(taskContainerMb * heapRatio);
++
++      String xmxArg = String.format("-Xmx%dm", taskHeapSize);
++      LOG.info("Task java-opts do not specify heap size. Setting task attempt" +
++          " jvm max heap size to " + xmxArg);
++
++      javaOpts += " " + xmxArg;
++    }
++
++    return javaOpts;
++  }
++
++  /**
++   * Parse the Maximum heap size from the java opts as specified by the -Xmx option
++   * Format: -Xmx<size>[g|G|m|M|k|K]
++   * @param javaOpts String to parse to read maximum heap size
++   * @return Maximum heap size in MB or -1 if not specified
++   */
++  @Private
++  @VisibleForTesting
++  public static int parseMaximumHeapSizeMB(String javaOpts) {
++    // Find the last matching -Xmx following word boundaries
++    Matcher m = JAVA_OPTS_XMX_PATTERN.matcher(javaOpts);
++    if (m.matches()) {
++      int size = Integer.parseInt(m.group(1));
++      if (size <= 0) {
++        return -1;
++      }
++      if (m.group(2).isEmpty()) {
++        // -Xmx specified in bytes
++        return size / (1024 * 1024);
++      }
++      char unit = m.group(2).charAt(0);
++      switch (unit) {
++        case 'g':
++        case 'G':
++          // -Xmx specified in GB
++          return size * 1024;
++        case 'm':
++        case 'M':
++          // -Xmx specified in MB
++          return size;
++        case 'k':
++        case 'K':
++          // -Xmx specified in KB
++          return size / 1024;
++      }
++    }
++    // -Xmx not specified
++    return -1;
++  }
++
++  private int getMemoryRequiredHelper(
++      String configName, int defaultValue, int heapSize, float heapRatio) {
++    int memory = getInt(configName, -1);
++    if (memory <= 0) {
++      if (heapSize > 0) {
++        memory = (int) Math.ceil(heapSize / heapRatio);
++        LOG.info("Figured value for " + configName + " from javaOpts");
++      } else {
++        memory = defaultValue;
++      }
++    }
++
++    return memory;
++  }
++
++  @Private
++  public int getMemoryRequired(TaskType taskType) {
++    int memory = 1024;
++    int heapSize = parseMaximumHeapSizeMB(getConfiguredTaskJavaOpts(taskType));
++    float heapRatio = getFloat(MRJobConfig.HEAP_MEMORY_MB_RATIO,
++        MRJobConfig.DEFAULT_HEAP_MEMORY_MB_RATIO);
++    if (taskType == TaskType.MAP) {
++      return getMemoryRequiredHelper(MRJobConfig.MAP_MEMORY_MB,
++          MRJobConfig.DEFAULT_MAP_MEMORY_MB, heapSize, heapRatio);
++    } else if (taskType == TaskType.REDUCE) {
++      return getMemoryRequiredHelper(MRJobConfig.REDUCE_MEMORY_MB,
++          MRJobConfig.DEFAULT_REDUCE_MEMORY_MB, heapSize, heapRatio);
++    } else {
++      return memory;
++    }
++  }
+ 
+ }
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java
+index 7710ba7..71be030 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/Task.java
+@@ -34,6 +34,7 @@
+ 
+ import javax.crypto.SecretKey;
+ 
++import com.google.common.annotations.VisibleForTesting;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -623,8 +624,9 @@ public static String normalizeStatus(String status, Configuration conf) {
+      * Using AtomicBoolean since we need an atomic read & reset method. 
+      */  
+     private AtomicBoolean progressFlag = new AtomicBoolean(false);
+-    
+-    TaskReporter(Progress taskProgress,
++
++    @VisibleForTesting
++    public TaskReporter(Progress taskProgress,
+                  TaskUmbilicalProtocol umbilical) {
+       this.umbilical = umbilical;
+       this.taskProgress = taskProgress;
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/MRJobConfig.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/MRJobConfig.java
+index 2ac948a..bbaadeb 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/MRJobConfig.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/MRJobConfig.java
+@@ -815,6 +815,11 @@
+   
+   public static final String MR_APPLICATION_TYPE = "MAPREDUCE";
+   
++  public static final String HEAP_MEMORY_MB_RATIO =
++      "mapreduce.job.heap.memory-mb.ratio";
++
++  public static final float DEFAULT_HEAP_MEMORY_MB_RATIO = 0.8f;
++
+   public static final String MR_ENCRYPTED_INTERMEDIATE_DATA =
+       "mapreduce.job.encrypted-intermediate-data";
+   public static final boolean DEFAULT_MR_ENCRYPTED_INTERMEDIATE_DATA = false;
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml
+index 6025455..1a2d1d8 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/resources/mapred-default.xml
+@@ -435,9 +435,11 @@
+ 
+ <property>
+   <name>mapreduce.map.memory.mb</name>
+-  <value>1024</value>
++  <value>-1</value>
+   <description>The amount of memory to request from the scheduler for each
+-  map task.
++    map task. If this is not specified or is non-positive, it is inferred from
++    mapreduce.map.java.opts and mapreduce.job.heap.memory-mb.ratio.
++    If java-opts are also not specified, we set it to 1024.
+   </description>
+ </property>
+ 
+@@ -451,9 +453,11 @@
+ 
+ <property>
+   <name>mapreduce.reduce.memory.mb</name>
+-  <value>1024</value>
++  <value>-1</value>
+   <description>The amount of memory to request from the scheduler for each
+-  reduce task.
++    reduce task. If this is not specified or is non-positive, it is inferred
++    from mapreduce.reduce.java.opts and mapreduce.job.heap.memory-mb.ratio.
++    If java-opts are also not specified, we set it to 1024.
+   </description>
+ </property>
+ 
+@@ -497,7 +501,7 @@
+ 
+ <property>
+   <name>mapred.child.java.opts</name>
+-  <value>-Xmx200m</value>
++  <value></value>
+   <description>Java opts for the task processes.
+   The following symbol, if present, will be interpolated: @taskid@ is replaced 
+   by current TaskID. Any other occurrences of '@' will go unchanged.
+@@ -508,7 +512,10 @@
+   Usage of -Djava.library.path can cause programs to no longer function if
+   hadoop native libraries are used. These values should instead be set as part 
+   of LD_LIBRARY_PATH in the map / reduce JVM env using the mapreduce.map.env and 
+-  mapreduce.reduce.env config settings. 
++  mapreduce.reduce.env config settings.
++
++  If -Xmx is not set, it is inferred from mapreduce.{map|reduce}.memory.mb and
++  mapreduce.job.heap.memory-mb.ratio.
+   </description>
+ </property>
+ 
+@@ -517,7 +524,9 @@
+   <name>mapreduce.map.java.opts</name>
+   <value></value>
+   <description>Java opts only for the child processes that are maps. If set,
+-  this will be used instead of mapred.child.java.opts.
++  this will be used instead of mapred.child.java.opts. If -Xmx is not set,
++  it is inferred from mapreduce.map.memory.mb and
++  mapreduce.job.heap.memory-mb.ratio.
+   </description>
+ </property>
+ -->
+@@ -527,7 +536,9 @@
+   <name>mapreduce.reduce.java.opts</name>
+   <value></value>
+   <description>Java opts only for the child processes that are reduces. If set,
+-  this will be used instead of mapred.child.java.opts.
++  this will be used instead of mapred.child.java.opts. If -Xmx is not set,
++  it is inferred from mapreduce.reduce.memory.mb and
++  mapreduce.job.heap.memory-mb.ratio.
+   </description>
+ </property>
+ -->
+@@ -1971,4 +1982,15 @@
+     - HTTPS_ONLY : Service is provided only on https
+   </description>
+ </property>
++
++<property>
++  <name>mapreduce.job.heap.memory-mb.ratio</name>
++  <value>0.8</value>
++  <description>The ratio of heap-size to container-size. If no -Xmx is
++    specified, it is calculated as
++    (mapreduce.{map|reduce}.memory.mb * mapreduce.heap.memory-mb.ratio).
++    If -Xmx is specified but not mapreduce.{map|reduce}.memory.mb, it is
++    calculated as (heapSize / mapreduce.heap.memory-mb.ratio).
++  </description>
++</property>
+ </configuration>
+-- 
+1.7.9.5
+

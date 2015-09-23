@@ -1,0 +1,141 @@
+From 5ea70265c39bd68660d7acac92b871bb828b1c73 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Wed, 17 Dec 2014 10:31:19 -0800
+Subject: [PATCH 431/596] HADOOP-11421. Add IOUtils#listDirectory (cmccabe)
+
+(cherry picked from commit 9937eef7f7f04a7dd3d504ae7ec5852d488a1f6a)
+(cherry picked from commit 883ad3bf5a6b8870537030fb55e8f58677012631)
+---
+ .../main/java/org/apache/hadoop/io/IOUtils.java    |   36 ++++++++++++++++
+ .../java/org/apache/hadoop/io/TestIOUtils.java     |   44 ++++++++++++++++++++
+ 2 files changed, 80 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/IOUtils.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/IOUtils.java
+index a3315a8..d4d5862 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/IOUtils.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/IOUtils.java
+@@ -23,12 +23,19 @@
+ import java.nio.ByteBuffer;
+ import java.nio.channels.FileChannel;
+ import java.nio.channels.WritableByteChannel;
++import java.nio.file.DirectoryStream;
++import java.nio.file.DirectoryIteratorException;
++import java.nio.file.Files;
++import java.nio.file.Path;
++import java.util.ArrayList;
++import java.util.List;
+ 
+ import org.apache.commons.logging.Log;
+ 
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.classification.InterfaceStability;
+ import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.util.ChunkedArrayList;
+ 
+ /**
+  * An utility class for I/O related functionality. 
+@@ -310,4 +317,33 @@ public static void writeFully(FileChannel fc, ByteBuffer buf,
+       offset += fc.write(buf, offset);
+     } while (buf.remaining() > 0);
+   }
++
++  /**
++   * Return the complete list of files in a directory as strings.<p/>
++   *
++   * This is better than File#listDir because it does not ignore IOExceptions.
++   *
++   * @param dir              The directory to list.
++   * @param filter           If non-null, the filter to use when listing
++   *                         this directory.
++   * @return                 The list of files in the directory.
++   *
++   * @throws IOException     On I/O error
++   */
++  public static List<String> listDirectory(File dir, FilenameFilter filter)
++      throws IOException {
++    ArrayList<String> list = new ArrayList<String> ();
++    try (DirectoryStream<Path> stream =
++             Files.newDirectoryStream(dir.toPath())) {
++      for (Path entry: stream) {
++        String fileName = entry.getFileName().toString();
++        if ((filter == null) || filter.accept(dir, fileName)) {
++          list.add(fileName);
++        }
++      }
++    } catch (DirectoryIteratorException e) {
++      throw e.getCause();
++    }
++    return list;
++  }
+ }
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/io/TestIOUtils.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/io/TestIOUtils.java
+index 4be8a44..e485f9f 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/io/TestIOUtils.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/io/TestIOUtils.java
+@@ -24,14 +24,21 @@
+ import java.io.ByteArrayInputStream;
+ import java.io.EOFException;
+ import java.io.File;
++import java.io.FilenameFilter;
+ import java.io.IOException;
+ import java.io.InputStream;
+ import java.io.OutputStream;
+ import java.io.RandomAccessFile;
+ import java.nio.ByteBuffer;
+ import java.nio.channels.FileChannel;
++import java.nio.file.Files;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
+ 
++import org.apache.commons.io.FileUtils;
+ import org.apache.hadoop.test.GenericTestUtils;
++import org.junit.Assert;
+ import org.junit.Test;
+ import org.mockito.Mockito;
+ 
+@@ -214,4 +221,41 @@ public void testSkipFully() throws IOException {
+       in.close();
+     }
+   }
++
++  private static enum NoEntry3Filter implements FilenameFilter {
++    INSTANCE;
++
++    @Override
++    public boolean accept(File dir, String name) {
++      return !name.equals("entry3");
++    }
++  }
++
++  @Test
++  public void testListDirectory() throws IOException {
++    File dir = new File("testListDirectory");
++    Files.createDirectory(dir.toPath());
++    try {
++      Set<String> entries = new HashSet<String>();
++      entries.add("entry1");
++      entries.add("entry2");
++      entries.add("entry3");
++      for (String entry : entries) {
++        Files.createDirectory(new File(dir, entry).toPath());
++      }
++      List<String> list = IOUtils.listDirectory(dir,
++          NoEntry3Filter.INSTANCE);
++      for (String entry : list) {
++        Assert.assertTrue(entries.remove(entry));
++      }
++      Assert.assertTrue(entries.contains("entry3"));
++      list = IOUtils.listDirectory(dir, null);
++      for (String entry : list) {
++        entries.remove(entry);
++      }
++      Assert.assertTrue(entries.isEmpty());
++    } finally {
++      FileUtils.deleteDirectory(dir);
++    }
++  }
+ }
+-- 
+1.7.9.5
+

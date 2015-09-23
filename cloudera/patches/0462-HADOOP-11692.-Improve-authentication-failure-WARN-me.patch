@@ -1,0 +1,43 @@
+From 4b05d224f601b9347dc6946bb3452a74db143c60 Mon Sep 17 00:00:00 2001
+From: Yongjun Zhang <yzhang@cloudera.com>
+Date: Mon, 9 Mar 2015 11:55:32 -0700
+Subject: [PATCH 462/596] HADOOP-11692. Improve authentication failure WARN
+ message to avoid user confusion. Contributed by
+ Yongjun Zhang.
+
+(cherry picked from commit de1101cb5be2d8efd0ef4945f64ccfe7cbd01049)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/Server.java
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+---
+ .../main/java/org/apache/hadoop/ipc/Server.java    |    9 +++++++--
+ 1 file changed, 7 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/Server.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/Server.java
+index 127f22b..16cb232 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/Server.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/ipc/Server.java
+@@ -1287,10 +1287,15 @@ private void saslProcess(RpcSaslProto saslMessage)
+           saslResponse = processSaslMessage(saslMessage);
+         } catch (IOException e) {
+           rpcMetrics.incrAuthenticationFailures();
++          if (LOG.isDebugEnabled()) {
++            LOG.debug(StringUtils.stringifyException(e));
++          }
+           // attempting user could be null
++          IOException tce = (IOException) getCauseForInvalidToken(e);
+           AUDITLOG.warn(AUTH_FAILED_FOR + this.toString() + ":"
+-              + attemptingUser + " (" + e.getLocalizedMessage() + ")");
+-          throw (IOException) getCauseForInvalidToken(e);
++              + attemptingUser + " (" + e.getLocalizedMessage()
++              + ") with true cause: (" + tce.getLocalizedMessage() + ")");
++          throw tce;
+         }
+         
+         if (saslServer != null && saslServer.isComplete()) {
+-- 
+1.7.9.5
+

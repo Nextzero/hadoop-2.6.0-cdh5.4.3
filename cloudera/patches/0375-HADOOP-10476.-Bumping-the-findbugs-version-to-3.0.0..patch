@@ -1,0 +1,44 @@
+From f15449ba30f447282e9d5b87f4ac6bd756854cb0 Mon Sep 17 00:00:00 2001
+From: Haohui Mai <wheat9@apache.org>
+Date: Tue, 9 Dec 2014 10:38:24 -0800
+Subject: [PATCH 375/596] HADOOP-10476. Bumping the findbugs version to 3.0.0.
+ Contributed by Haohui Mai.
+
+(cherry picked from commit c9e9f82ec6a76bd80fc04ec301a4c9b3d28306c9)
+---
+ hadoop-project/pom.xml |    5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index 7983ff0..d401413 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -71,6 +71,7 @@
+     <protoc.path>${env.HADOOP_PROTOC_CDH5_PATH}</protoc.path>
+ 
+     <zookeeper.version>3.4.6</zookeeper.version>
++    <findbugs.version>3.0.0</findbugs.version>
+ 
+     <tomcat.version>6.0.41</tomcat.version>
+ 
+@@ -866,7 +867,7 @@
+       <dependency>
+         <groupId>com.google.code.findbugs</groupId>
+         <artifactId>jsr305</artifactId>
+-        <version>1.3.9</version>
++        <version>${findbugs.version}</version>
+       </dependency>
+       <dependency>
+         <groupId>javax.xml.bind</groupId>
+@@ -1014,7 +1015,7 @@
+         <plugin>
+           <groupId>org.codehaus.mojo</groupId>
+           <artifactId>findbugs-maven-plugin</artifactId>
+-          <version>2.3.2</version>
++          <version>${findbugs.version}</version>
+         </plugin>
+         <plugin>
+           <groupId>org.apache.maven.plugins</groupId>
+-- 
+1.7.9.5
+

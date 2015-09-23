@@ -1,0 +1,148 @@
+From 6c737a4f5f8210f80e7f120925aff49be903e7a4 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Thu, 29 Jan 2015 18:50:36 -0800
+Subject: [PATCH 323/596] MR1: CLOUDERA-BUILD. MR1 version of HADOOP-9989. Bug
+ introduced in HADOOP-9374, which parses the
+ -tokenCacheFile as binary file but set it to the
+ configuration as JSON file. (zxu via tucu)
+
+(cherry picked from commit b100949404843ed245ef4e118291f55b3fdc81b8)
+---
+ .../mapred/org/apache/hadoop/mapred/JobClient.java |    4 +-
+ .../hadoop/mapreduce/security/TokenCache.java      |    4 +-
+ .../hadoop/mapreduce/security/TestTokenCache.java  |   49 ++++++++++++++++----
+ 3 files changed, 46 insertions(+), 11 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+index 12d21d7..593d31c 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+@@ -2215,8 +2215,8 @@ private void readTokensFromFiles(Configuration conf, Credentials credentials
+       conf.get("mapreduce.job.credentials.binary");
+     if (binaryTokenFilename != null) {
+       Credentials binary =
+-        Credentials.readTokenStorageFile(new Path("file:///" +
+-                                                  binaryTokenFilename), conf);
++          Credentials.readTokenStorageFile(FileSystem.getLocal(conf).
++              makeQualified(new Path(binaryTokenFilename)), conf);
+       credentials.addAll(binary);
+     }
+     // add secret keys coming from a json file
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java
+index cebc2b8..055ad0c 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java
+@@ -142,7 +142,9 @@ private static void mergeBinaryTokens(Credentials creds, Configuration conf) {
+       Credentials binary;
+       try {
+         binary = Credentials.readTokenStorageFile(
+-            new Path("file:///" +  binaryTokenFilename), conf);
++            FileSystem.getLocal(conf).makeQualified(
++                new Path(binaryTokenFilename)),
++            conf);
+       } catch (IOException e) {
+         throw new RuntimeException(e);
+       }
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
+index 0afa952..13c1f5e 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
+@@ -140,7 +140,8 @@ public JobConf setupJobConf(int numMapper, int numReducer,
+   private static MiniDFSCluster dfsCluster;
+   private static final Path TEST_DIR = 
+     new Path(System.getProperty("test.build.data","/tmp"), "sleepTest");
+-  private static final Path tokenFileName = new Path(TEST_DIR, "tokenFile.json");
++  private static final Path jsonTokenFile = new Path(TEST_DIR, "tokenFile.json");
++  private static final Path binaryTokenFile = new Path(TEST_DIR, "tokenFile.bin");
+   private static int numSlaves = 1;
+   private static JobConf jConf;
+   private static ObjectMapper mapper = new ObjectMapper();
+@@ -158,6 +159,8 @@ public static void setUp() throws Exception {
+     
+     createTokenFileJson();
+     verifySecretKeysInJSONFile();
++    createTokenFileBinary();
++    verifySecretKeysInBinaryFile();
+     NameNodeAdapter.getDtSecretManager(dfsCluster.getNamesystem()).startThreads();
+     FileSystem fs = dfsCluster.getFileSystem();
+     
+@@ -193,23 +196,53 @@ private static void createTokenFileJson() throws IOException {
+     }
+     
+     try {
+-      File p  = new File(tokenFileName.getParent().toString());
++      File p  = new File(jsonTokenFile.getParent().toString());
+       p.mkdirs();
+       // convert to JSON and save to the file
+-      mapper.writeValue(new File(tokenFileName.toString()), map);
++      mapper.writeValue(new File(jsonTokenFile.toString()), map);
+ 
+     } catch (Exception e) {
+       System.out.println("failed with :" + e.getLocalizedMessage());
+     }
+   }
+-  
++
++  private static void createTokenFileBinary() throws IOException {
++    Credentials creds = new Credentials();
++    try {
++      KeyGenerator kg = KeyGenerator.getInstance("HmacSHA1");
++      for(int i=0; i<NUM_OF_KEYS; i++) {
++        SecretKeySpec key = (SecretKeySpec) kg.generateKey();
++        byte [] enc_key = key.getEncoded();
++        creds.addSecretKey(new Text("alias"+i),
++            Base64.encodeBase64(enc_key));
++      }
++    } catch (NoSuchAlgorithmException e) {
++      throw new IOException(e);
++    }
++
++    try {
++      creds.writeTokenStorageFile(new Path(binaryTokenFile.toUri()),
++          new Configuration());
++    } catch (Exception e) {
++      System.out.println("failed with :" + e.getLocalizedMessage());
++    }
++  }
++
+   @SuppressWarnings("unchecked")
+   private static void verifySecretKeysInJSONFile() throws IOException {
+     Map<String, String> map;
+-    map = mapper.readValue(new File(tokenFileName.toString()), Map.class);
++    map = mapper.readValue(new File(jsonTokenFile.toString()), Map.class);
+     assertEquals("didn't read JSON correctly", map.size(), NUM_OF_KEYS);
+   }
+-  
++
++  @SuppressWarnings("unchecked")
++  private static void verifySecretKeysInBinaryFile() throws IOException {
++    Credentials creds = Credentials.readTokenStorageFile(
++        new File(binaryTokenFile.toString()), new Configuration());
++    assertEquals("didn't read JSON correctly", creds.numberOfSecretKeys(),
++        NUM_OF_KEYS);
++  }
++
+   /**
+    * run a distributed job and verify that TokenCache is available
+    * @throws IOException
+@@ -229,7 +262,7 @@ public void testTokenCache() throws IOException {
+ 
+     // using argument to pass the file name
+     String[] args = {
+-       "-tokenCacheFile", tokenFileName.toString(), 
++        "-tokenCacheFile", binaryTokenFile.toString(),
+         "-m", "1", "-r", "1", "-mt", "1", "-rt", "1"
+         };
+      
+@@ -253,7 +286,7 @@ public void testTokenCache() throws IOException {
+   public void testLocalJobTokenCache() throws NoSuchAlgorithmException, IOException {
+     // this is local job
+     String[] args = {"-m", "1", "-r", "1", "-mt", "1", "-rt", "1"}; 
+-    jConf.set("mapreduce.job.credentials.json", tokenFileName.toString());
++    jConf.set("mapreduce.job.credentials.json", jsonTokenFile.toString());
+ 
+     int res = -1;
+     try {
+-- 
+1.7.9.5
+

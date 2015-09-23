@@ -1,0 +1,40 @@
+From d6475b0c62d2cd90d99afc928ce072662368e038 Mon Sep 17 00:00:00 2001
+From: Suresh Srinivas <suresh@apache.org>
+Date: Mon, 7 Jan 2013 01:34:20 +0000
+Subject: [PATCH 097/596] MR1: MAPREDUCE-4914. TestMiniMRDFSSort fails with
+ openJDK7. Contributed by Brandon Li.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1429638 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 06cd43306bbb7937a603ec2b73460cb08e431fb2)
+(cherry picked from commit 49aabc4129a426f8884a1da5566a426a984648bb)
+(cherry picked from commit ec94d379af218ea524118d3c5a4420d7ff55e8b2)
+(cherry picked from commit f860d63282af145ada4c4524b6051ecae6e869f9)
+(cherry picked from commit f3581710a2e74fbfe1965ef03e526841536b543b)
+---
+ .../apache/hadoop/mapred/TestMiniMRDFSSort.java    |    9 +++------
+ 1 file changed, 3 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestMiniMRDFSSort.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestMiniMRDFSSort.java
+index 294edb5..8e0d404 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestMiniMRDFSSort.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestMiniMRDFSSort.java
+@@ -168,13 +168,10 @@ public void testMapReduceSort() throws Exception {
+     // Run sort-validator to check if sort worked correctly
+     runSortValidator(mrCluster.createJobConf(), SORT_INPUT_PATH, 
+                      SORT_OUTPUT_PATH);
+-  }
+-  
+-  public void testJvmReuse() throws Exception {
++    // test JVM reuse
+     runJvmReuseTest(mrCluster.createJobConf(), true);
+-  }
+-
+-  public void testNoJvmReuse() throws Exception {
++    
++    // test no JVM reuse
+     runJvmReuseTest(mrCluster.createJobConf(), false);
+   }
+ }
+-- 
+1.7.9.5
+

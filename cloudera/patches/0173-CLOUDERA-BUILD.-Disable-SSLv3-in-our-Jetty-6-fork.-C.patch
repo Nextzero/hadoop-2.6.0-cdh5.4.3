@@ -1,0 +1,45 @@
+From 4a44832c00dce28ccdeb38bdb24395721e939f55 Mon Sep 17 00:00:00 2001
+From: Stephen Chu <schu@cloudera.com>
+Date: Tue, 28 Oct 2014 16:47:22 -0700
+Subject: [PATCH 173/596] CLOUDERA-BUILD. Disable SSLv3 in our Jetty 6 fork.
+ (CDH-22521)
+
+(cherry picked from commit f87c79b0df79745b6ea0263c43a22feacac19d3c)
+---
+ hadoop-project/pom.xml |    6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index b0818bf..11165c7 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -414,7 +414,7 @@
+       <dependency>
+         <groupId>org.mortbay.jetty</groupId>
+         <artifactId>jetty</artifactId>
+-        <version>6.1.26</version>
++        <version>6.1.26.cloudera.3</version>
+         <exclusions>
+           <exclusion>
+             <groupId>org.mortbay.jetty</groupId>
+@@ -425,7 +425,7 @@
+       <dependency>
+         <groupId>org.mortbay.jetty</groupId>
+         <artifactId>jetty-util</artifactId>
+-        <version>6.1.26</version>
++        <version>6.1.26.cloudera.3</version>
+       </dependency>
+       <dependency>
+         <groupId>org.apache.tomcat.embed</groupId>
+@@ -538,7 +538,7 @@
+       <dependency>
+         <groupId>org.mortbay.jetty</groupId>
+         <artifactId>jetty-servlet-tester</artifactId>
+-        <version>6.1.26</version>
++        <version>6.1.26.cloudera.3</version>
+       </dependency>
+       <dependency>
+         <groupId>tomcat</groupId>
+-- 
+1.7.9.5
+

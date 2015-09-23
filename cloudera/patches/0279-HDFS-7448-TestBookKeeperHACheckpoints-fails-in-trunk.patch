@@ -1,0 +1,28 @@
+From 95cccab18ae13868f12500a086930a3de0402080 Mon Sep 17 00:00:00 2001
+From: Steve Loughran <stevel@apache.org>
+Date: Tue, 2 Dec 2014 15:04:26 +0000
+Subject: [PATCH 279/596] HDFS-7448 TestBookKeeperHACheckpoints fails in trunk
+ build (cherry picked from commit
+ 75d53456ea79b38b0e99303f7b298036b027f337)
+
+(cherry picked from commit bd63bf6c2597695e68bd824ec30725619e9fca18)
+---
+ .../bkjournal/TestBookKeeperHACheckpoints.java     |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/contrib/bkjournal/src/test/java/org/apache/hadoop/contrib/bkjournal/TestBookKeeperHACheckpoints.java b/hadoop-hdfs-project/hadoop-hdfs/src/contrib/bkjournal/src/test/java/org/apache/hadoop/contrib/bkjournal/TestBookKeeperHACheckpoints.java
+index 91cab55..b74cd7f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/contrib/bkjournal/src/test/java/org/apache/hadoop/contrib/bkjournal/TestBookKeeperHACheckpoints.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/contrib/bkjournal/src/test/java/org/apache/hadoop/contrib/bkjournal/TestBookKeeperHACheckpoints.java
+@@ -52,7 +52,7 @@ public void setupCluster() throws Exception {
+ 
+     cluster = new MiniDFSCluster.Builder(conf)
+       .nnTopology(topology)
+-      .numDataNodes(0)
++      .numDataNodes(1)
+       .manageNameDfsSharedDirs(false)
+       .build();
+     cluster.waitActive();
+-- 
+1.7.9.5
+

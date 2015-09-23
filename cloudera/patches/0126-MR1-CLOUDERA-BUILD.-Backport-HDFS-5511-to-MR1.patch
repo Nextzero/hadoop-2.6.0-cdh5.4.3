@@ -1,0 +1,29 @@
+From a53b9e978b1cd55d9bbacc3cc878348ee1a4e466 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Thu, 21 Nov 2013 13:26:10 -0800
+Subject: [PATCH 126/596] MR1: CLOUDERA-BUILD.  Backport HDFS-5511 to MR1.
+
+(cherry picked from commit d5ef8b6157d4d414d7961c27a79e0e405e793af0)
+(cherry picked from commit 837acf49c3bde43057572392655ed1237cc261be)
+(cherry picked from commit 7a4a94ff2a5b0a49581066d38048d6ea4da57b14)
+---
+ .../org/apache/hadoop/mapred/TaskTracker.java      |    3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+index 82f1815..d47ce1a 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+@@ -4337,7 +4337,8 @@ public void doGet(HttpServletRequest request,
+         
+         // drop cache if possible
+         if (tracker.manageOsCacheInShuffle && info.partLength > 0) {
+-          NativeIO.POSIX.posixFadviseIfPossible(mapId, mapOutputIn.getFD(),
++          NativeIO.POSIX.getCacheManipulator().
++            posixFadviseIfPossible(mapId, mapOutputIn.getFD(),
+               info.startOffset, info.partLength,
+               NativeIO.POSIX.POSIX_FADV_DONTNEED);
+         }
+-- 
+1.7.9.5
+

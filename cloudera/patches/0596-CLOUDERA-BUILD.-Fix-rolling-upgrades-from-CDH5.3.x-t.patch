@@ -1,0 +1,269 @@
+From 4cd9f51a3f1ef748d45b8d77d0f211ad44296d4b Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Wed, 24 Jun 2015 11:44:55 -0700
+Subject: [PATCH 596/596] CLOUDERA-BUILD. Fix rolling upgrades from CDH5.3.x
+ to CDH5.4.x. Changes to 5.4.x.
+
+Reason: CDH5.3.x uses int for id in JVMId, while CDH5.4.x uses long. This incompatibility leads to job failures on rolling upgrade.
+Ref: CDH-28622
+Commit details:
+- CDH5.4.3+ supports reading both int and long for is in JVMId.
+- CDH5.4.3+ uses 32-bit version of container-id when creating a JVMId.
+- Rolling upgrades within the 5.4.x line continue to work.
+- Among rolling upgrades from 5.3.x to 5.4.x, only 5.3.6 to 5.4.3+ work.
+
+Change-Id: Ic18d5553d8f6aebc179d0b6d003b3e1fead69998
+(cherry picked from commit b8ccf9ce4d5d32cc9c863d5ab7c1f15fcfc198f8)
+---
+ .../mapreduce/v2/app/job/impl/TaskAttemptImpl.java |   14 +++-
+ .../main/java/org/apache/hadoop/mapred/JVMId.java  |   12 ++-
+ .../java/org/apache/hadoop/mapred/JvmContext.java  |   69 +++++++++++++++-
+ .../org/apache/hadoop/mapred/TestJvmContext.java   |   84 ++++++++++++++++++++
+ 4 files changed, 174 insertions(+), 5 deletions(-)
+ create mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestJvmContext.java
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java
+index bc029de..0d45cc5 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/job/impl/TaskAttemptImpl.java
+@@ -1502,10 +1502,22 @@ public void transition(final TaskAttemptImpl taskAttempt,
+       taskAttempt.container = container;
+       // this is a _real_ Task (classic Hadoop mapred flavor):
+       taskAttempt.remoteTask = taskAttempt.createRemoteTask();
++
++      /*
++       * CDH5.4.0 includes YARN-2312 that bumps up the container-id from 32
++       * to 64 bits to include the RM epoch so container-ids are unique
++       * across RM restarts. MR JVMId is also updated to use the 64-bit
++       * version of container-id leading to failures on rolling upgrade from
++       * CDH5.3.x to CDH5.4.y (y < 3).
++       *
++       * For 5.4.z (z > 2), let us use the 32-bit version of container-id
++       * for JVMId#jvmId to ensure rolling upgrades from 5.3.x
++       * to 5.4.x work. This shouldn't interfere with 5.5 and beyond.
++       */
+       taskAttempt.jvmID =
+           new WrappedJvmID(taskAttempt.remoteTask.getTaskID().getJobID(),
+               taskAttempt.remoteTask.isMapTask(),
+-              taskAttempt.container.getId().getContainerId());
++              taskAttempt.container.getId().getId());
+       taskAttempt.taskAttemptListener.registerPendingTask(
+           taskAttempt.remoteTask, taskAttempt.jvmID);
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JVMId.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JVMId.java
+index 77a7f8a..b4650fb 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JVMId.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JVMId.java
+@@ -134,12 +134,22 @@ protected StringBuilder appendTo(StringBuilder builder) {
+                  append(idFormat.format(jvmId));
+   }
+ 
+-  public void readFields(DataInput in) throws IOException {
++  public void readFieldsJvmIdAsLong(DataInput in) throws IOException {
+     this.jvmId = in.readLong();
+     this.jobId.readFields(in);
+     this.isMap = in.readBoolean();
+   }
+ 
++  public void readFieldsJvmIdAsInt(DataInput in) throws IOException {
++    this.jvmId = in.readInt();
++    this.jobId.readFields(in);
++    this.isMap = in.readBoolean();
++  }
++
++  public void readFields(DataInput in) throws IOException {
++    readFieldsJvmIdAsLong(in);
++  }
++
+   public void write(DataOutput out) throws IOException {
+     out.writeLong(jvmId);
+     jobId.write(out);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JvmContext.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JvmContext.java
+index 1c2d936..dc540f9 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JvmContext.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapred/JvmContext.java
+@@ -18,7 +18,9 @@
+ 
+ package org.apache.hadoop.mapred;
+ 
++import java.io.ByteArrayInputStream;
+ import java.io.DataInput;
++import java.io.DataInputStream;
+ import java.io.DataOutput;
+ import java.io.IOException;
+ 
+@@ -31,6 +33,9 @@
+ 
+   public static final Log LOG =
+     LogFactory.getLog(JvmContext.class);
++
++  // Tasks hardcode the pid to -1000 when calling TaskUmbilicalProtocol#getTask
++  static final String HARDCODED_PID = "-1000";
+   
+   JVMId jvmId;
+   String pid;
+@@ -44,10 +49,68 @@
+     jvmId = id;
+     this.pid = pid;
+   }
+-  
++
++  /**
++   * Helper method that reads inBytes to construct JvmContext.
++   *
++   * @param inBytes input bytes
++   * @param longJvmId if JVMId should be considered long
++   * @return a valid JvmContext on a successful parse, null otherwise
++   * @throws IOException
++   */
++  private static JvmContext readFieldsInternal(
++      byte[] inBytes, boolean longJvmId) throws IOException {
++    DataInput in = new DataInputStream(new ByteArrayInputStream(inBytes));
++    JVMId jvmId = new JVMId();
++
++    try {
++      if (longJvmId) {
++        jvmId.readFieldsJvmIdAsLong(in);
++      } else {
++        jvmId.readFieldsJvmIdAsInt(in);
++      }
++    } catch (Exception e) {
++      return null;
++    }
++
++    return new JvmContext(jvmId, Text.readString(in));
++  }
++
++  /**
++   * Works with both 5.3.x and 5.4.x even though they use int and long
++   * respectively for the id in JVMId.
++   */
+   public void readFields(DataInput in) throws IOException {
+-    jvmId.readFields(in);
+-    this.pid = Text.readString(in);
++    // "in" is essentially backed by a byte[], per {@link Server#processOneRpc}
++    DataInputStream dis = (DataInputStream) in;
++    int inLen = dis.available();
++    byte[] inBytes = new byte[inLen];
++    in.readFully(inBytes);
++    assert(dis.available() == 0);
++
++    // Try reading JvmContext assuming JVMId uses long for id.
++    JvmContext jvmContext = readFieldsInternal(inBytes, true);
++    if (LOG.isDebugEnabled()) {
++      LOG.debug("JVMContext read interpreting JVMId as long: "
++          + jvmContext.jvmId + "  " + jvmContext.pid);
++    }
++
++    if (jvmContext == null || !jvmContext.pid.equals(HARDCODED_PID)) {
++      // Looks like reading it as long didn't work. Fall back to reading as int.
++      jvmContext = readFieldsInternal(inBytes, false);
++      if (LOG.isDebugEnabled()) {
++        LOG.debug("JVMContext read interpreting JVMId as int: "
++            + jvmContext.jvmId + "  " + jvmContext.pid);
++      }
++
++      if (jvmContext == null || !jvmContext.pid.equals(HARDCODED_PID)) {
++        // Reading as int didn't work either. Give up!
++        throw new RuntimeException("Invalid JVMContext received!");
++      }
++    }
++
++    this.jvmId = jvmContext.jvmId;
++    this.pid = jvmContext.pid;
+   }
+   
+   public void write(DataOutput out) throws IOException {
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestJvmContext.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestJvmContext.java
+new file mode 100644
+index 0000000..74df9e1
+--- /dev/null
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/test/java/org/apache/hadoop/mapred/TestJvmContext.java
+@@ -0,0 +1,84 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.mapred;
++
++import org.junit.Assert;
++import org.junit.Test;
++
++import java.io.ByteArrayInputStream;
++import java.io.ByteArrayOutputStream;
++import java.io.DataInput;
++import java.io.DataInputStream;
++import java.io.DataOutput;
++import java.io.DataOutputStream;
++import java.io.IOException;
++
++public class TestJvmContext {
++
++  @Test
++  public void testJVMIdWriteLongReadLong() throws IOException {
++    JvmContext jvmContext = new JvmContext(
++        new JVMId("jt-1", 1, true, 1L + Integer.MAX_VALUE),
++        JvmContext.HARDCODED_PID
++    );
++
++    ByteArrayOutputStream baos = new ByteArrayOutputStream();
++    DataOutput out = new DataOutputStream(baos);
++    jvmContext.write(out);
++
++    DataInput in =
++        new DataInputStream(new ByteArrayInputStream(baos.toByteArray()));
++    jvmContext.readFields(in);
++    Assert.assertEquals("PIDs don't match", JvmContext.HARDCODED_PID,
++        jvmContext.pid);
++  }
++
++  @Test
++  public void testJVMIdWriteIntReadInt() throws IOException {
++    JvmContext jvmContext = new JvmContext(
++        new JVMId("jt-1", 1, true, 1),
++        JvmContext.HARDCODED_PID
++    );
++
++    ByteArrayOutputStream baos = new ByteArrayOutputStream();
++    DataOutput out = new DataOutputStream(baos);
++    jvmContext.write(out);
++
++    DataInput in =
++        new DataInputStream(new ByteArrayInputStream(baos.toByteArray()));
++    jvmContext.readFields(in);
++    Assert.assertEquals("PIDs don't match", JvmContext.HARDCODED_PID,
++        jvmContext.pid);
++  }
++
++  @Test (expected = RuntimeException.class)
++  public void testHardcodedPid() throws IOException {
++    JvmContext jvmContext = new JvmContext(
++        new JVMId("jt-1", 1, true, 1),
++        "1"
++    );
++
++    ByteArrayOutputStream baos = new ByteArrayOutputStream();
++    DataOutput out = new DataOutputStream(baos);
++    jvmContext.write(out);
++
++    DataInput in =
++        new DataInputStream(new ByteArrayInputStream(baos.toByteArray()));
++    jvmContext.readFields(in);
++  }
++}
+-- 
+1.7.9.5
+

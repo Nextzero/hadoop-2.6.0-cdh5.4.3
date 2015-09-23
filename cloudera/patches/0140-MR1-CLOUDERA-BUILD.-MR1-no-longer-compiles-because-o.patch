@@ -1,0 +1,60 @@
+From b5a821923f02f71f57ec4f69c60040cda0368c40 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Wed, 14 May 2014 13:25:07 -0700
+Subject: [PATCH 140/596] MR1: CLOUDERA-BUILD. MR1 no longer compiles because
+ of changes to HttpConfig in YARN-1553 (CDH-19117)
+
+(cherry picked from commit bf87244f585255d39fc6acbff6b196d02cfa7bb0)
+(cherry picked from commit a804b339cc9edee39dbd008db0378ee46eb0cbe9)
+---
+ .../java/org/apache/hadoop/http/HttpConfig.java    |   29 ++++++++++++++++++++
+ 1 file changed, 29 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/http/HttpConfig.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/http/HttpConfig.java
+index 0d1e6e9..b4654d4 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/http/HttpConfig.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/http/HttpConfig.java
+@@ -19,6 +19,8 @@
+ 
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.classification.InterfaceStability;
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
+ 
+ /**
+  * Singleton to get access to Http related configuration.
+@@ -49,4 +51,31 @@ public boolean isHttpsEnabled() {
+       return this == HTTPS_ONLY || this == HTTP_AND_HTTPS;
+     }
+   }
++
++  // CDH: The below is for MR1 compatibility only; MR2 should use
++  // YarnConfiguration.useHttps(conf)
++  private static Policy policy;
++  static {
++    Configuration conf = new Configuration();
++    boolean sslEnabled = conf.getBoolean(
++            CommonConfigurationKeysPublic.HADOOP_SSL_ENABLED_KEY,
++            CommonConfigurationKeysPublic.HADOOP_SSL_ENABLED_DEFAULT);
++    policy = sslEnabled ? Policy.HTTPS_ONLY : Policy.HTTP_ONLY;
++  }
++
++  public static void setPolicy(Policy policy) {
++    HttpConfig.policy = policy;
++  }
++
++  public static boolean isSecure() {
++    return policy == Policy.HTTPS_ONLY;
++  }
++
++  public static String getSchemePrefix() {
++    return (isSecure()) ? "https://" : "http://";
++  }
++
++  public static String getScheme(Policy policy) {
++    return policy == Policy.HTTPS_ONLY ? "https://" : "http://";
++  }
+ }
+-- 
+1.7.9.5
+

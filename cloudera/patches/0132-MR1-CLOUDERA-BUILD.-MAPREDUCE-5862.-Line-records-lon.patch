@@ -1,0 +1,62 @@
+From 005f3fab1532115a97f4305d0fd17355ac9071a3 Mon Sep 17 00:00:00 2001
+From: bc Wong <bcwalrus@cloudera.com>
+Date: Tue, 29 Apr 2014 00:16:18 -0700
+Subject: [PATCH 132/596] MR1: CLOUDERA-BUILD. MAPREDUCE-5862. Line records
+ longer than 2x split size aren't handled correctly
+
+(cherry picked from commit 6519104ee5ccf6820beee90bf672b9ad5aa37085)
+(cherry picked from commit 36720350e9c3544eae5159731b2f8e7348a12321)
+---
+ .../org/apache/hadoop/mapred/LineRecordReader.java |    5 ++---
+ .../mapreduce/lib/input/LineRecordReader.java      |    5 ++---
+ 2 files changed, 4 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LineRecordReader.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LineRecordReader.java
+index 553e70a..d4d8e7d 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LineRecordReader.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LineRecordReader.java
+@@ -137,7 +137,7 @@ private boolean isCompressedInput() {
+   private int maxBytesToConsume(long pos) {
+     return isCompressedInput()
+       ? Integer.MAX_VALUE
+-      : (int) Math.min(Integer.MAX_VALUE, end - pos);
++      : (int) Math.max(Math.min(Integer.MAX_VALUE, end - pos), maxLineLength);
+   }
+ 
+   private long getFilePosition() throws IOException {
+@@ -200,8 +200,7 @@ public synchronized boolean next(LongWritable key, Text value)
+     while (getFilePosition() <= end) {
+       key.set(pos);
+ 
+-      int newSize = in.readLine(value, maxLineLength,
+-          Math.max(maxBytesToConsume(pos), maxLineLength));
++      int newSize = in.readLine(value, maxLineLength, maxBytesToConsume(pos));
+       if (newSize == 0) {
+         return false;
+       }
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/input/LineRecordReader.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/input/LineRecordReader.java
+index fff3d41..67e3bcd 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/input/LineRecordReader.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/lib/input/LineRecordReader.java
+@@ -119,7 +119,7 @@ private boolean isCompressedInput() {
+   private int maxBytesToConsume(long pos) {
+     return isCompressedInput()
+       ? Integer.MAX_VALUE
+-      : (int) Math.min(Integer.MAX_VALUE, end - pos);
++      : (int) Math.max(Math.min(Integer.MAX_VALUE, end - pos), maxLineLength);
+   }
+ 
+   private long getFilePosition() throws IOException {
+@@ -144,8 +144,7 @@ public boolean nextKeyValue() throws IOException {
+     // We always read one extra line, which lies outside the upper
+     // split limit i.e. (end - 1)
+     while (getFilePosition() <= end) {
+-      newSize = in.readLine(value, maxLineLength,
+-          Math.max(maxBytesToConsume(pos), maxLineLength));
++      newSize = in.readLine(value, maxLineLength, maxBytesToConsume(pos));
+       if (newSize == 0) {
+         break;
+       }
+-- 
+1.7.9.5
+

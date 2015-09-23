@@ -1,0 +1,774 @@
+From 490c17af3f02a252acb95b5b426f5609c218d6cb Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Fri, 28 Feb 2014 16:06:03 -0800
+Subject: [PATCH 314/596] CLOUDERA-BUILD. JobHistoryServer has no information
+ about failed MR applications (CDH-13222) and fix
+ test failure
+
+(cherry picked from commit 4a000726db6596a532661c585118eabcae7d47de)
+(cherry picked from commit 5adb0731b23ed512565b3752b1cc25bd97d9f1f9)
+
+Conflicts:
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java
+
+(cherry picked from commit b6b0be2ebf8d8652bb06abe00127e76769fe2703)
+
+Conflicts:
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java
+---
+ .../jobhistory/JobHistoryEventHandler.java         |   68 +++--
+ .../v2/jobhistory/FileNameIndexUtils.java          |   35 ++-
+ .../mapreduce/jobhistory/JobHistoryParser.java     |   11 +
+ .../hadoop/mapreduce/v2/hs/CompletedJob.java       |   14 +
+ .../hadoop/mapreduce/v2/hs/JobHistoryServer.java   |    3 +
+ .../mapreduce/v2/hs/KilledHistoryService.java      |  282 ++++++++++++++++++++
+ .../apache/hadoop/yarn/conf/YarnConfiguration.java |    8 +
+ .../server/resourcemanager/rmapp/RMAppImpl.java    |   36 ++-
+ .../rmapp/TestRMAppTransitions.java                |   28 +-
+ 9 files changed, 454 insertions(+), 31 deletions(-)
+ create mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/KilledHistoryService.java
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryEventHandler.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryEventHandler.java
+index 184baaa..d32b601 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryEventHandler.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryEventHandler.java
+@@ -649,6 +649,11 @@ public void processEventForJobSummary(HistoryEvent event, JobSummary summary,
+       summary.setQueue(jse.getJobQueueName());
+       summary.setJobSubmitTime(jse.getSubmitTime());
+       summary.setJobName(jse.getJobName());
++      try {
++        writeEarlySummaryFile(jobId, summary);
++      } catch (IOException e) {
++        // ignore; this is logged elsewhere and is best effort at this point
++      }
+       break;
+     case NORMALIZED_RESOURCE:
+       NormalizedResourceEvent normalizedResourceEvent = 
+@@ -1052,41 +1057,64 @@ protected void closeEventWriter(JobId jobId) throws IOException {
+     }
+   }
+ 
+-  protected void processDoneFiles(JobId jobId) throws IOException {
++  private Path writeEarlySummaryFile(JobId jobId, JobSummary jobSummary)
++      throws IOException {
++    Path stagingDir = new Path(
++            JobHistoryUtils.getConfiguredHistoryStagingDirPrefix(getConfig(),
++                    jobId.toString()));
++    String doneSummaryFileName = JobHistoryUtils
++            .getIntermediateSummaryFileName(jobId);
++    Path qualifiedSummaryDoneFile = doneDirFS.makeQualified(new Path(
++          stagingDir, doneSummaryFileName));
++    return writeSummaryFile(qualifiedSummaryDoneFile, jobSummary);
++  }
+ 
+-    final MetaInfo mi = fileMap.get(jobId);
+-    if (mi == null) {
+-      throw new IOException("No MetaInfo found for JobId: [" + jobId + "]");
+-    }
++  private Path writeSummaryFile(JobId jobId, JobSummary jobSummary)
++          throws IOException {
++     String doneSummaryFileName = getTempFileName(JobHistoryUtils
++        .getIntermediateSummaryFileName(jobId));
++    Path qualifiedSummaryDoneFile = doneDirFS.makeQualified(new Path(
++        doneDirPrefixPath, doneSummaryFileName));
++    Path file = writeSummaryFile(qualifiedSummaryDoneFile, jobSummary);
++    doneDirFS.setPermission(file, new FsPermission(
++        JobHistoryUtils.HISTORY_INTERMEDIATE_FILE_PERMISSIONS));
++    return file;
++  }
+ 
+-    if (mi.getHistoryFile() == null) {
+-      LOG.warn("No file for job-history with " + jobId + " found in cache!");
+-    }
+-    if (mi.getConfFile() == null) {
+-      LOG.warn("No file for jobconf with " + jobId + " found in cache!");
+-    }
+-      
++  private Path writeSummaryFile(Path qualifiedSummaryDoneFile,
++      JobSummary jobSummary) throws IOException {
+     // Writing out the summary file.
+     // TODO JH enhancement - reuse this file to store additional indexing info
+     // like ACLs, etc. JHServer can use HDFS append to build an index file
+     // with more info than is available via the filename.
+-    Path qualifiedSummaryDoneFile = null;
+     FSDataOutputStream summaryFileOut = null;
+     try {
+-      String doneSummaryFileName = getTempFileName(JobHistoryUtils
+-          .getIntermediateSummaryFileName(jobId));
+-      qualifiedSummaryDoneFile = doneDirFS.makeQualified(new Path(
+-          doneDirPrefixPath, doneSummaryFileName));
+       summaryFileOut = doneDirFS.create(qualifiedSummaryDoneFile, true);
+-      summaryFileOut.writeUTF(mi.getJobSummary().getJobSummaryString());
++      summaryFileOut.writeUTF(jobSummary.getJobSummaryString());
+       summaryFileOut.close();
+-      doneDirFS.setPermission(qualifiedSummaryDoneFile, new FsPermission(
+-          JobHistoryUtils.HISTORY_INTERMEDIATE_FILE_PERMISSIONS));
+     } catch (IOException e) {
+       LOG.info("Unable to write out JobSummaryInfo to ["
+           + qualifiedSummaryDoneFile + "]", e);
+       throw e;
+     }
++    return qualifiedSummaryDoneFile;
++  }
++
++  protected void processDoneFiles(JobId jobId) throws IOException {
++
++    final MetaInfo mi = fileMap.get(jobId);
++    if (mi == null) {
++      throw new IOException("No MetaInfo found for JobId: [" + jobId + "]");
++    }
++
++    if (mi.getHistoryFile() == null) {
++      LOG.warn("No file for job-history with " + jobId + " found in cache!");
++    }
++    if (mi.getConfFile() == null) {
++      LOG.warn("No file for jobconf with " + jobId + " found in cache!");
++    }
++
++    Path qualifiedSummaryDoneFile = writeSummaryFile(jobId, mi.getJobSummary());
+ 
+     try {
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/FileNameIndexUtils.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/FileNameIndexUtils.java
+index 741da11..198bbc6 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/FileNameIndexUtils.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/FileNameIndexUtils.java
+@@ -82,11 +82,19 @@ public static String getDoneFileName(JobIndexInfo indexInfo) throws IOException
+     sb.append(DELIMITER);
+     
+     //NumMaps
+-    sb.append(indexInfo.getNumMaps());
++    if (indexInfo.getNumMaps() >= 0) {
++      sb.append(indexInfo.getNumMaps());
++    } else {
++      sb.append("NA");
++    }
+     sb.append(DELIMITER);
+     
+     //NumReduces
+-    sb.append(indexInfo.getNumReduces());
++    if (indexInfo.getNumReduces() >= 0) {
++      sb.append(indexInfo.getNumReduces());
++    } else {
++      sb.append("NA");
++    }
+     sb.append(DELIMITER);
+     
+     //JobStatus
+@@ -98,7 +106,11 @@ public static String getDoneFileName(JobIndexInfo indexInfo) throws IOException
+     sb.append(DELIMITER);
+ 
+     //JobStartTime
+-    sb.append(indexInfo.getJobStartTime());
++    if (indexInfo.getJobStartTime() >= 0) {
++      sb.append(indexInfo.getJobStartTime());
++    } else {
++      sb.append(indexInfo.getFinishTime());
++    }
+ 
+     sb.append(JobHistoryUtils.JOB_HISTORY_FILE_EXTENSION);
+     return encodeJobHistoryFileName(sb.toString());
+@@ -146,16 +158,25 @@ public static JobIndexInfo getIndexInfo(String jhFileName) throws IOException {
+       }
+ 
+       try {
+-        indexInfo.setNumMaps(
+-            Integer.parseInt(decodeJobHistoryFileName(jobDetails[NUM_MAPS_INDEX])));
++        String numMaps = decodeJobHistoryFileName(jobDetails[NUM_MAPS_INDEX]);
++        if (numMaps.equals("NA")) {
++          indexInfo.setNumMaps(-1);
++        } else {
++          indexInfo.setNumMaps(Integer.parseInt(numMaps));
++        }
+       } catch (NumberFormatException e) {
+         LOG.warn("Unable to parse num maps from job history file "
+             + jhFileName + " : " + e);
+       }
+ 
+       try {
+-        indexInfo.setNumReduces(
+-            Integer.parseInt(decodeJobHistoryFileName(jobDetails[NUM_REDUCES_INDEX])));
++        String numReduces =
++                decodeJobHistoryFileName(jobDetails[NUM_REDUCES_INDEX]);
++        if (numReduces.equals("NA")) {
++          indexInfo.setNumReduces(-1);
++        } else {
++          indexInfo.setNumReduces(Integer.parseInt(numReduces));
++        }
+       } catch (NumberFormatException e) {
+         LOG.warn("Unable to parse num reduces from job history file "
+             + jhFileName + " : " + e);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryParser.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryParser.java
+index 57c9493..fc60b09 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryParser.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-core/src/main/java/org/apache/hadoop/mapreduce/jobhistory/JobHistoryParser.java
+@@ -151,6 +151,17 @@ public synchronized JobInfo parse(EventReader reader) throws IOException {
+ 
+     info = new JobInfo();
+     parse(reader, this);
++    if (info.getJobStatus() == null) {
++      info.jobStatus = JobStatus.getJobRunState(JobStatus.FAILED);
++      if (info.getErrorInfo() == null || info.getErrorInfo().equals("")) {
++        info.errorInfo = "Application failed due to failed ApplicationMaster.\n"
++                + "Only partial information is available; some values may be "
++                + "inaccurate.";
++      }
++    }
++    if (info.getFinishTime() == -1L) {
++      info.finishTime = info.getLaunchTime();
++    }
+     return info;
+   }
+   
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/CompletedJob.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/CompletedJob.java
+index 79b9275..049a389 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/CompletedJob.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/CompletedJob.java
+@@ -329,6 +329,7 @@ protected synchronized void loadFullHistoryData(boolean loadTasks,
+     }
+     
+     if (historyFileAbsolute != null) {
++      verifyHistoryExistsAndNotEmpty(historyFileAbsolute);
+       JobHistoryParser parser = null;
+       try {
+         parser =
+@@ -354,6 +355,19 @@ protected synchronized void loadFullHistoryData(boolean loadTasks,
+     }    
+   }
+ 
++  private void verifyHistoryExistsAndNotEmpty(Path historyFileAbsolute) {
++    try {
++      if (historyFileAbsolute.getFileSystem(conf)
++              .getFileStatus(historyFileAbsolute).getLen() == 0) {
++        throw new YarnRuntimeException("History file is empty");
++      }
++    }
++    catch (IOException ioe) {
++      throw new YarnRuntimeException("Could not load history file "
++          + historyFileAbsolute, ioe);
++    }
++  }
++
+   @Override
+   public List<String> getDiagnostics() {
+     return Collections.singletonList(jobInfo.getErrorInfo());
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/JobHistoryServer.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/JobHistoryServer.java
+index 6d58040..75b7c5b 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/JobHistoryServer.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/JobHistoryServer.java
+@@ -69,6 +69,7 @@
+   private AggregatedLogDeletionService aggLogDelService;
+   private HSAdminServer hsAdminServer;
+   private HistoryServerStateStoreService stateStore;
++  private KilledHistoryService killedHistoryService;
+ 
+   // utility class to start and stop secret manager as part of service
+   // framework and implement state recovery for secret manager on startup
+@@ -133,12 +134,14 @@ protected void serviceInit(Configuration conf) throws Exception {
+     clientService = createHistoryClientService();
+     aggLogDelService = new AggregatedLogDeletionService();
+     hsAdminServer = new HSAdminServer(aggLogDelService, jobHistoryService);
++    killedHistoryService = new KilledHistoryService();
+     addService(stateStore);
+     addService(new HistoryServerSecretManagerService());
+     addService(jobHistoryService);
+     addService(clientService);
+     addService(aggLogDelService);
+     addService(hsAdminServer);
++    addService(killedHistoryService);
+     super.serviceInit(config);
+   }
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/KilledHistoryService.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/KilledHistoryService.java
+new file mode 100644
+index 0000000..3e95051
+--- /dev/null
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/KilledHistoryService.java
+@@ -0,0 +1,282 @@
++/**
++* Licensed to the Apache Software Foundation (ASF) under one
++* or more contributor license agreements.  See the NOTICE file
++* distributed with this work for additional information
++* regarding copyright ownership.  The ASF licenses this file
++* to you under the Apache License, Version 2.0 (the
++* "License"); you may not use this file except in compliance
++* with the License.  You may obtain a copy of the License at
++*
++*     http://www.apache.org/licenses/LICENSE-2.0
++*
++* Unless required by applicable law or agreed to in writing, software
++* distributed under the License is distributed on an "AS IS" BASIS,
++* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++* See the License for the specific language governing permissions and
++* limitations under the License.
++*/
++
++package org.apache.hadoop.mapreduce.v2.hs;
++
++import java.io.IOException;
++import java.security.PrivilegedExceptionAction;
++import java.util.Timer;
++import java.util.TimerTask;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
++import org.apache.hadoop.classification.InterfaceAudience.Private;
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.FSDataInputStream;
++import org.apache.hadoop.fs.FileStatus;
++import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.FileUtil;
++import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.fs.permission.FsPermission;
++import org.apache.hadoop.mapreduce.TypeConverter;
++import org.apache.hadoop.mapreduce.v2.api.records.JobId;
++import org.apache.hadoop.mapreduce.v2.jobhistory.FileNameIndexUtils;
++import org.apache.hadoop.mapreduce.v2.jobhistory.JHAdminConfig;
++import org.apache.hadoop.mapreduce.v2.jobhistory.JobHistoryUtils;
++import org.apache.hadoop.mapreduce.v2.jobhistory.JobIndexInfo;
++import org.apache.hadoop.mapreduce.v2.util.MRApps;
++import org.apache.hadoop.security.UserGroupInformation;
++import org.apache.hadoop.service.AbstractService;
++import org.apache.hadoop.yarn.api.records.ApplicationId;
++import org.apache.hadoop.yarn.conf.YarnConfiguration;
++
++/**
++ * This service tries to add entries in the JHS for applications that failed
++ * or were killed
++ */
++@Private
++public class KilledHistoryService extends AbstractService {
++  private static final Log LOG = LogFactory.getLog(KilledHistoryService.class);
++  private static final Pattern FLAG_FILE_PATTERN =
++      Pattern.compile("(\\S+)_appattempt_(\\d+)_(\\d+)_(\\d+)");
++  private static final Pattern SUBMIT_TIME_PATTERN =
++      Pattern.compile("submitTime=(\\d+)");
++  private static final Pattern FINISH_TIME_PATTERN =
++      Pattern.compile("finishTime=(\\d+)");
++  private static final Pattern JOB_NAME_PATTERN =
++      Pattern.compile("jobName=([^,]+)");
++  private static final Pattern NUM_MAPS_PATTERN =
++      Pattern.compile("numMaps=(\\d+)");
++  private static final Pattern NUM_REDUCES_PATTERN =
++      Pattern.compile("numReduces=(\\d+)");
++  private static final Pattern STATUS_PATTERN =
++      Pattern.compile("status=([^,]+)");
++  private static final Pattern QUEUE_PATTERN =
++      Pattern.compile("queue=([^,]+)");
++
++  private Timer timer = null;
++  private long checkIntervalMsecs;
++
++  @Override
++  protected void serviceInit(Configuration conf) throws Exception {
++    checkIntervalMsecs = conf.getLong(
++        JHAdminConfig.MR_HISTORY_MOVE_INTERVAL_MS,
++        JHAdminConfig.DEFAULT_MR_HISTORY_MOVE_INTERVAL_MS);
++    super.serviceInit(conf);
++  }
++
++  static class FlagFileHandler extends TimerTask {
++    private final Configuration conf;
++    private Path failDir = null;
++    private String intermediateDirPrefix = null;
++
++    public FlagFileHandler(Configuration conf) throws IOException {
++      this.conf = conf;
++      this.failDir = new Path(conf.get(
++          YarnConfiguration.YARN_AM_FAILURE_FLAG_DIR,
++          YarnConfiguration.DEFAULT_YARN_AM_FAILURE_FLAG_DIR));
++      this.intermediateDirPrefix =
++            JobHistoryUtils.getConfiguredHistoryIntermediateDoneDirPrefix(conf);
++    }
++
++    @Override
++    public void run() {
++      try {
++        FileSystem failDirFS = failDir.getFileSystem(conf);
++        if (failDirFS.exists(failDir)) {
++          for (FileStatus flagFileStatus : failDirFS.listStatus(failDir)) {
++            String flagFileName = flagFileStatus.getPath().getName();
++            Matcher m = FLAG_FILE_PATTERN.matcher(flagFileName);
++            if (m.matches()) {
++              final String user = m.group(1);
++              long timestamp = Long.parseLong(m.group(2));
++              int appId = Integer.parseInt(m.group(3));
++              final int attempt = Integer.parseInt(m.group(4));
++              ApplicationId applicationId =
++                  ApplicationId.newInstance(timestamp, appId);
++              final JobId jobId =TypeConverter.toYarn(
++                  TypeConverter.fromYarn(applicationId));
++              final Path intermediateDir = new Path(intermediateDirPrefix, user);
++              final Path stagingDirForJob = new Path(
++                  MRApps.getStagingAreaDir(conf, user), jobId.toString());
++              try {
++                final Path inSummaryFile = new Path(stagingDirForJob,
++                    JobHistoryUtils.getIntermediateSummaryFileName(jobId));
++                UserGroupInformation ugi =
++                    UserGroupInformation.createProxyUser(user,
++                        UserGroupInformation.getCurrentUser());
++                ugi.doAs(new PrivilegedExceptionAction<Void>() {
++                  @Override
++                  public Void run() throws IOException {
++                    JobIndexInfo jobIndexInfo =
++                        buildJobIndexInfo(inSummaryFile, jobId, user);
++                    String historyFilename =
++                        FileNameIndexUtils.getDoneFileName(jobIndexInfo);
++                    copy(JobHistoryUtils
++                        .getStagingConfFile(stagingDirForJob, jobId, attempt),
++                             new Path(intermediateDir, JobHistoryUtils
++                                 .getIntermediateConfFileName(jobId)));
++                    copy(inSummaryFile, new Path(intermediateDir,
++                        JobHistoryUtils.getIntermediateSummaryFileName(jobId)));
++                    copy(JobHistoryUtils
++                        .getStagingJobHistoryFile(stagingDirForJob, jobId,
++                            attempt), new Path(intermediateDir, historyFilename));
++                    return null;
++                  }
++                });
++                failDirFS.delete(flagFileStatus.getPath(), false);
++              } catch (IOException ioe) {
++                removeFlagFileWithMessage(failDirFS, flagFileStatus.getPath(),
++                    "Could not process job files", ioe);
++              } catch (InterruptedException ie) {
++                removeFlagFileWithMessage(failDirFS, flagFileStatus.getPath(),
++                    "Could not process job files", ie);
++              }
++            } else {
++              removeFlagFileWithMessage(failDirFS, flagFileStatus.getPath(),
++                  "Could not process fail flag file", null);
++            }
++          }
++        }
++      } catch (IOException ioe) {
++        LOG.info("Could not access fail flag dir", ioe);
++      }
++    }
++
++    private void removeFlagFileWithMessage(FileSystem failDirFS, Path flagFile,
++        String message, Exception ex) {
++      if (ex == null) {
++        LOG.warn(message);
++      } else {
++        LOG.warn(message, ex);
++      }
++      // Try to delete the flag file so we don't keep trying to process it
++      try {
++        failDirFS.delete(flagFile, false);
++      } catch (IOException ioe) {
++        // ignore
++      }
++    }
++
++    private void copy(Path fromPath, Path toPath) throws IOException {
++      FileSystem fromFs = fromPath.getFileSystem(conf);
++      FileSystem toFs = toPath.getFileSystem(conf);
++      LOG.info("Copying " + fromPath.toString() + " to " + toPath.toString());
++      boolean copied = FileUtil.copy(toFs, fromPath, fromFs, toPath,
++          false, conf);
++      if (copied) {
++        LOG.info("Copied to done location: " + toPath);
++      } else {
++        LOG.info("copy failed");
++      }
++      toFs.setPermission(toPath, new FsPermission(
++          JobHistoryUtils.HISTORY_INTERMEDIATE_FILE_PERMISSIONS));
++    }
++
++    private JobIndexInfo buildJobIndexInfo(Path summaryFile, JobId jobId,
++        String user) throws IOException {
++      FileSystem fs = summaryFile.getFileSystem(conf);
++      FSDataInputStream in = fs.open(summaryFile);
++      String summaryString = in.readUTF();
++      in.close();
++      long submitTime =
++          extractLong(SUBMIT_TIME_PATTERN, summaryString, "submitTime");
++      long finishTime =
++          extractLong(FINISH_TIME_PATTERN, summaryString, "finishTime");
++      if (finishTime == 0) {
++        finishTime = submitTime;  // prevent JHS from thinking it's too old
++      }
++      String jobName =
++          extractString(JOB_NAME_PATTERN, summaryString, "jobName");
++      int numMaps = extractInt(NUM_MAPS_PATTERN, summaryString, "numMaps");
++      if (numMaps == 0) {
++        numMaps = -1;
++      }
++      int numReduces =
++          extractInt(NUM_REDUCES_PATTERN, summaryString, "numReduces");
++      if (numReduces == 0) {
++        numReduces = -1;
++      }
++      String jobStatus = extractString(STATUS_PATTERN, summaryString, "status");
++      if (jobStatus.equals("null")) {
++        jobStatus = "FAILED"; // assume FAILED
++      }
++      String queue = extractString(QUEUE_PATTERN, summaryString, "queue");
++      JobIndexInfo info = new JobIndexInfo(submitTime, finishTime, user,
++          jobName, jobId, numMaps, numReduces, jobStatus);
++      info.setQueueName(queue);
++      return info;
++    }
++
++    private String extractString(Pattern pattern, String str, String type)
++        throws IOException {
++      String result = null;
++      Matcher m = pattern.matcher(str);
++      if (m.find()) {
++        result = m.group(1);
++      } else {
++        throw new IOException("Could not extract " + type
++            + " field from summary file");
++      }
++      return result;
++    }
++
++    private long extractLong(Pattern pattern, String str, String type)
++        throws IOException {
++      String result = extractString(pattern, str, type);
++      return (result == null) ? -1L : Long.parseLong(result);
++    }
++
++    private int extractInt(Pattern pattern, String str, String type)
++        throws IOException {
++      String result = extractString(pattern, str, type);
++      return (result == null) ? -1 : Integer.parseInt(result);
++    }
++  }
++
++  public KilledHistoryService() {
++    super(KilledHistoryService.class.getName());
++  }
++
++  @Override
++  protected void serviceStart() throws Exception {
++    scheduleFlagHandlerTask();
++    super.serviceStart();
++  }
++
++  @Override
++  protected void serviceStop() throws Exception {
++    stopTimer();
++    super.serviceStop();
++  }
++
++  private void scheduleFlagHandlerTask() throws IOException {
++    Configuration conf = getConfig();
++    TimerTask task = new FlagFileHandler(conf);
++    timer = new Timer();
++    timer.scheduleAtFixedRate(task, 0, checkIntervalMsecs);
++  }
++
++  private void stopTimer() {
++    if (timer != null) {
++      timer.cancel();
++    }
++  }
++}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
+index 14de944..981054a 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
+@@ -1199,6 +1199,14 @@ private static void addDeprecatedKeys() {
+   public static final String YARN_APP_CONTAINER_LOG_BACKUPS =
+       YARN_PREFIX + "app.container.log.backups";
+ 
++  /** Directory for fail flag files */
++  @Private
++  public static final String YARN_AM_FAILURE_FLAG_DIR =
++          YARN_PREFIX + "am-failure.flag.dir";
++  @Private
++  public static final String DEFAULT_YARN_AM_FAILURE_FLAG_DIR =
++          "/tmp/hadoop-yarn/fail";
++
+   ////////////////////////////////
+   // Timeline Service Configs
+   ////////////////////////////////
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java
+index 751dbe4..1d907a5 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java
+@@ -33,11 +33,13 @@
+ import java.util.concurrent.locks.ReentrantReadWriteLock;
+ import java.util.concurrent.locks.ReentrantReadWriteLock.ReadLock;
+ import java.util.concurrent.locks.ReentrantReadWriteLock.WriteLock;
+-
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.fs.permission.FsPermission;
+ import org.apache.hadoop.io.DataInputByteBuffer;
+ import org.apache.hadoop.security.Credentials;
+ import org.apache.hadoop.security.UserGroupInformation;
+@@ -103,6 +105,11 @@
+   private static final Log LOG = LogFactory.getLog(RMAppImpl.class);
+   private static final String UNAVAILABLE = "N/A";
+ 
++  final public static FsPermission FAIL_FLAG_DIR_PERMISSION =
++    FsPermission.createImmutable((short) 0777); // rwxrwxrwx
++  final public static FsPermission FAIL_FLAG_PERMISSION =
++    FsPermission.createImmutable((short) 0664); // rw-rw-r--
++
+   // Immutable fields
+   private final ApplicationId applicationId;
+   private final RMContext rmContext;
+@@ -942,6 +949,7 @@ public void transition(RMAppImpl app, RMAppEvent event) {
+       if (event instanceof RMAppFailedAttemptEvent) {
+         msg = app.getAppAttemptFailedDiagnostics(event);
+       }
++      app.writeFlagFileForFailedAM();
+       LOG.info(msg);
+       app.diagnostics.append(msg);
+       // Inform the node for app-finish
+@@ -1084,8 +1092,8 @@ public void transition(RMAppImpl app, RMAppEvent event) {
+       // pass in the earlier attempt_unregistered event, as it is needed in
+       // AppFinishedFinalStateSavedTransition later on
+       app.rememberTargetTransitions(event,
+-        new AppFinishedFinalStateSavedTransition(app.eventCausingFinalSaving),
+-        RMAppState.FINISHED);
++          new AppFinishedFinalStateSavedTransition(app.eventCausingFinalSaving),
++          RMAppState.FINISHED);
+     };
+   }
+ 
+@@ -1248,6 +1256,28 @@ public RMAppState transition(RMAppImpl app, RMAppEvent event) {
+     }
+   }
+ 
++  private void writeFlagFileForFailedAM() {
++    if (getCurrentAppAttempt() != null) {
++      Path failDir = new Path(conf.get(
++              YarnConfiguration.YARN_AM_FAILURE_FLAG_DIR,
++              YarnConfiguration.DEFAULT_YARN_AM_FAILURE_FLAG_DIR));
++      try {
++        FileSystem fs = FileSystem.get(failDir.toUri(), conf);
++        if (!fs.exists(failDir)) {
++            fs.mkdirs(failDir);
++            fs.setPermission(failDir, FAIL_FLAG_DIR_PERMISSION);
++        }
++        Path flagFile = new Path(failDir, user + "_" +
++                getCurrentAppAttempt().getAppAttemptId().toString());
++        fs.createNewFile(flagFile);
++        fs.setPermission(flagFile, FAIL_FLAG_PERMISSION);
++      } catch (IOException ioe) {
++        LOG.warn("Unable to write fail flag file for application "
++                + getCurrentAppAttempt().getAppAttemptId(), ioe);
++      }
++    }
++  }
++
+   @Override
+   public String getApplicationType() {
+     return this.applicationType;
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java
+index 0a2f0d4..0f2cc5c 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java
+@@ -36,6 +36,8 @@
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.io.DataOutputBuffer;
+ import org.apache.hadoop.security.Credentials;
+ import org.apache.hadoop.security.SecurityUtil;
+@@ -84,7 +86,9 @@
+ import org.apache.hadoop.yarn.util.Records;
+ import org.junit.Assert;
+ import org.junit.Before;
++import org.junit.Rule;
+ import org.junit.Test;
++import org.junit.rules.TemporaryFolder;
+ import org.junit.runner.RunWith;
+ import org.junit.runners.Parameterized;
+ import org.mockito.ArgumentCaptor;
+@@ -107,6 +111,7 @@
+   private SystemMetricsPublisher publisher;
+   private YarnScheduler scheduler;
+   private TestSchedulerEventDispatcher schedulerDispatcher;
++  private Path killedHistoryFlagDir;
+ 
+   // ignore all the RM application attempt events
+   private static final class TestApplicationAttemptEventDispatcher implements
+@@ -187,7 +192,10 @@ public void handle(SchedulerEvent event) {
+   public TestRMAppTransitions(boolean isSecurityEnabled) {
+     this.isSecurityEnabled = isSecurityEnabled;
+   }
+-  
++
++  @Rule
++  public TemporaryFolder tf = new TemporaryFolder();
++
+   @Before
+   public void setUp() throws Exception {
+     conf = new YarnConfiguration();
+@@ -240,6 +248,10 @@ public void setUp() throws Exception {
+     
+     rmDispatcher.init(conf);
+     rmDispatcher.start();
++
++    killedHistoryFlagDir = new Path(tf.newFolder().toURI());
++    conf.set(YarnConfiguration.YARN_AM_FAILURE_FLAG_DIR,
++        killedHistoryFlagDir.toString());
+   }
+ 
+   protected RMApp createNewTestApp(ApplicationSubmissionContext submissionContext) {
+@@ -351,6 +363,16 @@ private void assertFailed(RMApp application, String regex) {
+         diag.toString().matches(regex));
+   }
+ 
++  private void assertWroteFlagFileForFailedAM(RMApp application)
++          throws IOException {
++    FileSystem fs = FileSystem.get(conf);
++    Assert.assertTrue(fs.exists(killedHistoryFlagDir));
++    Assert.assertEquals(1, fs.listStatus(killedHistoryFlagDir).length);
++    Path flagFile = new Path(killedHistoryFlagDir, application.getUser() + "_"
++        + application.getCurrentAppAttempt().getAppAttemptId().toString());
++    Assert.assertTrue(fs.exists(flagFile));
++  }
++
+   private void sendAppUpdateSavedEvent(RMApp application) {
+     RMAppEvent event =
+         new RMAppEvent(application.getApplicationId(), RMAppEventType.APP_UPDATE_SAVED);
+@@ -511,6 +533,7 @@ public void testUnmanagedApp() throws IOException {
+     assertFailed(application,
+         ".*Unmanaged application.*Failing the application.*");
+     assertAppFinalStateSaved(application);
++    assertWroteFlagFileForFailedAM(application);
+   }
+   
+   @Test
+@@ -690,6 +713,7 @@ public void testAppAcceptedFailed() throws IOException {
+     assertFailed(application, ".*" + message + ".*Failing the application.*");
+     assertAppFinalStateSaved(application);
+     verifyApplicationFinished(RMAppState.FAILED);
++    assertWroteFlagFileForFailedAM(application);
+   }
+ 
+   @Test
+@@ -809,6 +833,7 @@ public void testAppRunningFailed() throws IOException {
+     assertFailed(application, ".*Failing the application.*");
+     assertAppFinalStateSaved(application);
+     verifyApplicationFinished(RMAppState.FAILED);
++    assertWroteFlagFileForFailedAM(application);
+   }
+ 
+   @Test
+@@ -941,6 +966,7 @@ public void testAppKilledKilled() throws IOException {
+ 
+     assertTimesAtFinish(application);
+     assertAppState(RMAppState.KILLED, application);
++
+   }
+   
+   @Test(timeout = 30000)
+-- 
+1.7.9.5
+

@@ -1,0 +1,1186 @@
+From 1179c28bc1a93c0982e2b342b04e9582c88dd788 Mon Sep 17 00:00:00 2001
+From: Todd Lipcon <todd@apache.org>
+Date: Fri, 5 Sep 2014 13:41:18 -0700
+Subject: [PATCH 350/596] MAPREDUCE-6074. native-task: Fix release audit
+ warnings
+
+(cherry picked from commit 7c91f9b1484d487e792dca051fbd418697049422)
+(cherry picked from commit 3cf530fdcc6fda8135022202463a268fadeb4fac)
+---
+ LICENSE.txt                                        |   33 +++
+ .../CHANGES.MAPREDUCE-2841.txt                     |    1 +
+ .../hadoop-mapreduce-client-nativetask/LICENSE     |  266 --------------------
+ .../hadoop-mapreduce-client-nativetask/pom.xml     |   12 +-
+ .../mapred/nativetask/INativeComparable.java       |   27 +-
+ .../src/main/native/COPYING                        |   87 -------
+ ...hadoop_mapred_nativetask_NativeBatchProcessor.h |   54 ----
+ ...apache_hadoop_mapred_nativetask_NativeRuntime.h |   66 -----
+ .../src/main/native/test.sh                        |   11 +
+ .../nativetask/buffer/TestBufferPushPull.java      |   13 +-
+ .../nativetask/buffer/TestByteBufferReadWrite.java |   16 +-
+ .../nativetask/combinertest/CombinerTest.java      |    4 +-
+ .../combinertest/OldAPICombinerTest.java           |    5 +-
+ .../mapred/nativetask/combinertest/WordCount.java  |    3 +-
+ .../nativetask/compresstest/CompressMapper.java    |    4 +-
+ .../nativetask/compresstest/CompressTest.java      |    2 +-
+ .../nativetask/handlers/TestCombineHandler.java    |   13 +-
+ .../handlers/TestNativeCollectorOnlyHandler.java   |   17 +-
+ .../hadoop/mapred/nativetask/kvtest/KVJob.java     |    3 +-
+ .../mapred/nativetask/kvtest/TestInputFile.java    |    7 +-
+ .../mapred/nativetask/nonsorttest/NonSortTest.java |    2 +-
+ .../nativetask/serde/TestNativeSerialization.java  |   10 +-
+ .../mapred/nativetask/testutil/BytesFactory.java   |    2 +-
+ .../mapred/nativetask/utils/TestBytesUtil.java     |   20 +-
+ hadoop-mapreduce-project/pom.xml                   |    2 +-
+ 25 files changed, 143 insertions(+), 537 deletions(-)
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/LICENSE
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/COPYING
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/handler/org_apache_hadoop_mapred_nativetask_NativeBatchProcessor.h
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/lib/org_apache_hadoop_mapred_nativetask_NativeRuntime.h
+
+diff --git a/LICENSE.txt b/LICENSE.txt
+index 8a4b175..ee9dfa8 100644
+--- a/LICENSE.txt
++++ b/LICENSE.txt
+@@ -287,3 +287,36 @@ For src/main/native/src/org/apache/hadoop/io/compress/lz4/{lz4.h,lz4.c,lz4hc.h,l
+    - LZ4 source repository : http://code.google.com/p/lz4/
+    - LZ4 public forum : https://groups.google.com/forum/#!forum/lz4c
+ */
++
++
++For hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/gtest
++---------------------------------------------------------------------
++Copyright 2008, Google Inc.
++All rights reserved.
++
++Redistribution and use in source and binary forms, with or without
++modification, are permitted provided that the following conditions are
++met:
++
++    * Redistributions of source code must retain the above copyright
++notice, this list of conditions and the following disclaimer.
++    * Redistributions in binary form must reproduce the above
++copyright notice, this list of conditions and the following disclaimer
++in the documentation and/or other materials provided with the
++distribution.
++    * Neither the name of Google Inc. nor the names of its
++contributors may be used to endorse or promote products derived from
++this software without specific prior written permission.
++
++THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
++"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
++LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
++A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
++OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
++SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
++LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++
+diff --git a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+index ea17907..539e7be 100644
+--- a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
++++ b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+@@ -22,3 +22,4 @@ MAPREDUCE-6056. native-task: move system test working dir to target dir and clea
+ MAPREDUCE-6055. native-task: findbugs, interface annotations, and other misc cleanup (todd)
+ MAPREDUCE-6067. native-task: fix some counter issues (Binglin Chang)
+ MAPREDUCE-6069. native-task: Lint/style fixes and removal of unused code (todd)
++MAPREDUCE-6074. native-task: fix release audit, javadoc, javac warnings (todd)
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/LICENSE b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/LICENSE
+deleted file mode 100644
+index 0780741..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/LICENSE
++++ /dev/null
+@@ -1,266 +0,0 @@
+-
+-                                 Apache License
+-                           Version 2.0, January 2004
+-                        http://www.apache.org/licenses/
+-
+-   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+-
+-   1. Definitions.
+-
+-      "License" shall mean the terms and conditions for use, reproduction,
+-      and distribution as defined by Sections 1 through 9 of this document.
+-
+-      "Licensor" shall mean the copyright owner or entity authorized by
+-      the copyright owner that is granting the License.
+-
+-      "Legal Entity" shall mean the union of the acting entity and all
+-      other entities that control, are controlled by, or are under common
+-      control with that entity. For the purposes of this definition,
+-      "control" means (i) the power, direct or indirect, to cause the
+-      direction or management of such entity, whether by contract or
+-      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+-      outstanding shares, or (iii) beneficial ownership of such entity.
+-
+-      "You" (or "Your") shall mean an individual or Legal Entity
+-      exercising permissions granted by this License.
+-
+-      "Source" form shall mean the preferred form for making modifications,
+-      including but not limited to software source code, documentation
+-      source, and configuration files.
+-
+-      "Object" form shall mean any form resulting from mechanical
+-      transformation or translation of a Source form, including but
+-      not limited to compiled object code, generated documentation,
+-      and conversions to other media types.
+-
+-      "Work" shall mean the work of authorship, whether in Source or
+-      Object form, made available under the License, as indicated by a
+-      copyright notice that is included in or attached to the work
+-      (an example is provided in the Appendix below).
+-
+-      "Derivative Works" shall mean any work, whether in Source or Object
+-      form, that is based on (or derived from) the Work and for which the
+-      editorial revisions, annotations, elaborations, or other modifications
+-      represent, as a whole, an original work of authorship. For the purposes
+-      of this License, Derivative Works shall not include works that remain
+-      separable from, or merely link (or bind by name) to the interfaces of,
+-      the Work and Derivative Works thereof.
+-
+-      "Contribution" shall mean any work of authorship, including
+-      the original version of the Work and any modifications or additions
+-      to that Work or Derivative Works thereof, that is intentionally
+-      submitted to Licensor for inclusion in the Work by the copyright owner
+-      or by an individual or Legal Entity authorized to submit on behalf of
+-      the copyright owner. For the purposes of this definition, "submitted"
+-      means any form of electronic, verbal, or written communication sent
+-      to the Licensor or its representatives, including but not limited to
+-      communication on electronic mailing lists, source code control systems,
+-      and issue tracking systems that are managed by, or on behalf of, the
+-      Licensor for the purpose of discussing and improving the Work, but
+-      excluding communication that is conspicuously marked or otherwise
+-      designated in writing by the copyright owner as "Not a Contribution."
+-
+-      "Contributor" shall mean Licensor and any individual or Legal Entity
+-      on behalf of whom a Contribution has been received by Licensor and
+-      subsequently incorporated within the Work.
+-
+-   2. Grant of Copyright License. Subject to the terms and conditions of
+-      this License, each Contributor hereby grants to You a perpetual,
+-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+-      copyright license to reproduce, prepare Derivative Works of,
+-      publicly display, publicly perform, sublicense, and distribute the
+-      Work and such Derivative Works in Source or Object form.
+-
+-   3. Grant of Patent License. Subject to the terms and conditions of
+-      this License, each Contributor hereby grants to You a perpetual,
+-      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+-      (except as stated in this section) patent license to make, have made,
+-      use, offer to sell, sell, import, and otherwise transfer the Work,
+-      where such license applies only to those patent claims licensable
+-      by such Contributor that are necessarily infringed by their
+-      Contribution(s) alone or by combination of their Contribution(s)
+-      with the Work to which such Contribution(s) was submitted. If You
+-      institute patent litigation against any entity (including a
+-      cross-claim or counterclaim in a lawsuit) alleging that the Work
+-      or a Contribution incorporated within the Work constitutes direct
+-      or contributory patent infringement, then any patent licenses
+-      granted to You under this License for that Work shall terminate
+-      as of the date such litigation is filed.
+-
+-   4. Redistribution. You may reproduce and distribute copies of the
+-      Work or Derivative Works thereof in any medium, with or without
+-      modifications, and in Source or Object form, provided that You
+-      meet the following conditions:
+-
+-      (a) You must give any other recipients of the Work or
+-          Derivative Works a copy of this License; and
+-
+-      (b) You must cause any modified files to carry prominent notices
+-          stating that You changed the files; and
+-
+-      (c) You must retain, in the Source form of any Derivative Works
+-          that You distribute, all copyright, patent, trademark, and
+-          attribution notices from the Source form of the Work,
+-          excluding those notices that do not pertain to any part of
+-          the Derivative Works; and
+-
+-      (d) If the Work includes a "NOTICE" text file as part of its
+-          distribution, then any Derivative Works that You distribute must
+-          include a readable copy of the attribution notices contained
+-          within such NOTICE file, excluding those notices that do not
+-          pertain to any part of the Derivative Works, in at least one
+-          of the following places: within a NOTICE text file distributed
+-          as part of the Derivative Works; within the Source form or
+-          documentation, if provided along with the Derivative Works; or,
+-          within a display generated by the Derivative Works, if and
+-          wherever such third-party notices normally appear. The contents
+-          of the NOTICE file are for informational purposes only and
+-          do not modify the License. You may add Your own attribution
+-          notices within Derivative Works that You distribute, alongside
+-          or as an addendum to the NOTICE text from the Work, provided
+-          that such additional attribution notices cannot be construed
+-          as modifying the License.
+-
+-      You may add Your own copyright statement to Your modifications and
+-      may provide additional or different license terms and conditions
+-      for use, reproduction, or distribution of Your modifications, or
+-      for any such Derivative Works as a whole, provided Your use,
+-      reproduction, and distribution of the Work otherwise complies with
+-      the conditions stated in this License.
+-
+-   5. Submission of Contributions. Unless You explicitly state otherwise,
+-      any Contribution intentionally submitted for inclusion in the Work
+-      by You to the Licensor shall be under the terms and conditions of
+-      this License, without any additional terms or conditions.
+-      Notwithstanding the above, nothing herein shall supersede or modify
+-      the terms of any separate license agreement you may have executed
+-      with Licensor regarding such Contributions.
+-
+-   6. Trademarks. This License does not grant permission to use the trade
+-      names, trademarks, service marks, or product names of the Licensor,
+-      except as required for reasonable and customary use in describing the
+-      origin of the Work and reproducing the content of the NOTICE file.
+-
+-   7. Disclaimer of Warranty. Unless required by applicable law or
+-      agreed to in writing, Licensor provides the Work (and each
+-      Contributor provides its Contributions) on an "AS IS" BASIS,
+-      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+-      implied, including, without limitation, any warranties or conditions
+-      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+-      PARTICULAR PURPOSE. You are solely responsible for determining the
+-      appropriateness of using or redistributing the Work and assume any
+-      risks associated with Your exercise of permissions under this License.
+-
+-   8. Limitation of Liability. In no event and under no legal theory,
+-      whether in tort (including negligence), contract, or otherwise,
+-      unless required by applicable law (such as deliberate and grossly
+-      negligent acts) or agreed to in writing, shall any Contributor be
+-      liable to You for damages, including any direct, indirect, special,
+-      incidental, or consequential damages of any character arising as a
+-      result of this License or out of the use or inability to use the
+-      Work (including but not limited to damages for loss of goodwill,
+-      work stoppage, computer failure or malfunction, or any and all
+-      other commercial damages or losses), even if such Contributor
+-      has been advised of the possibility of such damages.
+-
+-   9. Accepting Warranty or Additional Liability. While redistributing
+-      the Work or Derivative Works thereof, You may choose to offer,
+-      and charge a fee for, acceptance of support, warranty, indemnity,
+-      or other liability obligations and/or rights consistent with this
+-      License. However, in accepting such obligations, You may act only
+-      on Your own behalf and on Your sole responsibility, not on behalf
+-      of any other Contributor, and only if You agree to indemnify,
+-      defend, and hold each Contributor harmless for any liability
+-      incurred by, or claims asserted against, such Contributor by reason
+-      of your accepting any such warranty or additional liability.
+-
+-   END OF TERMS AND CONDITIONS
+-
+-   APPENDIX: How to apply the Apache License to your work.
+-
+-      To apply the Apache License to your work, attach the following
+-      boilerplate notice, with the fields enclosed by brackets "[]"
+-      replaced with your own identifying information. (Don't include
+-      the brackets!)  The text should be enclosed in the appropriate
+-      comment syntax for the file format. We also recommend that a
+-      file or class name and description of purpose be included on the
+-      same "printed page" as the copyright notice for easier
+-      identification within third-party archives.
+-
+-   Copyright [yyyy] [name of copyright owner]
+-
+-   Licensed under the Apache License, Version 2.0 (the "License");
+-   you may not use this file except in compliance with the License.
+-   You may obtain a copy of the License at
+-
+-       http://www.apache.org/licenses/LICENSE-2.0
+-
+-   Unless required by applicable law or agreed to in writing, software
+-   distributed under the License is distributed on an "AS IS" BASIS,
+-   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+-   See the License for the specific language governing permissions and
+-   limitations under the License.
+-
+-
+-Licenses for third party projects used by this project:
+-
+-GoogleTest src/main/native/gtest
+----------------------------------------------------------------------
+-Copyright 2008, Google Inc.
+-All rights reserved.
+-
+-Redistribution and use in source and binary forms, with or without
+-modification, are permitted provided that the following conditions are
+-met:
+-
+-    * Redistributions of source code must retain the above copyright
+-notice, this list of conditions and the following disclaimer.
+-    * Redistributions in binary form must reproduce the above
+-copyright notice, this list of conditions and the following disclaimer
+-in the documentation and/or other materials provided with the
+-distribution.
+-    * Neither the name of Google Inc. nor the names of its
+-contributors may be used to endorse or promote products derived from
+-this software without specific prior written permission.
+-
+-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+-OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+-
+-
+-LZ4 src/main/native/lz4
+----------------------------------------------------------------------
+-   LZ4 - Fast LZ compression algorithm
+-   Copyright (C) 2011, Yann Collet.
+-   BSD License
+-
+-   Redistribution and use in source and binary forms, with or without
+-   modification, are permitted provided that the following conditions are
+-   met:
+-  
+-       * Redistributions of source code must retain the above copyright
+-   notice, this list of conditions and the following disclaimer.
+-       * Redistributions in binary form must reproduce the above
+-   copyright notice, this list of conditions and the following disclaimer
+-   in the documentation and/or other materials provided with the
+-   distribution.
+-  
+-   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+-   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+-   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+-   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+-   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+-   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+-   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+-   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+-   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+-   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+-   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+index a584cc0..ba0308c 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+@@ -32,7 +32,6 @@
+     <mr.basedir>${project.parent.basedir}/../</mr.basedir>
+   </properties>
+ 
+-
+   <dependencies>
+     <dependency>
+       <groupId>org.apache.hadoop</groupId>
+@@ -88,6 +87,17 @@
+           </includes>
+         </configuration>
+       </plugin>
++      <plugin>
++        <groupId>org.apache.rat</groupId>
++        <artifactId>apache-rat-plugin</artifactId>
++        <configuration>
++          <excludes>
++            <exclude>src/main/native/testData/*</exclude>
++            <!-- gtest has a compatible license -->
++            <exclude>src/main/native/gtest/**/*</exclude>
++          </excludes>
++        </configuration>
++      </plugin>
+     </plugins>
+   </build>
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/INativeComparable.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/INativeComparable.java
+index e69248f..1ec05db 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/INativeComparable.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/INativeComparable.java
+@@ -22,34 +22,33 @@
+ import org.apache.hadoop.classification.InterfaceStability;
+ 
+ /**
++ * Any key type that is comparable at native side must implement this interface.
+  *
+- * Any key type that is comparable at native side must implement this interface
+- *
+- * a native comparator function should have the ComparatorPtr type
+- *
++ * A native comparator function should have the ComparatorPtr type:
++ * <code>
+  *   typedef int (*ComparatorPtr)(const char * src, uint32_t srcLength,
+  *   const char * dest,  uint32_t destLength);
+- *
+- * keys are in serialized format at native side. The function has passed in
++ * </code>
++ * Keys are in serialized format at native side. The function has passed in
+  * the keys' locations and lengths such that we can compare them in the same
+- * logic as their Java comparator
++ * logic as their Java comparator.
+  *
++ * For example, a HiveKey serialized as an int field (containing the length of
++ * raw bytes) + raw bytes.
++ * When comparing two HiveKeys, we first read the length field and then
++ * compare the raw bytes by invoking the BytesComparator provided by our library.
++ * We pass the location and length of raw bytes into BytesComparator.
+  *
+- * For example, a HiveKey {@see HiveKey#write} is serialized as
+- * int field (containing the length of raw bytes) + raw bytes
+- * When comparing two HiveKeys, we firstly read the length field and then
+- * comparing the raw bytes invoking the BytesComparator provided by our library.
+- * We pass the location and length of raw bytes into BytesComparator
+- *
++ * <code>
+  *   int HivePlatform::HiveKeyComparator(const char * src, uint32_t srcLength,
+  *   const char * dest, uint32_t destLength) {
+  *     uint32_t sl = bswap(*(uint32_t*)src);
+  *     uint32_t dl = bswap(*(uint32_t*)dest);
+  *     return NativeObjectFactory::BytesComparator(src + 4, sl, dest + 4, dl);
+  *   }
++ * </code>
+  */
+ @InterfaceAudience.Public
+ @InterfaceStability.Evolving
+ public interface INativeComparable {
+-
+ }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/COPYING b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/COPYING
+deleted file mode 100644
+index 1d60d1d..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/COPYING
++++ /dev/null
+@@ -1,87 +0,0 @@
+-CityHash
+----------------------------------------------------------------------
+-// Copyright (c) 2011 Google, Inc.
+-//
+-// Permission is hereby granted, free of charge, to any person obtaining a copy
+-// of this software and associated documentation files (the "Software"), to deal
+-// in the Software without restriction, including without limitation the rights
+-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+-// copies of the Software, and to permit persons to whom the Software is
+-// furnished to do so, subject to the following conditions:
+-//
+-// The above copyright notice and this permission notice shall be included in
+-// all copies or substantial portions of the Software.
+-//
+-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+-// THE SOFTWARE.
+-
+-GoogleTest
+----------------------------------------------------------------------
+-Copyright 2008, Google Inc.
+-All rights reserved.
+-
+-Redistribution and use in source and binary forms, with or without
+-modification, are permitted provided that the following conditions are
+-met:
+-
+-    * Redistributions of source code must retain the above copyright
+-notice, this list of conditions and the following disclaimer.
+-    * Redistributions in binary form must reproduce the above
+-copyright notice, this list of conditions and the following disclaimer
+-in the documentation and/or other materials provided with the
+-distribution.
+-    * Neither the name of Google Inc. nor the names of its
+-contributors may be used to endorse or promote products derived from
+-this software without specific prior written permission.
+-
+-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+-"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+-LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+-A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+-OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+-SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+-LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+-DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+-THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+-(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+-
+-
+-LZ4
+----------------------------------------------------------------------
+-   LZ4 - Fast LZ compression algorithm
+-   Header File
+-   Copyright (C) 2011-2014, Yann Collet.
+-   BSD 2-Clause License (http://www.opensource.org/licenses/bsd-license.php)
+-
+-   Redistribution and use in source and binary forms, with or without
+-   modification, are permitted provided that the following conditions are
+-   met:
+-
+-       * Redistributions of source code must retain the above copyright
+-   notice, this list of conditions and the following disclaimer.
+-       * Redistributions in binary form must reproduce the above
+-   copyright notice, this list of conditions and the following disclaimer
+-   in the documentation and/or other materials provided with the
+-   distribution.
+-
+-   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+-   "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+-   LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+-   A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+-   OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+-   SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+-   LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+-   DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+-   THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+-   (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+-   OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+-
+-   You can contact the author at :
+-   - LZ4 source repository : http://code.google.com/p/lz4/
+-   - LZ4 public forum : https://groups.google.com/forum/#!forum/lz4c
+\ No newline at end of file
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/handler/org_apache_hadoop_mapred_nativetask_NativeBatchProcessor.h b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/handler/org_apache_hadoop_mapred_nativetask_NativeBatchProcessor.h
+deleted file mode 100644
+index 1dd02ab..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/handler/org_apache_hadoop_mapred_nativetask_NativeBatchProcessor.h
++++ /dev/null
+@@ -1,54 +0,0 @@
+-/* DO NOT EDIT THIS FILE - it is machine generated */
+-#include <jni.h>
+-/* Header for class org_apache_hadoop_mapred_nativetask_NativeBatchProcessor */
+-
+-#ifndef _Included_org_apache_hadoop_mapred_nativetask_NativeBatchProcessor
+-#define _Included_org_apache_hadoop_mapred_nativetask_NativeBatchProcessor
+-#ifdef __cplusplus
+-extern "C" {
+-#endif
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeBatchProcessor
+- * Method:    setupHandler
+- * Signature: (J)V
+- */JNIEXPORT void JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeBatchProcessor_setupHandler(
+-    JNIEnv *, jobject, jlong, jobjectArray configs);
+-
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeBatchProcessor
+- * Method:    nativeProcessInput
+- * Signature: (JI)V
+- */JNIEXPORT void JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeBatchProcessor_nativeProcessInput(
+-    JNIEnv *, jobject, jlong, jint);
+-
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeBatchProcessor
+- * Method:    nativeFinish
+- * Signature: (J)V
+- */JNIEXPORT void JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeBatchProcessor_nativeFinish(
+-    JNIEnv *, jobject, jlong);
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeBatchProcessor
+- * Method:    nativeCommand
+- * Signature: (J[B)[B
+- */JNIEXPORT jbyteArray JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeBatchProcessor_nativeCommand(
+-    JNIEnv *, jobject, jlong, jint, jbyteArray);
+-
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeBatchProcessor
+- * Method:    nativeLoadData
+- * Signature: (J)V
+- */JNIEXPORT void JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeBatchProcessor_nativeLoadData(
+-    JNIEnv *, jobject, jlong);
+-
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeBatchProcessor
+- * Method:    InitIDs
+- * Signature: ()V
+- */JNIEXPORT void JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeBatchProcessor_InitIDs(
+-    JNIEnv *, jclass);
+-
+-#ifdef __cplusplus
+-}
+-#endif
+-#endif
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/lib/org_apache_hadoop_mapred_nativetask_NativeRuntime.h b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/lib/org_apache_hadoop_mapred_nativetask_NativeRuntime.h
+deleted file mode 100644
+index 915c532..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/lib/org_apache_hadoop_mapred_nativetask_NativeRuntime.h
++++ /dev/null
+@@ -1,66 +0,0 @@
+-/* DO NOT EDIT THIS FILE - it is machine generated */
+-#include <jni.h>
+-/* Header for class org_apache_hadoop_mapred_nativetask_NativeRuntime */
+-
+-#ifndef _Included_org_apache_hadoop_mapred_nativetask_NativeRuntime
+-#define _Included_org_apache_hadoop_mapred_nativetask_NativeRuntime
+-#ifdef __cplusplus
+-extern "C" {
+-#endif
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeRuntime
+- * Method:    supportCompressionCodec
+- * Signature: ([B)Z
+- */
+-JNIEXPORT jboolean JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeRuntime_supportsCompressionCodec
+-  (JNIEnv *, jclass, jbyteArray);
+-
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeRuntime
+- * Method:    JNIRelease
+- * Signature: ()V
+- */JNIEXPORT void JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeRuntime_JNIRelease(JNIEnv *,
+-    jclass);
+-
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeRuntime
+- * Method:    JNIConfigure
+- * Signature: ([[B)V
+- */JNIEXPORT void JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeRuntime_JNIConfigure(
+-    JNIEnv *, jclass, jobjectArray);
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeRuntime
+- * Method:    JNICreateNativeObject
+- * Signature: ([B)J
+- */JNIEXPORT jlong JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeRuntime_JNICreateNativeObject(
+-    JNIEnv *, jclass, jbyteArray);
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeRuntime
+- * Method:    JNICreateDefaultNativeObject
+- * Signature: ([B)J
+- */JNIEXPORT jlong JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeRuntime_JNICreateDefaultNativeObject(
+-    JNIEnv *, jclass, jbyteArray);
+-
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeRuntime
+- * Method:    JNIReleaseNativeObject
+- * Signature: (J)V
+- */JNIEXPORT void JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeRuntime_JNIReleaseNativeObject(
+-    JNIEnv *, jclass, jlong);
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeRuntime
+- * Method:    JNIRegisterModule
+- * Signature: ([B[B)I
+- */JNIEXPORT jint JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeRuntime_JNIRegisterModule(
+-    JNIEnv *, jclass, jbyteArray, jbyteArray);
+-/*
+- * Class:     org_apache_hadoop_mapred_nativetask_NativeRuntime
+- * Method:    JNIUpdateStatus
+- * Signature: ()[B
+- */JNIEXPORT jbyteArray JNICALL Java_org_apache_hadoop_mapred_nativetask_NativeRuntime_JNIUpdateStatus(
+-    JNIEnv *, jclass);
+-
+-#ifdef __cplusplus
+-}
+-#endif
+-#endif
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test.sh b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test.sh
+index 01506e6..fe1ca78 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test.sh
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test.sh
+@@ -1,4 +1,15 @@
+ #!/bin/sh
++#   Licensed under the Apache License, Version 2.0 (the "License");
++#   you may not use this file except in compliance with the License.
++#   You may obtain a copy of the License at
++#
++#       http://www.apache.org/licenses/LICENSE-2.0
++#
++#   Unless required by applicable law or agreed to in writing, software
++#   distributed under the License is distributed on an "AS IS" BASIS,
++#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++#   See the License for the specific language governing permissions and
++#   limitations under the License.
+ 
+ # only do normal tests by default
+ FILTER="--gtest_filter=-Perf.*"
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/buffer/TestBufferPushPull.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/buffer/TestBufferPushPull.java
+index 5dcac35..48c32c0 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/buffer/TestBufferPushPull.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/buffer/TestBufferPushPull.java
+@@ -22,9 +22,6 @@
+ import java.io.DataOutputStream;
+ import java.io.IOException;
+ 
+-import junit.framework.Assert;
+-import junit.framework.TestCase;
+-
+ import org.apache.hadoop.io.BytesWritable;
+ import org.apache.hadoop.io.DataInputBuffer;
+ import org.apache.hadoop.mapred.RawKeyValueIterator;
+@@ -42,21 +39,24 @@
+ import org.apache.hadoop.mapred.nativetask.testutil.TestInput.KV;
+ import org.apache.hadoop.mapred.nativetask.util.ReadWriteBuffer;
+ import org.apache.hadoop.util.Progress;
++
++import org.junit.Assert;
+ import org.junit.Before;
++import org.junit.Test;
+ 
+-@SuppressWarnings({ "rawtypes", "unchecked", "deprecation" })
+-public class TestBufferPushPull extends TestCase {
++@SuppressWarnings({ "rawtypes", "unchecked"})
++public class TestBufferPushPull {
+ 
+   public static int BUFFER_LENGTH = 100; // 100 bytes
+   public static int INPUT_KV_COUNT = 1000;
+   private KV<BytesWritable, BytesWritable>[] dataInput;
+ 
+-  @Override
+   @Before
+   public void setUp() {
+     this.dataInput = TestInput.getMapInputs(INPUT_KV_COUNT);
+   }
+ 
++  @Test
+   public void testPush() throws Exception {
+     final byte[] buff = new byte[BUFFER_LENGTH];
+ 
+@@ -99,6 +99,7 @@ public void sendData() throws IOException {
+     pushee.close();
+   }
+ 
++  @Test
+   public void testPull() throws Exception {
+     final byte[] buff = new byte[BUFFER_LENGTH];
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/buffer/TestByteBufferReadWrite.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/buffer/TestByteBufferReadWrite.java
+index a405634..106fdcb 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/buffer/TestByteBufferReadWrite.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/buffer/TestByteBufferReadWrite.java
+@@ -23,11 +23,13 @@
+ import com.google.common.primitives.Shorts;
+ import org.apache.hadoop.mapred.nativetask.NativeDataTarget;
+ 
+-import junit.framework.Assert;
+-import junit.framework.TestCase;
++import org.junit.Assert;
++import org.junit.Test;
++
+ import org.mockito.Mockito;
+ 
+-public class TestByteBufferReadWrite extends TestCase {
++public class TestByteBufferReadWrite {
++  @Test
+   public void testReadWrite() throws IOException {
+     byte[] buff = new byte[10000];
+ 
+@@ -89,6 +91,7 @@ public void testReadWrite() throws IOException {
+    * Test that Unicode characters outside the basic multilingual plane,
+    * such as this cat face, are properly encoded.
+    */
++  @Test
+   public void testCatFace() throws IOException {
+     byte[] buff = new byte[10];
+     MockDataTarget target = new MockDataTarget(buff);
+@@ -100,13 +103,14 @@ public void testCatFace() throws IOException {
+     InputBuffer input = new InputBuffer(buff);
+     input.rewind(0, buff.length);
+     ByteBufferDataReader reader = new ByteBufferDataReader(input);
+-    assertEquals(catFace, reader.readUTF());
++    Assert.assertEquals(catFace, reader.readUTF());
+ 
+     // Check that the standard Java one can read it too
+     String fromJava = new java.io.DataInputStream(new ByteArrayInputStream(buff)).readUTF();
+-    assertEquals(catFace, fromJava);
++    Assert.assertEquals(catFace, fromJava);
+   }
+ 
++  @Test
+   public void testShortOfSpace() throws IOException {
+     byte[] buff = new byte[10];
+     MockDataTarget target = new MockDataTarget(buff);
+@@ -120,6 +124,8 @@ public void testShortOfSpace() throws IOException {
+     Assert.assertEquals(true, writer.shortOfSpace(100));
+   }
+ 
++
++  @Test
+   public void testFlush() throws IOException {
+     byte[] buff = new byte[10];
+     MockDataTarget target = Mockito.spy(new MockDataTarget(buff));
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/CombinerTest.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/CombinerTest.java
+index 3aa8a07..cf6e286 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/CombinerTest.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/CombinerTest.java
+@@ -106,10 +106,10 @@ protected static Job getJob(String jobname, Configuration inputConf,
+     conf.set("fileoutputpath", outputpath);
+     final FileSystem fs = FileSystem.get(conf);
+     if (fs.exists(new Path(outputpath))) {
+-      fs.delete(new Path(outputpath));
++      fs.delete(new Path(outputpath), true);
+     }
+     fs.close();
+-    final Job job = new Job(conf, jobname);
++    final Job job = Job.getInstance(conf, jobname);
+     job.setJarByClass(WordCount.class);
+     job.setMapperClass(TokenizerMapper.class);
+     job.setCombinerClass(IntSumReducer.class);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/OldAPICombinerTest.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/OldAPICombinerTest.java
+index c3fc02f..8954b52 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/OldAPICombinerTest.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/OldAPICombinerTest.java
+@@ -38,6 +38,7 @@
+ import org.apache.hadoop.mapred.nativetask.testutil.ScenarioConfiguration;
+ import org.apache.hadoop.mapred.nativetask.testutil.TestConstants;
+ import org.apache.hadoop.mapreduce.Counter;
++import org.apache.hadoop.mapreduce.TaskCounter;
+ import org.junit.AfterClass;
+ import org.apache.hadoop.util.NativeCodeLoader;
+ import org.junit.Assume;
+@@ -60,7 +61,7 @@ public void testWordCountCombinerWithOldAPI() throws Exception {
+     RunningJob nativeRunning = JobClient.runJob(nativeJob);
+ 
+     Counter nativeReduceGroups = nativeRunning.getCounters().findCounter(
+-      Task.Counter.REDUCE_INPUT_RECORDS);
++      TaskCounter.REDUCE_INPUT_RECORDS);
+ 
+     final Configuration normalConf = ScenarioConfiguration.getNormalConfiguration();
+     normalConf.addResource(TestConstants.COMBINER_CONF_PATH);
+@@ -70,7 +71,7 @@ public void testWordCountCombinerWithOldAPI() throws Exception {
+ 
+     RunningJob normalRunning = JobClient.runJob(normalJob);
+     Counter normalReduceGroups = normalRunning.getCounters().findCounter(
+-      Task.Counter.REDUCE_INPUT_RECORDS);
++      TaskCounter.REDUCE_INPUT_RECORDS);
+ 
+     final boolean compareRet = ResultVerifier.verify(nativeoutput, normaloutput);
+     assertEquals("file compare result: if they are the same ,then return true", true, compareRet);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/WordCount.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/WordCount.java
+index 7b33672..c022848 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/WordCount.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/WordCount.java
+@@ -76,7 +76,8 @@ public static void main(String[] args) throws Exception {
+       System.err.println("Usage: wordcount <in> <out>");
+       System.exit(2);
+     }
+-    final Job job = new Job(conf, conf.get(MRJobConfig.JOB_NAME, "word count"));
++    final Job job = Job.getInstance(conf,
++                                    conf.get(MRJobConfig.JOB_NAME, "word count"));
+     job.setJarByClass(WordCount.class);
+     job.setMapperClass(TokenizerMapper.class);
+     job.setCombinerClass(IntSumReducer.class);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/compresstest/CompressMapper.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/compresstest/CompressMapper.java
+index 8198b47..a0de949 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/compresstest/CompressMapper.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/compresstest/CompressMapper.java
+@@ -44,7 +44,7 @@ protected void map(Text key, Text value, Context context)
+   public static Job getCompressJob(String jobname, Configuration conf,
+                                    String inputpath, String outputpath)
+     throws Exception {
+-    Job job = new Job(conf, jobname + "-CompressMapperJob");
++    Job job = Job.getInstance(conf, jobname + "-CompressMapperJob");
+     job.setJarByClass(CompressMapper.class);
+     job.setMapperClass(TextCompressMapper.class);
+     job.setOutputKeyClass(Text.class);
+@@ -52,7 +52,7 @@ public static Job getCompressJob(String jobname, Configuration conf,
+     // if output file exists ,delete it
+     final FileSystem hdfs = FileSystem.get(new ScenarioConfiguration());
+     if (hdfs.exists(new Path(outputpath))) {
+-      hdfs.delete(new Path(outputpath));
++      hdfs.delete(new Path(outputpath), true);
+     }
+     hdfs.close();
+     job.setInputFormatClass(SequenceFileInputFormat.class);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/compresstest/CompressTest.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/compresstest/CompressTest.java
+index b8f9dfc..ca39fa5 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/compresstest/CompressTest.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/compresstest/CompressTest.java
+@@ -124,7 +124,7 @@ public void startUp() throws Exception {
+     final ScenarioConfiguration conf = new ScenarioConfiguration();
+     final FileSystem fs = FileSystem.get(conf);
+     final Path path = new Path(TestConstants.NATIVETASK_COMPRESS_TEST_INPUTDIR);
+-    fs.delete(path);
++    fs.delete(path, true);
+     if (!fs.exists(path)) {
+       new TestInputFile(hadoopConf.getInt(
+           TestConstants.NATIVETASK_COMPRESS_FILESIZE, 100000),
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/handlers/TestCombineHandler.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/handlers/TestCombineHandler.java
+index 81d632d..68499a7 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/handlers/TestCombineHandler.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/handlers/TestCombineHandler.java
+@@ -19,19 +19,19 @@
+ 
+ import java.io.IOException;
+ 
+-import junit.framework.Assert;
+-import junit.framework.TestCase;
+-
+ import org.apache.hadoop.mapred.Task.CombinerRunner;
+ import org.apache.hadoop.mapred.nativetask.Command;
+ import org.apache.hadoop.mapred.nativetask.INativeHandler;
+ import org.apache.hadoop.mapred.nativetask.buffer.BufferType;
+ import org.apache.hadoop.mapred.nativetask.buffer.InputBuffer;
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Test;
+ import org.mockito.Matchers;
+ import org.mockito.Mockito;
+ 
+ @SuppressWarnings({ "rawtypes", "unchecked", "deprecation" })
+-public class TestCombineHandler extends TestCase {
++public class TestCombineHandler {
+ 
+   private CombinerHandler handler;
+   private INativeHandler nativeHandler;
+@@ -39,7 +39,7 @@
+   private BufferPuller puller;
+   private CombinerRunner combinerRunner;
+ 
+-  @Override
++  @Before
+   public void setUp() throws IOException {
+     this.nativeHandler = Mockito.mock(INativeHandler.class);
+     this.pusher = Mockito.mock(BufferPusher.class);
+@@ -50,12 +50,14 @@ public void setUp() throws IOException {
+       new InputBuffer(BufferType.HEAP_BUFFER, 100));
+   }
+ 
++  @Test
+   public void testCommandDispatcherSetting() throws IOException {
+     this.handler = new CombinerHandler(nativeHandler, combinerRunner, puller, pusher);
+     Mockito.verify(nativeHandler, Mockito.times(1)).setCommandDispatcher(Matchers.eq(handler));
+     Mockito.verify(nativeHandler, Mockito.times(1)).setDataReceiver(Matchers.eq(puller));
+   }
+ 
++  @Test
+   public void testCombine() throws IOException, InterruptedException, ClassNotFoundException {
+     this.handler = new CombinerHandler(nativeHandler, combinerRunner, puller, pusher);
+     Assert.assertEquals(null, handler.onCall(CombinerHandler.COMBINE, null));
+@@ -70,6 +72,7 @@ public void testCombine() throws IOException, InterruptedException, ClassNotFoun
+     Mockito.verify(nativeHandler, Mockito.times(1)).close();
+   }
+ 
++  @Test
+   public void testOnCall() throws IOException {
+     this.handler = new CombinerHandler(nativeHandler, combinerRunner, puller, pusher);
+     Assert.assertEquals(null, handler.onCall(new Command(-1), null));
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/handlers/TestNativeCollectorOnlyHandler.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/handlers/TestNativeCollectorOnlyHandler.java
+index 6c15360..1c8bf7a 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/handlers/TestNativeCollectorOnlyHandler.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/handlers/TestNativeCollectorOnlyHandler.java
+@@ -19,9 +19,6 @@
+ 
+ import java.io.IOException;
+ 
+-import junit.framework.Assert;
+-import junit.framework.TestCase;
+-
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+@@ -36,11 +33,15 @@
+ import org.apache.hadoop.mapred.nativetask.testutil.TestConstants;
+ import org.apache.hadoop.mapred.nativetask.util.OutputUtil;
+ import org.apache.hadoop.mapred.nativetask.util.ReadWriteBuffer;
++import org.junit.After;
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Test;
+ import org.mockito.Matchers;
+ import org.mockito.Mockito;
+ 
+ @SuppressWarnings({ "rawtypes", "unchecked", "deprecation" })
+-public class TestNativeCollectorOnlyHandler extends TestCase {
++public class TestNativeCollectorOnlyHandler {
+ 
+   private NativeCollectorOnlyHandler handler;
+   private INativeHandler nativeHandler;
+@@ -49,7 +50,7 @@
+   private TaskContext taskContext;
+   private static final String LOCAL_DIR = TestConstants.NATIVETASK_TEST_DIR + "/local";
+ 
+-  @Override
++  @Before
+   public void setUp() throws IOException {
+     this.nativeHandler = Mockito.mock(INativeHandler.class);
+     this.pusher = Mockito.mock(BufferPusher.class);
+@@ -69,12 +70,12 @@ public void setUp() throws IOException {
+       new InputBuffer(BufferType.HEAP_BUFFER, 100));
+   }
+ 
+-  @Override
++  @After
+   public void tearDown() throws IOException {
+     FileSystem.getLocal(new Configuration()).delete(new Path(LOCAL_DIR));
+   }
+ 
+-
++  @Test
+   public void testCollect() throws IOException {
+     this.handler = new NativeCollectorOnlyHandler(taskContext, nativeHandler, pusher, combiner);
+     handler.collect(new BytesWritable(), new BytesWritable(), 100);
+@@ -89,6 +90,7 @@ public void testCollect() throws IOException {
+     Mockito.verify(nativeHandler, Mockito.times(1)).close();
+   }
+ 
++  @Test
+   public void testGetCombiner() throws IOException {
+     this.handler = new NativeCollectorOnlyHandler(taskContext, nativeHandler, pusher, combiner);
+     Mockito.when(combiner.getId()).thenReturn(100L);
+@@ -97,6 +99,7 @@ public void testGetCombiner() throws IOException {
+     Assert.assertEquals(100L, result.readLong());
+   }
+ 
++  @Test
+   public void testOnCall() throws IOException {
+     this.handler = new NativeCollectorOnlyHandler(taskContext, nativeHandler, pusher, combiner);
+     boolean thrown = false;
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/KVJob.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/KVJob.java
+index 0a4c955..2d4515f 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/KVJob.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/KVJob.java
+@@ -61,6 +61,7 @@ public void reduce(KTYPE key, VTYPE value, Context context)
+   public static class KVReducer<KTYPE, VTYPE> extends Reducer<KTYPE, VTYPE, KTYPE, VTYPE> {
+ 
+     @Override
++    @SuppressWarnings({"unchecked"})
+     public void reduce(KTYPE key, Iterable<VTYPE> values, Context context)
+       throws IOException, InterruptedException {
+       long resultlong = 0;// 8 bytes match BytesFactory.fromBytes function
+@@ -79,7 +80,7 @@ public void reduce(KTYPE key, Iterable<VTYPE> values, Context context)
+   public KVJob(String jobname, Configuration conf,
+                Class<?> keyclass, Class<?> valueclass,
+                String inputpath, String outputpath) throws Exception {
+-    job = new Job(conf, jobname);
++    job = Job.getInstance(conf, jobname);
+     job.setJarByClass(KVJob.class);
+     job.setMapperClass(KVJob.ValueMapper.class);
+     job.setOutputKeyClass(keyclass);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/TestInputFile.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/TestInputFile.java
+index 49331ce..04db67a 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/TestInputFile.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/TestInputFile.java
+@@ -141,8 +141,11 @@ public void createSequenceTestFile(String filepath, int base,  byte start) throw
+     try {
+       final Path outputfilepath = new Path(filepath);
+       final ScenarioConfiguration conf= new ScenarioConfiguration();
+-      final FileSystem hdfs = outputfilepath.getFileSystem(conf);
+-      writer = new SequenceFile.Writer(hdfs, conf, outputfilepath, tmpkeycls, tmpvaluecls);
++      writer = SequenceFile.createWriter(
++        conf,
++        SequenceFile.Writer.file(outputfilepath),
++        SequenceFile.Writer.keyClass(tmpkeycls),
++        SequenceFile.Writer.valueClass(tmpvaluecls));
+     } catch (final Exception e) {
+       e.printStackTrace();
+     }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/nonsorttest/NonSortTest.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/nonsorttest/NonSortTest.java
+index f81d94f..81e1eae 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/nonsorttest/NonSortTest.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/nonsorttest/NonSortTest.java
+@@ -101,7 +101,7 @@ private Job getJob(Configuration conf, String jobName,
+       fs.delete(new Path(outputpath), true);
+     }
+     fs.close();
+-    final Job job = new Job(conf, jobName);
++    final Job job = Job.getInstance(conf, jobName);
+     job.setJarByClass(NonSortTestMR.class);
+     job.setMapperClass(NonSortTestMR.Map.class);
+     job.setReducerClass(NonSortTestMR.KeyHashSumReduce.class);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/serde/TestNativeSerialization.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/serde/TestNativeSerialization.java
+index cf708a1..5666cc3 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/serde/TestNativeSerialization.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/serde/TestNativeSerialization.java
+@@ -21,14 +21,14 @@
+ import java.io.DataOutput;
+ import java.io.IOException;
+ 
+-import junit.framework.Assert;
+-import junit.framework.TestCase;
+-
+ import org.apache.hadoop.io.Writable;
+ import org.apache.hadoop.mapred.nativetask.INativeComparable;
++import org.junit.Assert;
++import org.junit.Test;
+ 
+-@SuppressWarnings({ "rawtypes", "deprecation" })
+-public class TestNativeSerialization extends TestCase {
++@SuppressWarnings({ "rawtypes" })
++public class TestNativeSerialization {
++  @Test
+   public void testRegisterAndGet() throws IOException {
+     final NativeSerialization serialization = NativeSerialization.getInstance();
+     serialization.reset();
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/testutil/BytesFactory.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/testutil/BytesFactory.java
+index bee2f0c..4df48fc 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/testutil/BytesFactory.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/testutil/BytesFactory.java
+@@ -37,7 +37,7 @@
+ import org.apache.hadoop.io.Writable;
+ import org.apache.hadoop.mapred.nativetask.util.BytesUtil;
+ 
+-
++@SuppressWarnings("deprecation")
+ public class BytesFactory {
+   public static Random r = new Random();
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/utils/TestBytesUtil.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/utils/TestBytesUtil.java
+index c09f08c..5bafa43 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/utils/TestBytesUtil.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/utils/TestBytesUtil.java
+@@ -19,13 +19,15 @@
+ 
+ import com.google.common.primitives.Ints;
+ import com.google.common.primitives.Longs;
+-import junit.framework.Assert;
+-import junit.framework.TestCase;
++
++import org.junit.Assert;
++import org.junit.Test;
+ 
+ import org.apache.hadoop.mapred.nativetask.util.BytesUtil;
+ 
+-@SuppressWarnings({ "deprecation" })
+-public class TestBytesUtil extends TestCase {
++public class TestBytesUtil {
++
++  @Test
+   public void testBytesIntConversion() {
+     final int a = 1000;
+     final byte[] intBytes = Ints.toByteArray(a);
+@@ -33,6 +35,7 @@ public void testBytesIntConversion() {
+     Assert.assertEquals(a, BytesUtil.toInt(intBytes, 0));
+   }
+ 
++  @Test
+   public void testBytesLongConversion() {
+     final long l = 1000000L;
+     final byte[] longBytes = Longs.toByteArray(l);
+@@ -40,20 +43,23 @@ public void testBytesLongConversion() {
+     Assert.assertEquals(l, BytesUtil.toLong(longBytes, 0));
+   }
+ 
++  @Test
+   public void testBytesFloatConversion() {
+     final float f = 3.14f;
+     final byte[] floatBytes = BytesUtil.toBytes(f);
+ 
+-    Assert.assertEquals(f, BytesUtil.toFloat(floatBytes));
++    Assert.assertEquals(f, BytesUtil.toFloat(floatBytes), 0.0f);
+   }
+ 
++  @Test
+   public void testBytesDoubleConversion() {
+     final double d = 3.14;
+     final byte[] doubleBytes = BytesUtil.toBytes(d);
+ 
+-    Assert.assertEquals(d, BytesUtil.toDouble(doubleBytes));
++    Assert.assertEquals(d, BytesUtil.toDouble(doubleBytes), 0.0);
+   }
+-  
++
++  @Test
+   public void testToStringBinary() {
+     Assert.assertEquals("\\x01\\x02ABC",
+         BytesUtil.toStringBinary(new byte[] { 1, 2, 65, 66, 67 }));
+diff --git a/hadoop-mapreduce-project/pom.xml b/hadoop-mapreduce-project/pom.xml
+index 8ea3b07..c5e45e3 100644
+--- a/hadoop-mapreduce-project/pom.xml
++++ b/hadoop-mapreduce-project/pom.xml
+@@ -212,7 +212,7 @@
+         <configuration>
+           <excludes>
+             <exclude>.eclipse.templates/</exclude>
+-            <exclude>CHANGES.txt</exclude>
++            <exclude>CHANGES.*txt</exclude>
+             <exclude>lib/jdiff/**</exclude>
+           </excludes>
+         </configuration>
+-- 
+1.7.9.5
+

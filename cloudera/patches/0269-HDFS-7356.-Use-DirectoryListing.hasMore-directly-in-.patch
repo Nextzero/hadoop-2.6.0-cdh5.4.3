@@ -1,0 +1,41 @@
+From fddd51333eabf03fcfe6c91062e6792ddfaf179a Mon Sep 17 00:00:00 2001
+From: Jing Zhao <jing9@apache.org>
+Date: Tue, 4 Nov 2014 15:04:26 -0800
+Subject: [PATCH 269/596] HDFS-7356. Use DirectoryListing.hasMore() directly
+ in nfs. Contributed by Li Lu.
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+
+(cherry picked from commit b7f0ccbed8eb90303c9067cd4e8a05393684997f)
+---
+ .../hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java       |    6 ++----
+ 1 file changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+index 91d066e..d96babf 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+@@ -1584,8 +1584,7 @@ public READDIR3Response readdir(XDR xdr, SecurityHandler securityHandler,
+      */
+     HdfsFileStatus[] fstatus = dlisting.getPartialListing();    
+     int n = (int) Math.min(fstatus.length, count-2);
+-    boolean eof = (n < fstatus.length) ? false : (dlisting
+-        .getRemainingEntries() == 0);
++    boolean eof = (n >= fstatus.length) && !dlisting.hasMore();
+ 
+     Entry3[] entries;
+     if (cookie == 0) {
+@@ -1733,8 +1732,7 @@ READDIRPLUS3Response readdirplus(XDR xdr, SecurityHandler securityHandler,
+     // Set up the dirents in the response
+     HdfsFileStatus[] fstatus = dlisting.getPartialListing();
+     int n = (int) Math.min(fstatus.length, dirCount-2);
+-    boolean eof = (n < fstatus.length) ? false : (dlisting
+-        .getRemainingEntries() == 0);
++    boolean eof = (n >= fstatus.length) && !dlisting.hasMore();
+ 
+     READDIRPLUS3Response.EntryPlus3[] entries;
+     if (cookie == 0) {
+-- 
+1.7.9.5
+

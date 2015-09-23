@@ -1,0 +1,32 @@
+From a32830c0390caabcfb387e44d8b7ae2b60e86782 Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Wed, 21 Aug 2013 20:54:45 -0700
+Subject: [PATCH 079/596] MR1: CLOUDERA-BUILD. Alter build.xml to place task
+ controller binaries in folder that matches up with
+ System.getProperty("os.name")
+
+Author: Sandy Ryza
+Ref: CDH-13735
+(cherry picked from commit b934a9ed616a0be76d63bfe6bbdc1451550f36d3)
+(cherry picked from commit 864d2bc1845e1e5d27533b8a625f4e1356e94c81)
+(cherry picked from commit dae85617b52ce3f28be29631d37559217ef60062)
+---
+ hadoop-mapreduce1-project/build.xml |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index c52e672..4358d05 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -202,7 +202,7 @@
+     value="${build.c++}/task-controller" />
+   <!-- the default install dir is build directory override it using
+    -Dtask-controller.install.dir=$HADOOP_HOME/bin -->
+-  <property name="task-controller.install.dir" value="${dist.dir}/sbin/${build.platform}/" />
++  <property name="task-controller.install.dir" value="${dist.dir}/sbin/${nonspace.os}/" />
+   <!-- end of task-controller properties -->
+ 
+   <!-- jsvc properties set here -->
+-- 
+1.7.9.5
+

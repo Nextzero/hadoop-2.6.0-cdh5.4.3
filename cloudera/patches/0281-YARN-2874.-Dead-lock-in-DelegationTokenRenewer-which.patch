@@ -1,0 +1,60 @@
+From 26e601e7531fc507059dfa689b8452495c1c22b9 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Wed, 3 Dec 2014 13:44:41 -0800
+Subject: [PATCH 281/596] YARN-2874. Dead lock in DelegationTokenRenewer which
+ blocks RM to execute any further apps.
+ (Naganarasimha G R via kasha) (cherry picked from
+ commit 799353e2c7db5af6e40e3521439b5c8a3c5c6a51)
+ (cherry picked from commit
+ 25be97808b99148412c0efd4d87fc750db4d6607)
+
+(cherry picked from commit a20bab846266993f4ae11340d3dd76557effa53b)
+---
+ .../security/DelegationTokenRenewer.java           |   11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java
+index 2dc331e..108e81a 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java
+@@ -39,6 +39,7 @@
+ import java.util.concurrent.ThreadFactory;
+ import java.util.concurrent.ThreadPoolExecutor;
+ import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.locks.ReadWriteLock;
+ import java.util.concurrent.locks.ReentrantReadWriteLock;
+ 
+@@ -445,15 +446,15 @@ private void handleAppSubmitEvent(DelegationTokenRenewerAppSubmitEvent evt)
+    */
+   private class RenewalTimerTask extends TimerTask {
+     private DelegationTokenToRenew dttr;
+-    private boolean cancelled = false;
++    private AtomicBoolean cancelled = new AtomicBoolean(false);
+     
+     RenewalTimerTask(DelegationTokenToRenew t) {  
+       dttr = t;  
+     }
+     
+     @Override
+-    public synchronized void run() {
+-      if (cancelled) {
++    public void run() {
++      if (cancelled.get()) {
+         return;
+       }
+ 
+@@ -475,8 +476,8 @@ public synchronized void run() {
+     }
+ 
+     @Override
+-    public synchronized boolean cancel() {
+-      cancelled = true;
++    public boolean cancel() {
++      cancelled.set(true);
+       return super.cancel();
+     }
+   }
+-- 
+1.7.9.5
+

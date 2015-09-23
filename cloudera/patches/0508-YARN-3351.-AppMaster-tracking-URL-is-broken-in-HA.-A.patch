@@ -1,0 +1,182 @@
+From 1d95ce0c7642977b458a855e5dec3540ebb04b10 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Wed, 18 Mar 2015 16:30:33 -0700
+Subject: [PATCH 508/596] YARN-3351. AppMaster tracking URL is broken in HA.
+ (Anubhav Dhoot via kasha)
+
+(cherry picked from commit 20b49224eb90c796f042ac4251508f3979fd4787)
+(cherry picked from commit 05627dd96deff49d13d433177f5bc2def03e923b)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../hadoop/yarn/webapp/util/WebAppUtils.java       |   31 +++++++-
+ .../apache/hadoop/yarn/util/TestWebAppUtils.java   |   81 ++++++++++++++++++++
+ .../yarn/server/nodemanager/webapp/NavBlock.java   |    2 +-
+ 3 files changed, 112 insertions(+), 2 deletions(-)
+ create mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestWebAppUtils.java
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/util/WebAppUtils.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/util/WebAppUtils.java
+index 3aeb33e..459c110 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/util/WebAppUtils.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/util/WebAppUtils.java
+@@ -130,11 +130,23 @@ public static String getProxyHostAndPort(Configuration conf) {
+     return addr;
+   }
+ 
++  public static String getResolvedRemoteRMWebAppURLWithScheme(
++      Configuration conf) {
++    return getHttpSchemePrefix(conf)
++        + getResolvedRemoteRMWebAppURLWithoutScheme(conf);
++  }
++
+   public static String getResolvedRMWebAppURLWithScheme(Configuration conf) {
+     return getHttpSchemePrefix(conf)
+         + getResolvedRMWebAppURLWithoutScheme(conf);
+   }
+   
++  public static String getResolvedRemoteRMWebAppURLWithoutScheme(
++      Configuration conf) {
++    return getResolvedRemoteRMWebAppURLWithoutScheme(conf,
++        YarnConfiguration.useHttps(conf) ? Policy.HTTPS_ONLY : Policy.HTTP_ONLY);
++  }
++
+   public static String getResolvedRMWebAppURLWithoutScheme(Configuration conf) {
+     return getResolvedRMWebAppURLWithoutScheme(conf,
+         YarnConfiguration.useHttps(conf) ? Policy.HTTPS_ONLY : Policy.HTTP_ONLY);
+@@ -143,6 +155,23 @@ public static String getResolvedRMWebAppURLWithoutScheme(Configuration conf) {
+   public static String getResolvedRMWebAppURLWithoutScheme(Configuration conf,
+       Policy httpPolicy) {
+     InetSocketAddress address = null;
++    if (httpPolicy == Policy.HTTPS_ONLY) {
++      address =
++          conf.getSocketAddr(YarnConfiguration.RM_WEBAPP_HTTPS_ADDRESS,
++              YarnConfiguration.DEFAULT_RM_WEBAPP_HTTPS_ADDRESS,
++              YarnConfiguration.DEFAULT_RM_WEBAPP_HTTPS_PORT);
++    } else {
++      address =
++          conf.getSocketAddr(YarnConfiguration.RM_WEBAPP_ADDRESS,
++              YarnConfiguration.DEFAULT_RM_WEBAPP_ADDRESS,
++              YarnConfiguration.DEFAULT_RM_WEBAPP_PORT);      
++    }
++    return getResolvedAddress(address);
++  }
++
++  public static String getResolvedRemoteRMWebAppURLWithoutScheme(Configuration conf,
++      Policy httpPolicy) {
++    InetSocketAddress address = null;
+     String rmId = null;
+     if (HAUtil.isHAEnabled(conf)) {
+       // If HA enabled, pick one of the RM-IDs and rely on redirect to go to
+@@ -167,7 +196,7 @@ public static String getResolvedRMWebAppURLWithoutScheme(Configuration conf,
+                   : HAUtil.addSuffix(
+                   YarnConfiguration.RM_WEBAPP_ADDRESS, rmId),
+               YarnConfiguration.DEFAULT_RM_WEBAPP_ADDRESS,
+-              YarnConfiguration.DEFAULT_RM_WEBAPP_PORT);      
++              YarnConfiguration.DEFAULT_RM_WEBAPP_PORT);
+     }
+     return getResolvedAddress(address);
+   }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestWebAppUtils.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestWebAppUtils.java
+new file mode 100644
+index 0000000..169787f
+--- /dev/null
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/util/TestWebAppUtils.java
+@@ -0,0 +1,81 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.yarn.util;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.net.NetUtils;
++import org.apache.hadoop.yarn.conf.YarnConfiguration;
++import org.apache.hadoop.yarn.webapp.util.WebAppUtils;
++import org.junit.AfterClass;
++import org.junit.Assert;
++import org.junit.BeforeClass;
++import org.junit.Test;
++
++import java.net.UnknownHostException;
++import java.util.HashMap;
++import java.util.Map;
++
++public class TestWebAppUtils {
++
++  private static final String RM1_NODE_ID = "rm1";
++  private static final String RM2_NODE_ID = "rm2";
++
++  // Because WebAppUtils#getResolvedAddress tries to resolve the hostname, we add a static mapping for dummy hostnames
++  // to make this test run anywhere without having to give some resolvable hostnames
++  private static String dummyHostNames[] = {"host1", "host2", "host3"};
++  private static final String anyIpAddress = "1.2.3.4";
++  private static Map<String, String> savedStaticResolution = new HashMap<>();
++
++  @BeforeClass
++  public static void initializeDummyHostnameResolution() throws Exception {
++    String previousIpAddress;
++    for (String hostName : dummyHostNames) {
++      if (null != (previousIpAddress = NetUtils.getStaticResolution(hostName))) {
++        savedStaticResolution.put(hostName, previousIpAddress);
++      }
++      NetUtils.addStaticResolution(hostName, anyIpAddress);
++    }
++  }
++
++  @AfterClass
++  public static void restoreDummyHostnameResolution() throws Exception {
++    for (Map.Entry<String, String> hostnameToIpEntry : savedStaticResolution.entrySet()) {
++      NetUtils.addStaticResolution(hostnameToIpEntry.getKey(), hostnameToIpEntry.getValue());
++    }
++  }
++
++  @Test
++  public void TestRMWebAppURLRemoteAndLocal() throws UnknownHostException {
++    Configuration configuration = new Configuration();
++    final String rmAddress = "host1:8088";
++    configuration.set(YarnConfiguration.RM_WEBAPP_ADDRESS, rmAddress);
++    final String rm1Address = "host2:8088";
++    final String rm2Address = "host3:8088";
++    configuration.set(YarnConfiguration.RM_WEBAPP_ADDRESS + "." + RM1_NODE_ID, rm1Address);
++    configuration.set(YarnConfiguration.RM_WEBAPP_ADDRESS + "." + RM2_NODE_ID, rm2Address);
++    configuration.setBoolean(YarnConfiguration.RM_HA_ENABLED, true);
++    configuration.set(YarnConfiguration.RM_HA_IDS, RM1_NODE_ID + "," + RM2_NODE_ID);
++
++    String rmRemoteUrl = WebAppUtils.getResolvedRemoteRMWebAppURLWithoutScheme(configuration);
++    Assert.assertEquals("ResolvedRemoteRMWebAppUrl should resolve to the first HA RM address", rm1Address, rmRemoteUrl);
++
++    String rmLocalUrl = WebAppUtils.getResolvedRMWebAppURLWithoutScheme(configuration);
++    Assert.assertEquals("ResolvedRMWebAppUrl should resolve to the default RM webapp address", rmAddress, rmLocalUrl);
++  }
++}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/webapp/NavBlock.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/webapp/NavBlock.java
+index c198ae6..022d892 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/webapp/NavBlock.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/webapp/NavBlock.java
+@@ -38,7 +38,7 @@ public NavBlock(Configuration conf) {
+   protected void render(Block html) {
+ 	
+     String RMWebAppURL =
+-        WebAppUtils.getResolvedRMWebAppURLWithScheme(this.conf);
++        WebAppUtils.getResolvedRemoteRMWebAppURLWithScheme(this.conf);
+ 	  html
+       .div("#nav")
+       .h3()._("ResourceManager")._()
+-- 
+1.7.9.5
+

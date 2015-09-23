@@ -1,0 +1,35 @@
+From 18b4dcab697a4730ed6849b22591a33fae348351 Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Mon, 22 Apr 2013 16:38:46 -0700
+Subject: [PATCH 063/596] MR1: CLOUDERA_BUILD. MR TokenCache shouldn't fail if
+ JT principal is missing
+
+Ref: CDH-11145
+Author: Sandy Ryza
+Reason: Customer issue
+(cherry picked from commit 28ecf38392aac087499fcfec4afe3c24e702f1ba)
+(cherry picked from commit 93c56ad0e1505b6e4a540488026c1576bcc33e56)
+(cherry picked from commit d34f24143eef928644fddf37e17c0dc8b09d903f)
+(cherry picked from commit 6454c7712bfe9a2394b353e2e427ca02016f6244)
+---
+ .../hadoop/mapreduce/security/TokenCache.java      |    4 ----
+ 1 file changed, 4 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java
+index dbc27af..62c3d67 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/security/TokenCache.java
+@@ -125,10 +125,6 @@ private static void obtainTokensForNamenodesInternal(FileSystem fs,
+     HadoopKerberosName jtKrbName = new HadoopKerberosName(conf.get(JobTracker.JT_USER_NAME, ""));
+     String delegTokenRenewer = jtKrbName.getShortName();
+ 
+-    if (delegTokenRenewer == null || delegTokenRenewer.length() == 0) {
+-      throw new IOException(
+-          "Can't get JT Kerberos principal for use as renewer");
+-    }
+     mergeBinaryTokens(credentials, conf);
+ 
+     final Token<?> tokens[] = fs.addDelegationTokens(delegTokenRenewer,
+-- 
+1.7.9.5
+

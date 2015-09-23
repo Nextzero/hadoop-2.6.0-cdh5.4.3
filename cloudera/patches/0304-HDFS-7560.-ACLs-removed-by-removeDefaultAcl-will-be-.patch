@@ -1,0 +1,190 @@
+From b5c85689e7c6b9269eb6f8ed905a03f958c60034 Mon Sep 17 00:00:00 2001
+From: cnauroth <cnauroth@apache.org>
+Date: Mon, 22 Dec 2014 13:59:10 -0800
+Subject: [PATCH 304/596] HDFS-7560. ACLs removed by removeDefaultAcl() will
+ be back after NameNode restart/failover.
+ Contributed by Vinayakumar B.
+
+(cherry picked from commit 2cf90a2c338497a466bbad9e83966033bf14bfb7)
+(cherry picked from commit 54861246684e9468df9d2b68b9103099ab48cdc6)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirAclOp.java
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLogLoader.java
+
+(cherry picked from commit a3939fb86cceaca6e02a451e484c1fea3b2e2c77)
+---
+ .../hadoop/hdfs/server/namenode/FSDirectory.java   |   13 ++++---
+ .../hdfs/server/namenode/FSEditLogLoader.java      |    2 +-
+ .../hadoop/hdfs/server/namenode/FSAclBaseTest.java |   39 ++++++++++++++++----
+ 3 files changed, 41 insertions(+), 13 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirectory.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirectory.java
+index 9ca50c4..54e5101 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirectory.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSDirectory.java
+@@ -2643,13 +2643,14 @@ private void unprotectedRemoveAcl(String src) throws IOException {
+   List<AclEntry> setAcl(String src, List<AclEntry> aclSpec) throws IOException {
+     writeLock();
+     try {
+-      return unprotectedSetAcl(src, aclSpec);
++      return unprotectedSetAcl(src, aclSpec, false);
+     } finally {
+       writeUnlock();
+     }
+   }
+ 
+-  List<AclEntry> unprotectedSetAcl(String src, List<AclEntry> aclSpec)
++  List<AclEntry> unprotectedSetAcl(
++    String src, List<AclEntry> aclSpec, boolean fromEdits)
+       throws IOException {
+     // ACL removal is logged to edits as OP_SET_ACL with an empty list.
+     if (aclSpec.isEmpty()) {
+@@ -2661,9 +2662,11 @@ private void unprotectedRemoveAcl(String src) throws IOException {
+     INodesInPath iip = getINodesInPath4Write(normalizePath(src), true);
+     INode inode = resolveLastINode(src, iip);
+     int snapshotId = iip.getLatestSnapshotId();
+-    List<AclEntry> existingAcl = AclStorage.readINodeLogicalAcl(inode);
+-    List<AclEntry> newAcl = AclTransformation.replaceAclEntries(existingAcl,
+-      aclSpec);
++    List<AclEntry> newAcl = aclSpec;
++    if (!fromEdits) {
++      List<AclEntry> existingAcl = AclStorage.readINodeLogicalAcl(inode);
++      newAcl = AclTransformation.replaceAclEntries(existingAcl, aclSpec);
++    }
+     AclStorage.updateINodeAcl(inode, newAcl, snapshotId);
+     return newAcl;
+   }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLogLoader.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLogLoader.java
+index 7dfe688..e9b911b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLogLoader.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLogLoader.java
+@@ -819,7 +819,7 @@ private long applyEditLogOp(FSEditLogOp op, FSDirectory fsDir,
+     }
+     case OP_SET_ACL: {
+       SetAclOp setAclOp = (SetAclOp) op;
+-      fsDir.unprotectedSetAcl(setAclOp.src, setAclOp.aclEntries);
++      fsDir.unprotectedSetAcl(setAclOp.src, setAclOp.aclEntries, true);
+       break;
+     }
+     case OP_SET_XATTR: {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/FSAclBaseTest.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/FSAclBaseTest.java
+index adca0aa..e77effa7 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/FSAclBaseTest.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/FSAclBaseTest.java
+@@ -423,7 +423,7 @@ public void testRemoveAclEntriesPathNotFound() throws IOException {
+   }
+ 
+   @Test
+-  public void testRemoveDefaultAcl() throws IOException {
++  public void testRemoveDefaultAcl() throws Exception {
+     FileSystem.mkdirs(fs, path, FsPermission.createImmutable((short)0750));
+     List<AclEntry> aclSpec = Lists.newArrayList(
+       aclEntry(ACCESS, USER, ALL),
+@@ -440,10 +440,15 @@ public void testRemoveDefaultAcl() throws IOException {
+       aclEntry(ACCESS, GROUP, READ_EXECUTE) }, returned);
+     assertPermission((short)010770);
+     assertAclFeature(true);
++    // restart of the cluster
++    restartCluster();
++    s = fs.getAclStatus(path);
++    AclEntry[] afterRestart = s.getEntries().toArray(new AclEntry[0]);
++    assertArrayEquals(returned, afterRestart);
+   }
+ 
+   @Test
+-  public void testRemoveDefaultAclOnlyAccess() throws IOException {
++  public void testRemoveDefaultAclOnlyAccess() throws Exception {
+     fs.create(path).close();
+     fs.setPermission(path, FsPermission.createImmutable((short)0640));
+     List<AclEntry> aclSpec = Lists.newArrayList(
+@@ -460,10 +465,15 @@ public void testRemoveDefaultAclOnlyAccess() throws IOException {
+       aclEntry(ACCESS, GROUP, READ_EXECUTE) }, returned);
+     assertPermission((short)010770);
+     assertAclFeature(true);
++    // restart of the cluster
++    restartCluster();
++    s = fs.getAclStatus(path);
++    AclEntry[] afterRestart = s.getEntries().toArray(new AclEntry[0]);
++    assertArrayEquals(returned, afterRestart);
+   }
+ 
+   @Test
+-  public void testRemoveDefaultAclOnlyDefault() throws IOException {
++  public void testRemoveDefaultAclOnlyDefault() throws Exception {
+     FileSystem.mkdirs(fs, path, FsPermission.createImmutable((short)0750));
+     List<AclEntry> aclSpec = Lists.newArrayList(
+       aclEntry(DEFAULT, USER, "foo", ALL));
+@@ -474,10 +484,15 @@ public void testRemoveDefaultAclOnlyDefault() throws IOException {
+     assertArrayEquals(new AclEntry[] { }, returned);
+     assertPermission((short)0750);
+     assertAclFeature(false);
++    // restart of the cluster
++    restartCluster();
++    s = fs.getAclStatus(path);
++    AclEntry[] afterRestart = s.getEntries().toArray(new AclEntry[0]);
++    assertArrayEquals(returned, afterRestart);
+   }
+ 
+   @Test
+-  public void testRemoveDefaultAclMinimal() throws IOException {
++  public void testRemoveDefaultAclMinimal() throws Exception {
+     FileSystem.mkdirs(fs, path, FsPermission.createImmutable((short)0750));
+     fs.removeDefaultAcl(path);
+     AclStatus s = fs.getAclStatus(path);
+@@ -485,10 +500,15 @@ public void testRemoveDefaultAclMinimal() throws IOException {
+     assertArrayEquals(new AclEntry[] { }, returned);
+     assertPermission((short)0750);
+     assertAclFeature(false);
++    // restart of the cluster
++    restartCluster();
++    s = fs.getAclStatus(path);
++    AclEntry[] afterRestart = s.getEntries().toArray(new AclEntry[0]);
++    assertArrayEquals(returned, afterRestart);
+   }
+ 
+   @Test
+-  public void testRemoveDefaultAclStickyBit() throws IOException {
++  public void testRemoveDefaultAclStickyBit() throws Exception {
+     FileSystem.mkdirs(fs, path, FsPermission.createImmutable((short)01750));
+     List<AclEntry> aclSpec = Lists.newArrayList(
+       aclEntry(ACCESS, USER, ALL),
+@@ -505,6 +525,11 @@ public void testRemoveDefaultAclStickyBit() throws IOException {
+       aclEntry(ACCESS, GROUP, READ_EXECUTE) }, returned);
+     assertPermission((short)011770);
+     assertAclFeature(true);
++    // restart of the cluster
++    restartCluster();
++    s = fs.getAclStatus(path);
++    AclEntry[] afterRestart = s.getEntries().toArray(new AclEntry[0]);
++    assertArrayEquals(returned, afterRestart);
+   }
+ 
+   @Test(expected=FileNotFoundException.class)
+@@ -1134,9 +1159,7 @@ public void testSkipAclEnforcementPermsDisabled() throws Exception {
+     assertFilePermissionDenied(fsAsDiana, DIANA, bruceFile);
+     try {
+       conf.setBoolean(DFSConfigKeys.DFS_PERMISSIONS_ENABLED_KEY, false);
+-      destroyFileSystems();
+       restartCluster();
+-      initFileSystems();
+       assertFilePermissionGranted(fsAsDiana, DIANA, bruceFile);
+     } finally {
+       conf.setBoolean(DFSConfigKeys.DFS_PERMISSIONS_ENABLED_KEY, true);
+@@ -1325,10 +1348,12 @@ private void initFileSystems() throws Exception {
+    * @throws Exception if restart fails
+    */
+   private void restartCluster() throws Exception {
++    destroyFileSystems();
+     shutdown();
+     cluster = new MiniDFSCluster.Builder(conf).numDataNodes(1).format(false)
+       .build();
+     cluster.waitActive();
++    initFileSystems();
+   }
+ 
+   /**
+-- 
+1.7.9.5
+

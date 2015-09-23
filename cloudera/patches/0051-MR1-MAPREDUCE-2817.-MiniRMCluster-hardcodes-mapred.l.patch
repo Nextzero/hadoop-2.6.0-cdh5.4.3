@@ -1,0 +1,37 @@
+From 52d3a229f0f593e004f59c721b950a25d851b527 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@apache.org>
+Date: Wed, 3 Apr 2013 22:29:22 +0000
+Subject: [PATCH 051/596] MR1: MAPREDUCE-2817. MiniRMCluster hardcodes
+ 'mapred.local.dir' configuration to
+ 'build/test/mapred/local'. (rkanter via tucu)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1464221 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 3f8b27564ad759c9d88a09cd69e5ca26f8f5221b)
+(cherry picked from commit d83970b145ffa849515fe0536af83c4677ae9923)
+(cherry picked from commit 80ee298b978f59c0e930538fb4ead5895ff57234)
+(cherry picked from commit c1a07020ec6948a84d3aaf3f4e880bb87bd61867)
+(cherry picked from commit abf000f07ab214b8947293d5bbda58cfbb69178a)
+---
+ .../org/apache/hadoop/mapred/MiniMRCluster.java    |    6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/MiniMRCluster.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/MiniMRCluster.java
+index 0253ae2..a5f5a7e 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/MiniMRCluster.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/MiniMRCluster.java
+@@ -101,8 +101,10 @@ public JobTracker getJobTracker() {
+     public void run() {
+       try {
+         jc = (jc == null) ? createJobConf() : createJobConf(jc);
+-        File f = new File("build/test/mapred/local").getAbsoluteFile();
+-        jc.set("mapred.local.dir",f.getAbsolutePath());
++        String localPath = System.getProperty("test.build.data",
++            "build/test/mapred/local");
++        File f = new File(localPath).getAbsoluteFile();
++        jc.set("mapred.local.dir", f.getAbsolutePath());
+         jc.setClass("topology.node.switch.mapping.impl", 
+             StaticMapping.class, DNSToSwitchMapping.class);
+         final String id =
+-- 
+1.7.9.5
+

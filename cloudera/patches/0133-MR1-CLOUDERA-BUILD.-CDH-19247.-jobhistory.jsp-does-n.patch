@@ -1,0 +1,94 @@
+From 8c3953b3b95281a1096a915df6d90eb56ad628d7 Mon Sep 17 00:00:00 2001
+From: Ray Chiang <rchiang@cloudera.com>
+Date: Thu, 22 May 2014 13:12:41 -0700
+Subject: [PATCH 133/596] MR1: CLOUDERA-BUILD. CDH-19247. jobhistory.jsp does
+ not show correct histroy after JT restart.  Fix
+ provided by Wilfred Spiegelenburg.
+
+(cherry picked from commit 0d6c51fdaa72845861fa75ae7a61fbf4794b7822)
+(cherry picked from commit 2adc80e82c4ded19d8098f13700faa748d0091e9)
+---
+ .../src/webapps/job/jobhistory.jsp                 |   45 ++++++--------------
+ 1 file changed, 14 insertions(+), 31 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/webapps/job/jobhistory.jsp b/hadoop-mapreduce1-project/src/webapps/job/jobhistory.jsp
+index 0ee5e48..c53e28e 100644
+--- a/hadoop-mapreduce1-project/src/webapps/job/jobhistory.jsp
++++ b/hadoop-mapreduce1-project/src/webapps/job/jobhistory.jsp
+@@ -152,12 +152,13 @@ window.location.href = url;
+       return;
+     }
+ 
+-    Comparator<Path> lastPathFirst
+-      = new Comparator<Path>() {
+-          public int compare(Path path1, Path path2) {
+-            // these are backwards because we want the lexically lesser names
+-            // to occur later in the sort.
+-            return path2.getName().compareTo(path1.getName());
++    Comparator<FileStatus> lastPathFirst
++      = new Comparator<FileStatus>() {
++          public int compare(FileStatus path1, FileStatus path2) {
++            // these are backwards because we want the newest
++            // to occur first in the sort.
++            return ((Long)path2.getModificationTime()).
++              compareTo(path1.getModificationTime());
+           }
+     };
+ 
+@@ -235,30 +236,14 @@ window.location.href = url;
+     // I would have used MutableBoxedBoolean if such had been provided.
+     AtomicBoolean hasLegacyFiles = new AtomicBoolean(false);
+ 
+-    Path[] snPaths
+-      = FileUtil.stat2Paths(JobHistory.localGlobber
+-                            (fs, historyPath, "/" + leadGlob, null, hasLegacyFiles));
+-
+-    Arrays.sort(snPaths, lastPathFirst);
+-
+-    int arrayLimit = 0;
+-    int tranchesSeen = 0;
++    FileStatus[] indexPaths = JobHistory.localGlobber
++                            (fs, historyPath, "/" + leadGlob, null, hasLegacyFiles);
++    Arrays.sort(indexPaths, lastPathFirst);
++    Path[] snPaths = FileUtil.stat2Paths(indexPaths);
+ 
+-    Path lastPath = null;
+-
+-    while (arrayLimit < snPaths.length
+-           && tranchesSeen <= SCAN_SIZES[currentScanSizeIndex]) {
+-      if (lastPath == null
+-          || lastPathFirst.compare(lastPath, snPaths[arrayLimit]) != 0) {
+-        ++tranchesSeen;
+-        lastPath = snPaths[arrayLimit];
+-      }
+-
+-      ++arrayLimit;
+-    }
+-
+-    if (tranchesSeen > SCAN_SIZES[currentScanSizeIndex]) {
+-      --arrayLimit;
++    int arrayLimit = SCAN_SIZES[currentScanSizeIndex];
++    if (arrayLimit > snPaths.length) {
++      arrayLimit = snPaths.length;
+     }
+ 
+     // arrayLimit points to the first element [which could be element 0] that 
+@@ -268,7 +253,6 @@ window.location.href = url;
+ 
+     Path[] jobFiles = null;
+ 
+-    {
+       Path[][] pathVectorVector = new Path[arrayLimit][];
+ 
+       for (int i = 0; i < arrayLimit; ++i) {
+@@ -286,7 +270,6 @@ window.location.href = url;
+                          pathVectorVector[i].length);
+         pathsCursor += pathVectorVector[i].length;
+       }
+-    }
+ 
+     boolean sizeIsExact = arrayLimit == snPaths.length;
+ 
+-- 
+1.7.9.5
+

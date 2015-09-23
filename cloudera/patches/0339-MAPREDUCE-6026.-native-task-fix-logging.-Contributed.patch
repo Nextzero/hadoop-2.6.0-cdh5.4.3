@@ -1,0 +1,274 @@
+From c5166afe9acc37ad34cb94c6bfe686a4e65e6e00 Mon Sep 17 00:00:00 2001
+From: Todd Lipcon <todd@apache.org>
+Date: Thu, 14 Aug 2014 04:53:36 +0000
+Subject: [PATCH 339/596] MAPREDUCE-6026. native-task: fix logging.
+ Contributed by Manu Zhang.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/MR-2841@1617878 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 808bf8bac1d4bdf83fb3bdf6e096b4038c9567ce)
+(cherry picked from commit a98494ed9c516eeda8299f1a54eb41b9eac5fa04)
+---
+ .../CHANGES.MAPREDUCE-2841.txt                     |    1 +
+ .../hadoop/mapred/nativetask/HadoopPlatform.java   |    5 +++--
+ .../apache/hadoop/mapred/nativetask/Platforms.java |    5 +++--
+ .../combinertest/LargeKVCombinerTest.java          |    5 ++++-
+ .../hadoop/mapred/nativetask/kvtest/KVTest.java    |    8 ++++++--
+ .../mapred/nativetask/kvtest/LargeKVTest.java      |    7 +++++--
+ .../mapred/nativetask/kvtest/TestInputFile.java    |    9 ++++++---
+ .../EnforceNativeOutputCollectorDelegator.java     |    6 ++++--
+ .../src/test/resources/log4j.properties            |   19 +++++++++++++++++++
+ 9 files changed, 51 insertions(+), 14 deletions(-)
+ create mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/resources/log4j.properties
+
+diff --git a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+index c3c6ab9..123eb6d 100644
+--- a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
++++ b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+@@ -13,3 +13,4 @@ MAPREDUCE-5984. native-task: Reuse lz4 sources in hadoop-common (Binglin Chang)
+ MAPREDUCE-5976. native-task: should not fail to build if snappy is missing (Manu Zhang)
+ MAPREDUCE-5978. native-task: remove test case for not supported codec Bzip2Codec and DefaultCodec (Manu Zhang)
+ MAPREDUCE-6006. native-task: add native tests to maven and fix bug in pom.xml (Binglin Chang via todd)
++MAPREDUCE-6026. native-task: fix logging (Manu Zhang via todd)
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/HadoopPlatform.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/HadoopPlatform.java
+index 1c4ede5..7599bb8 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/HadoopPlatform.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/HadoopPlatform.java
+@@ -19,6 +19,8 @@
+ 
+ import java.io.IOException;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.io.BooleanWritable;
+ import org.apache.hadoop.io.ByteWritable;
+ import org.apache.hadoop.io.BytesWritable;
+@@ -33,10 +35,9 @@
+ import org.apache.hadoop.io.Writable;
+ import org.apache.hadoop.mapred.JobConf;
+ import org.apache.hadoop.mapred.nativetask.serde.*;
+-import org.apache.log4j.Logger;
+ 
+ public class HadoopPlatform extends Platform {
+-  private static final Logger LOG = Logger.getLogger(HadoopPlatform.class);
++  private static final Log LOG = LogFactory.getLog(HadoopPlatform.class);
+ 
+   public HadoopPlatform() throws IOException {
+   }
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/Platforms.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/Platforms.java
+index 154bbc8..d0a8496 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/Platforms.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/java/org/apache/hadoop/mapred/nativetask/Platforms.java
+@@ -20,11 +20,12 @@
+ import java.io.IOException;
+ import java.util.ServiceLoader;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.mapred.JobConf;
+ import org.apache.hadoop.mapred.nativetask.serde.INativeSerializer;
+ import org.apache.hadoop.mapred.nativetask.serde.NativeSerialization;
+-import org.apache.log4j.Logger;
+ 
+ 
+ /**
+@@ -34,7 +35,7 @@
+  */
+ public class Platforms {
+ 
+-  private static final Logger LOG = Logger.getLogger(Platforms.class);
++  private static final Log LOG = LogFactory.getLog(Platforms.class);
+   private static final ServiceLoader<Platform> platforms = ServiceLoader.load(Platform.class);
+   
+   public static void init(Configuration conf) throws IOException {
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/LargeKVCombinerTest.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/LargeKVCombinerTest.java
+index 50953e0..ff444db 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/LargeKVCombinerTest.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/combinertest/LargeKVCombinerTest.java
+@@ -19,6 +19,8 @@
+ 
+ import static org.junit.Assert.assertEquals;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+@@ -34,6 +36,7 @@
+ import org.junit.Test;
+ 
+ public class LargeKVCombinerTest {
++  private static final Log LOG = LogFactory.getLog(LargeKVCombinerTest.class);
+ 
+   @Test
+   public void testLargeValueCombiner(){
+@@ -57,7 +60,7 @@ public void testLargeValueCombiner(){
+         int max = i;
+         int min = Math.max(i / 4, max - 10);
+         
+-        System.out.println("===KV Size Test: min size: " + min + ", max size: " + max);
++        LOG.info("===KV Size Test: min size: " + min + ", max size: " + max);
+         
+         normalConf.set(TestConstants.NATIVETASK_KVSIZE_MIN, String.valueOf(min));
+         normalConf.set(TestConstants.NATIVETASK_KVSIZE_MAX, String.valueOf(max));
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/KVTest.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/KVTest.java
+index 1e08854..7c4f3af 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/KVTest.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/KVTest.java
+@@ -23,6 +23,8 @@
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+@@ -37,6 +39,8 @@
+ 
+ @RunWith(Parameterized.class)
+ public class KVTest {
++  private static final Log LOG = LogFactory.getLog(KVTest.class);
++
+   private static Class<?>[] keyclasses = null;
+   private static Class<?>[] valueclasses = null;
+   private static String[] keyclassNames = null;
+@@ -53,7 +57,7 @@
+   public static Iterable<Class<?>[]> data() {
+     final String valueclassesStr = nativekvtestconf
+         .get(TestConstants.NATIVETASK_KVTEST_VALUECLASSES);
+-    System.out.println(valueclassesStr);
++    LOG.info(valueclassesStr);
+     valueclassNames = valueclassesStr.replaceAll("\\s", "").split(";");// delete
+     // " "
+     final ArrayList<Class<?>> tmpvalueclasses = new ArrayList<Class<?>>();
+@@ -69,7 +73,7 @@
+     }
+     valueclasses = tmpvalueclasses.toArray(new Class[tmpvalueclasses.size()]);
+     final String keyclassesStr = nativekvtestconf.get(TestConstants.NATIVETASK_KVTEST_KEYCLASSES);
+-    System.out.println(keyclassesStr);
++    LOG.info(keyclassesStr);
+     keyclassNames = keyclassesStr.replaceAll("\\s", "").split(";");// delete
+     // " "
+     final ArrayList<Class<?>> tmpkeyclasses = new ArrayList<Class<?>>();
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/LargeKVTest.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/LargeKVTest.java
+index 900b058..1e120ab 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/LargeKVTest.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/LargeKVTest.java
+@@ -21,6 +21,8 @@
+ 
+ import java.io.IOException;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+@@ -32,6 +34,7 @@
+ import org.junit.Test;
+ 
+ public class LargeKVTest {
++  private static final Log LOG = LogFactory.getLog(LargeKVTest.class);
+ 
+   @Test
+   public void testKeySize() {
+@@ -69,8 +72,8 @@ public void runKVSizeTests(Class<?> keyClass, Class<?> valueClass) {
+         normalConf.set(TestConstants.NATIVETASK_KVSIZE_MIN, String.valueOf(min));
+         normalConf.set(TestConstants.NATIVETASK_KVSIZE_MAX, String.valueOf(max));
+ 
+-        System.out.println("===KV Size Test: min size: " + min + ", max size: " + max + ", keyClass: "
+-            + keyClass.getName() + ", valueClass: " + valueClass.getName());
++        LOG.info("===KV Size Test: min size: " + min + ", max size: " + max + ", keyClass: "
++          + keyClass.getName() + ", valueClass: " + valueClass.getName());
+ 
+         final String nativeOutPut = runNativeLargeKVTest("Test Large Value Size:" + String.valueOf(i), keyClass,
+             valueClass, nativeConf);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/TestInputFile.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/TestInputFile.java
+index a194697..80e1055 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/TestInputFile.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/kvtest/TestInputFile.java
+@@ -21,6 +21,8 @@
+ import java.util.HashMap;
+ import java.util.Random;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+@@ -40,7 +42,8 @@
+ 
+ 
+ public class TestInputFile {
+-	
++	private static Log LOG = LogFactory.getLog(TestInputFile.class);
++
+   public static class KVSizeScope {
+     private static final int DefaultMinNum = 1;
+     private static final int DefaultMaxNum = 64;
+@@ -120,8 +123,8 @@ public void createSequenceTestFile(String filepath, int base) throws Exception {
+   }
+   
+   public void createSequenceTestFile(String filepath, int base,  byte start) throws Exception {
+-    System.out.println("create file " + filepath);
+-    System.out.println(keyClsName + " " + valueClsName);
++    LOG.info("create file " + filepath);
++    LOG.info(keyClsName + " " + valueClsName);
+     Class<?> tmpkeycls, tmpvaluecls;
+     try {
+       tmpkeycls = Class.forName(keyClsName);
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/testutil/EnforceNativeOutputCollectorDelegator.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/testutil/EnforceNativeOutputCollectorDelegator.java
+index a0f7d64..18ca629 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/testutil/EnforceNativeOutputCollectorDelegator.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/java/org/apache/hadoop/mapred/nativetask/testutil/EnforceNativeOutputCollectorDelegator.java
+@@ -19,9 +19,12 @@
+ 
+ import java.io.IOException;
+ 
++import org.apache.commons.logging.Log;
++import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.mapred.nativetask.NativeMapOutputCollectorDelegator;
+ 
+ public class EnforceNativeOutputCollectorDelegator<K, V> extends NativeMapOutputCollectorDelegator<K, V> {
++  private static final Log LOG = LogFactory.getLog(EnforceNativeOutputCollectorDelegator.class);
+   private boolean nativetaskloaded = false;
+ 
+   @Override
+@@ -32,8 +35,7 @@ public void init(Context context)
+       nativetaskloaded = true;
+     } catch (final Exception e) {
+       nativetaskloaded = false;
+-      System.err.println("load nativetask lib failed, Native-Task Delegation is disabled");
+-      e.printStackTrace();
++      LOG.error("load nativetask lib failed, Native-Task Delegation is disabled", e);
+     }
+   }
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/resources/log4j.properties b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/resources/log4j.properties
+new file mode 100644
+index 0000000..531b68b
+--- /dev/null
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/test/resources/log4j.properties
+@@ -0,0 +1,19 @@
++#   Licensed under the Apache License, Version 2.0 (the "License");
++#   you may not use this file except in compliance with the License.
++#   You may obtain a copy of the License at
++#
++#       http://www.apache.org/licenses/LICENSE-2.0
++#
++#   Unless required by applicable law or agreed to in writing, software
++#   distributed under the License is distributed on an "AS IS" BASIS,
++#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++#   See the License for the specific language governing permissions and
++#   limitations under the License.
++
++# log4j configuration used during build and unit tests
++
++log4j.rootLogger=info,stdout
++log4j.threshhold=ALL
++log4j.appender.stdout=org.apache.log4j.ConsoleAppender
++log4j.appender.stdout.layout=org.apache.log4j.PatternLayout
++log4j.appender.stdout.layout.ConversionPattern=%d{ISO8601} %-5p [%t] %c{2} (%F:%M(%L)) - %m%n
+-- 
+1.7.9.5
+

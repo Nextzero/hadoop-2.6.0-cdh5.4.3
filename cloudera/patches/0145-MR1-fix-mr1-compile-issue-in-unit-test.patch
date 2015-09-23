@@ -1,0 +1,30 @@
+From 33d86f3e6406c6d5d053a4b59f11bb51990e94d3 Mon Sep 17 00:00:00 2001
+From: Juan Yu <jyu@cloudera.com>
+Date: Wed, 3 Sep 2014 15:34:43 -0700
+Subject: [PATCH 145/596] MR1: fix mr1 compile issue in unit test.
+
+(cherry picked from commit 634853606589d94ce903701295d902c84f6c311a)
+---
+ .../TestMapredGroupMappingServiceRefresh.java      |    6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/security/TestMapredGroupMappingServiceRefresh.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/security/TestMapredGroupMappingServiceRefresh.java
+index 3f23a41..a31dc36 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/security/TestMapredGroupMappingServiceRefresh.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/security/TestMapredGroupMappingServiceRefresh.java
+@@ -175,8 +175,10 @@ public void testRefreshSuperUserGroupsConfiguration() throws Exception {
+     final String [] GROUP_NAMES2 = new String [] {"gr3" , "gr4"};
+ 
+     //keys in conf
+-    String userKeyGroups = DefaultImpersonationProvider.getProxySuperuserGroupConfKey(SUPER_USER);
+-    String userKeyHosts = DefaultImpersonationProvider.getProxySuperuserIpConfKey (SUPER_USER);
++    String userKeyGroups = DefaultImpersonationProvider.getTestProvider().
++        getProxySuperuserGroupConfKey(SUPER_USER);
++    String userKeyHosts = DefaultImpersonationProvider.getTestProvider().
++        getProxySuperuserIpConfKey (SUPER_USER);
+ 
+     config.set(userKeyGroups, "gr3,gr4,gr5"); // superuser can proxy for this group
+     config.set(userKeyHosts,"127.0.0.1");
+-- 
+1.7.9.5
+

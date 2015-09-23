@@ -1,0 +1,871 @@
+From 0965ae56b384cf1a4fa228be3468ff9ab3a4a249 Mon Sep 17 00:00:00 2001
+From: Jason Lowe <jlowe@apache.org>
+Date: Mon, 17 Nov 2014 22:59:59 +0000
+Subject: [PATCH 246/596] MAPREDUCE-6162. mapred hsadmin fails on a secure
+ cluster. Contributed by Jason Lowe (cherry picked
+ from commit
+ 09b3dee122ad20fae22ae8de74886dbf11c39343) (cherry
+ picked from commit
+ 0b9a1a3e033fa2d0fec2bf0c4903cb8eacd25d4e)
+
+(cherry picked from commit 6d800b9291eec535d62934574f91ab5c17c83d92)
+---
+ .../security/authorize/ClientHSPolicyProvider.java |   17 +++-
+ .../hadoop-mapreduce-client-common/pom.xml         |    1 +
+ .../hadoop/mapreduce/v2/api/HSAdminProtocol.java   |   34 +++++++
+ .../mapreduce/v2/api/HSAdminRefreshProtocol.java   |   59 ++++++++++++
+ .../mapreduce/v2/api/HSAdminRefreshProtocolPB.java |   33 +++++++
+ .../mapreduce/v2/jobhistory/JHAdminConfig.java     |    4 +-
+ .../src/main/proto/HSAdminRefreshProtocol.proto    |  100 ++++++++++++++++++++
+ .../hadoop-mapreduce-client-hs/pom.xml             |   30 ------
+ .../apache/hadoop/mapreduce/v2/hs/HSProxies.java   |    4 +-
+ .../hadoop/mapreduce/v2/hs/client/HSAdmin.java     |   18 +++-
+ .../mapreduce/v2/hs/protocol/HSAdminProtocol.java  |   38 --------
+ .../v2/hs/protocol/HSAdminRefreshProtocol.java     |   63 ------------
+ ...AdminRefreshProtocolClientSideTranslatorPB.java |    3 +-
+ .../v2/hs/protocolPB/HSAdminRefreshProtocolPB.java |   33 -------
+ ...AdminRefreshProtocolServerSideTranslatorPB.java |    3 +-
+ .../mapreduce/v2/hs/server/HSAdminServer.java      |   14 ++-
+ .../src/main/proto/HSAdminRefreshProtocol.proto    |  100 --------------------
+ .../mapreduce/v2/hs/server/TestHSAdminServer.java  |   20 ++++
+ 18 files changed, 299 insertions(+), 275 deletions(-)
+ create mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminProtocol.java
+ create mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminRefreshProtocol.java
+ create mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminRefreshProtocolPB.java
+ create mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/proto/HSAdminRefreshProtocol.proto
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocol/HSAdminProtocol.java
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocol/HSAdminRefreshProtocol.java
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolPB.java
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/proto/HSAdminRefreshProtocol.proto
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/security/authorize/ClientHSPolicyProvider.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/security/authorize/ClientHSPolicyProvider.java
+index dfb7469..a3bf8ae 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/security/authorize/ClientHSPolicyProvider.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-app/src/main/java/org/apache/hadoop/mapreduce/v2/app/security/authorize/ClientHSPolicyProvider.java
+@@ -19,13 +19,17 @@
+ 
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.classification.InterfaceStability;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocol;
+ import org.apache.hadoop.mapreduce.v2.api.HSClientProtocolPB;
+ import org.apache.hadoop.mapreduce.v2.jobhistory.JHAdminConfig;
++import org.apache.hadoop.security.RefreshUserMappingsProtocol;
+ import org.apache.hadoop.security.authorize.PolicyProvider;
+ import org.apache.hadoop.security.authorize.Service;
++import org.apache.hadoop.tools.GetUserMappingsProtocol;
+ 
+ /**
+- * {@link PolicyProvider} for YARN MapReduce protocols.
++ * {@link PolicyProvider} for MapReduce history server protocols.
+  */
+ @InterfaceAudience.Private
+ @InterfaceStability.Unstable
+@@ -35,7 +39,16 @@
+       new Service[] {
+     new Service(
+         JHAdminConfig.MR_HS_SECURITY_SERVICE_AUTHORIZATION,
+-        HSClientProtocolPB.class)
++        HSClientProtocolPB.class),
++    new Service(
++        CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_AUTHORIZATION_GET_USER_MAPPINGS,
++        GetUserMappingsProtocol.class),
++    new Service(
++        CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_AUTHORIZATION_REFRESH_USER_MAPPINGS,
++        RefreshUserMappingsProtocol.class),
++    new Service(
++        JHAdminConfig.MR_HS_SECURITY_SERVICE_AUTHORIZATION_ADMIN_REFRESH,
++        HSAdminRefreshProtocol.class)
+   };
+ 
+   @Override
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml
+index eb7c322..0033488 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml
+@@ -74,6 +74,7 @@
+               <source>
+                 <directory>${basedir}/src/main/proto</directory>
+                 <includes>
++                  <include>HSAdminRefreshProtocol.proto</include>
+                   <include>mr_protos.proto</include>
+                   <include>mr_service_protos.proto</include>
+                   <include>MRClientProtocol.proto</include>
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminProtocol.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminProtocol.java
+new file mode 100644
+index 0000000..c069040
+--- /dev/null
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminProtocol.java
+@@ -0,0 +1,34 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.mapreduce.v2.api;
++
++import org.apache.hadoop.classification.InterfaceAudience.Private;
++import org.apache.hadoop.classification.InterfaceStability;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
++import org.apache.hadoop.security.KerberosInfo;
++import org.apache.hadoop.security.RefreshUserMappingsProtocol;
++import org.apache.hadoop.tools.GetUserMappingsProtocol;
++
++@KerberosInfo(serverPrincipal = CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_USER_NAME_KEY)
++@Private
++@InterfaceStability.Evolving
++public interface HSAdminProtocol extends GetUserMappingsProtocol,
++    RefreshUserMappingsProtocol, HSAdminRefreshProtocol {
++
++}
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminRefreshProtocol.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminRefreshProtocol.java
+new file mode 100644
+index 0000000..d1b8714
+--- /dev/null
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminRefreshProtocol.java
+@@ -0,0 +1,59 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.mapreduce.v2.api;
++
++import java.io.IOException;
++
++import org.apache.hadoop.classification.InterfaceAudience.Private;
++import org.apache.hadoop.classification.InterfaceStability;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
++import org.apache.hadoop.security.KerberosInfo;
++
++@KerberosInfo(serverPrincipal = CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_USER_NAME_KEY)
++@Private
++@InterfaceStability.Evolving
++public interface HSAdminRefreshProtocol {
++  /**
++   * Refresh admin acls.
++   * 
++   * @throws IOException
++   */
++  public void refreshAdminAcls() throws IOException;
++  
++  /**
++   * Refresh loaded job cache
++   * @throws IOException
++   */
++  public void refreshLoadedJobCache() throws IOException;
++
++  /**
++   * Refresh job retention settings.
++   * 
++   * @throws IOException
++   */
++  public void refreshJobRetentionSettings() throws IOException;
++
++  /**
++   * Refresh log retention settings.
++   * 
++   * @throws IOException
++   */
++  public void refreshLogRetentionSettings() throws IOException;
++  
++}
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminRefreshProtocolPB.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminRefreshProtocolPB.java
+new file mode 100644
+index 0000000..93fe752
+--- /dev/null
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/api/HSAdminRefreshProtocolPB.java
+@@ -0,0 +1,33 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.mapreduce.v2.api;
++
++import org.apache.hadoop.classification.InterfaceAudience.Private;
++import org.apache.hadoop.classification.InterfaceStability;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
++import org.apache.hadoop.ipc.ProtocolInfo;
++import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.HSAdminRefreshProtocolService;
++import org.apache.hadoop.security.KerberosInfo;
++
++@KerberosInfo(serverPrincipal = CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_USER_NAME_KEY)
++@ProtocolInfo(protocolName = "org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocol", protocolVersion = 1)
++@Private
++@InterfaceStability.Evolving
++public interface HSAdminRefreshProtocolPB extends
++    HSAdminRefreshProtocolService.BlockingInterface {
++}
+\ No newline at end of file
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/JHAdminConfig.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/JHAdminConfig.java
+index 9fa8a09..e5a49b5 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/JHAdminConfig.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/java/org/apache/hadoop/mapreduce/v2/jobhistory/JHAdminConfig.java
+@@ -167,7 +167,9 @@
+    */
+   public static final String MR_HS_SECURITY_SERVICE_AUTHORIZATION =
+       "security.mrhs.client.protocol.acl";
+-  
++  public static final String MR_HS_SECURITY_SERVICE_AUTHORIZATION_ADMIN_REFRESH =
++      "security.mrhs.admin.refresh.protocol.acl";
++
+   /**
+    * The HistoryStorage class to use to cache history data.
+    */
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/proto/HSAdminRefreshProtocol.proto b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/proto/HSAdminRefreshProtocol.proto
+new file mode 100644
+index 0000000..1f95ee1
+--- /dev/null
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/src/main/proto/HSAdminRefreshProtocol.proto
+@@ -0,0 +1,100 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++option java_package = "org.apache.hadoop.mapreduce.v2.hs.proto";
++option java_outer_classname = "HSAdminRefreshProtocolProtos";
++option java_generic_services = true;
++option java_generate_equals_and_hash = true;
++package hadoop.mapreduce;
++
++/**
++ *  refresh admin acls request.
++ */
++message RefreshAdminAclsRequestProto {
++}
++
++/**
++ * Response for refresh admin acls.
++ */
++message RefreshAdminAclsResponseProto {
++}
++
++/**
++ *  refresh loaded job cache request.
++ */
++message RefreshLoadedJobCacheRequestProto {
++}
++
++/**
++ * Response for refresh loaded job cache.
++ */
++message RefreshLoadedJobCacheResponseProto {
++}
++
++/**
++ *  refresh job retention settings request.
++ */
++message RefreshJobRetentionSettingsRequestProto {
++}
++
++/**
++ * Response for refresh job retention.
++ */
++message RefreshJobRetentionSettingsResponseProto {
++}
++
++/*
++ *  refresh log retention request.
++ */
++message RefreshLogRetentionSettingsRequestProto {
++}
++
++/**
++ * Response for refresh log retention.
++ */
++message RefreshLogRetentionSettingsResponseProto {
++}
++
++/**
++ * Refresh Protocols implemented by the History server
++ */
++service HSAdminRefreshProtocolService {
++  /**
++   * Refresh admin acls
++   */
++  rpc refreshAdminAcls(RefreshAdminAclsRequestProto)
++      returns(RefreshAdminAclsResponseProto);
++  
++  /**
++   * Refresh loaded job cache
++   */
++  rpc refreshLoadedJobCache(RefreshLoadedJobCacheRequestProto)
++      returns(RefreshLoadedJobCacheResponseProto);
++      
++  /**
++   * Refresh job retention.
++   */
++  rpc refreshJobRetentionSettings(RefreshJobRetentionSettingsRequestProto)
++      returns(RefreshJobRetentionSettingsResponseProto);
++
++   /**
++   * Refresh log retention
++   */
++  rpc refreshLogRetentionSettings(RefreshLogRetentionSettingsRequestProto)
++      returns(RefreshLogRetentionSettingsResponseProto);
++}
+\ No newline at end of file
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/pom.xml
+index caf9190..78ca8e9 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/pom.xml
+@@ -77,36 +77,6 @@
+           </excludes>
+         </configuration>
+       </plugin>
+-      <plugin>
+-		<groupId>org.apache.hadoop</groupId>
+-		<artifactId>hadoop-maven-plugins</artifactId>
+-		<executions>
+-			<execution>
+-				<id>compile-protoc</id>
+-				<phase>generate-sources</phase>
+-				<goals>
+-				<goal>protoc</goal>
+-				</goals>
+-				<configuration>
+-        <protocVersion>${protobuf.version}</protocVersion>
+-        <protocCommand>${protoc.path}</protocCommand>
+-				<imports>
+-					<param>
+-						${basedir}/../../../../hadoop-common-project/hadoop-common/src/main/proto
+-					</param>
+-					<param>${basedir}/src/main/proto</param>
+-				</imports>
+-				<source>
+-					<directory>${basedir}/src/main/proto</directory>
+-					<includes>
+-						<include>HSAdminRefreshProtocol.proto</include>
+-					</includes>
+-				</source>
+-				<output>${project.build.directory}/generated-sources/java</output>
+-				</configuration>
+-			</execution>
+-		</executions>
+-		</plugin>
+     </plugins>
+   </build>
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/HSProxies.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/HSProxies.java
+index 64445f6..65fe950 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/HSProxies.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/HSProxies.java
+@@ -27,9 +27,9 @@
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.ipc.ProtobufRpcEngine;
+ import org.apache.hadoop.ipc.RPC;
+-import org.apache.hadoop.mapreduce.v2.hs.protocol.HSAdminRefreshProtocol;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocol;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocolPB;
+ import org.apache.hadoop.mapreduce.v2.hs.protocolPB.HSAdminRefreshProtocolClientSideTranslatorPB;
+-import org.apache.hadoop.mapreduce.v2.hs.protocolPB.HSAdminRefreshProtocolPB;
+ import org.apache.hadoop.net.NetUtils;
+ import org.apache.hadoop.security.RefreshUserMappingsProtocol;
+ import org.apache.hadoop.security.UserGroupInformation;
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/client/HSAdmin.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/client/HSAdmin.java
+index 000ea54..e0d3a68 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/client/HSAdmin.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/client/HSAdmin.java
+@@ -25,9 +25,10 @@
+ import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.conf.Configured;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
+ import org.apache.hadoop.mapred.JobConf;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocol;
+ import org.apache.hadoop.mapreduce.v2.hs.HSProxies;
+-import org.apache.hadoop.mapreduce.v2.hs.protocol.HSAdminRefreshProtocol;
+ import org.apache.hadoop.mapreduce.v2.jobhistory.JHAdminConfig;
+ import org.apache.hadoop.security.RefreshUserMappingsProtocol;
+ import org.apache.hadoop.security.UserGroupInformation;
+@@ -46,6 +47,21 @@ public HSAdmin(JobConf conf) {
+     super(conf);
+   }
+ 
++  @Override
++  public void setConf(Configuration conf) {
++    if (conf != null) {
++      conf = addSecurityConfiguration(conf);
++    }
++    super.setConf(conf);
++  }
++
++  private Configuration addSecurityConfiguration(Configuration conf) {
++    conf = new JobConf(conf);
++    conf.set(CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_USER_NAME_KEY,
++        conf.get(JHAdminConfig.MR_HISTORY_PRINCIPAL, ""));
++    return conf;
++  }
++
+   /**
+    * Displays format of commands.
+    * 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocol/HSAdminProtocol.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocol/HSAdminProtocol.java
+deleted file mode 100644
+index ec75aa7..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocol/HSAdminProtocol.java
++++ /dev/null
+@@ -1,38 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package org.apache.hadoop.mapreduce.v2.hs.protocol;
+-
+-import org.apache.hadoop.classification.InterfaceAudience.Private;
+-import org.apache.hadoop.classification.InterfaceStability;
+-import org.apache.hadoop.fs.CommonConfigurationKeys;
+-import org.apache.hadoop.security.KerberosInfo;
+-import org.apache.hadoop.security.RefreshUserMappingsProtocol;
+-import org.apache.hadoop.tools.GetUserMappingsProtocol;
+-
+-/**
+- * Protocol use
+- * 
+- */
+-@KerberosInfo(serverPrincipal = CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_USER_NAME_KEY)
+-@Private
+-@InterfaceStability.Evolving
+-public interface HSAdminProtocol extends GetUserMappingsProtocol,
+-    RefreshUserMappingsProtocol, HSAdminRefreshProtocol {
+-
+-}
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocol/HSAdminRefreshProtocol.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocol/HSAdminRefreshProtocol.java
+deleted file mode 100644
+index 82d9ae2..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocol/HSAdminRefreshProtocol.java
++++ /dev/null
+@@ -1,63 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-package org.apache.hadoop.mapreduce.v2.hs.protocol;
+-
+-import java.io.IOException;
+-
+-import org.apache.hadoop.classification.InterfaceAudience.Private;
+-import org.apache.hadoop.classification.InterfaceStability;
+-import org.apache.hadoop.fs.CommonConfigurationKeys;
+-import org.apache.hadoop.security.KerberosInfo;
+-
+-/**
+- * Protocol use
+- * 
+- */
+-@KerberosInfo(serverPrincipal = CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_USER_NAME_KEY)
+-@Private
+-@InterfaceStability.Evolving
+-public interface HSAdminRefreshProtocol {
+-  /**
+-   * Refresh admin acls.
+-   * 
+-   * @throws IOException
+-   */
+-  public void refreshAdminAcls() throws IOException;
+-  
+-  /**
+-   * Refresh loaded job cache
+-   * @throws IOException
+-   */
+-  public void refreshLoadedJobCache() throws IOException;
+-
+-  /**
+-   * Refresh job retention settings.
+-   * 
+-   * @throws IOException
+-   */
+-  public void refreshJobRetentionSettings() throws IOException;
+-
+-  /**
+-   * Refresh log retention settings.
+-   * 
+-   * @throws IOException
+-   */
+-  public void refreshLogRetentionSettings() throws IOException;
+-  
+-}
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolClientSideTranslatorPB.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolClientSideTranslatorPB.java
+index 8f1f512..e014f62 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolClientSideTranslatorPB.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolClientSideTranslatorPB.java
+@@ -26,11 +26,12 @@
+ import org.apache.hadoop.ipc.ProtocolMetaInterface;
+ import org.apache.hadoop.ipc.RPC;
+ import org.apache.hadoop.ipc.RpcClientUtil;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocol;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocolPB;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshAdminAclsRequestProto;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshLoadedJobCacheRequestProto;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshJobRetentionSettingsRequestProto;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshLogRetentionSettingsRequestProto;
+-import org.apache.hadoop.mapreduce.v2.hs.protocol.HSAdminRefreshProtocol;
+ 
+ import com.google.protobuf.RpcController;
+ import com.google.protobuf.ServiceException;
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolPB.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolPB.java
+deleted file mode 100644
+index 1831dd8..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolPB.java
++++ /dev/null
+@@ -1,33 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.hadoop.mapreduce.v2.hs.protocolPB;
+-
+-import org.apache.hadoop.classification.InterfaceAudience.Private;
+-import org.apache.hadoop.classification.InterfaceStability;
+-import org.apache.hadoop.fs.CommonConfigurationKeys;
+-import org.apache.hadoop.ipc.ProtocolInfo;
+-import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.HSAdminRefreshProtocolService;
+-import org.apache.hadoop.security.KerberosInfo;
+-
+-@KerberosInfo(serverPrincipal = CommonConfigurationKeys.HADOOP_SECURITY_SERVICE_USER_NAME_KEY)
+-@ProtocolInfo(protocolName = "org.apache.hadoop.mapreduce.v2.hs.protocol.HSAdminRefreshProtocol", protocolVersion = 1)
+-@Private
+-@InterfaceStability.Evolving
+-public interface HSAdminRefreshProtocolPB extends
+-    HSAdminRefreshProtocolService.BlockingInterface {
+-}
+\ No newline at end of file
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolServerSideTranslatorPB.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolServerSideTranslatorPB.java
+index 77b4178..6b51889 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolServerSideTranslatorPB.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/protocolPB/HSAdminRefreshProtocolServerSideTranslatorPB.java
+@@ -21,6 +21,8 @@
+ import java.io.IOException;
+ 
+ import org.apache.hadoop.classification.InterfaceAudience.Private;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocol;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocolPB;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshAdminAclsResponseProto;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshAdminAclsRequestProto;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshLoadedJobCacheRequestProto;
+@@ -29,7 +31,6 @@
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshJobRetentionSettingsResponseProto;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshLogRetentionSettingsRequestProto;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.RefreshLogRetentionSettingsResponseProto;
+-import org.apache.hadoop.mapreduce.v2.hs.protocol.HSAdminRefreshProtocol;
+ 
+ import com.google.protobuf.RpcController;
+ import com.google.protobuf.ServiceException;
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/server/HSAdminServer.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/server/HSAdminServer.java
+index 858d945..ef79bf8 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/server/HSAdminServer.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/java/org/apache/hadoop/mapreduce/v2/hs/server/HSAdminServer.java
+@@ -25,6 +25,7 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
+ import org.apache.hadoop.ipc.ProtobufRpcEngine;
+ import org.apache.hadoop.ipc.RPC;
+ import org.apache.hadoop.ipc.WritableRpcEngine;
+@@ -34,7 +35,6 @@
+ import org.apache.hadoop.security.UserGroupInformation;
+ import org.apache.hadoop.security.authorize.AccessControlList;
+ import org.apache.hadoop.security.authorize.ProxyUsers;
+-import org.apache.hadoop.yarn.ipc.RPCUtil;
+ import org.apache.hadoop.yarn.logaggregation.AggregatedLogDeletionService;
+ import org.apache.hadoop.security.proto.RefreshUserMappingsProtocolProtos.RefreshUserMappingsProtocolService;
+ import org.apache.hadoop.security.protocolPB.RefreshUserMappingsProtocolPB;
+@@ -43,12 +43,13 @@
+ import org.apache.hadoop.tools.proto.GetUserMappingsProtocolProtos.GetUserMappingsProtocolService;
+ import org.apache.hadoop.tools.protocolPB.GetUserMappingsProtocolPB;
+ import org.apache.hadoop.tools.protocolPB.GetUserMappingsProtocolServerSideTranslatorPB;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminProtocol;
++import org.apache.hadoop.mapreduce.v2.api.HSAdminRefreshProtocolPB;
++import org.apache.hadoop.mapreduce.v2.app.security.authorize.ClientHSPolicyProvider;
+ import org.apache.hadoop.mapreduce.v2.hs.HSAuditLogger;
+ import org.apache.hadoop.mapreduce.v2.hs.HSAuditLogger.AuditConstants;
+ import org.apache.hadoop.mapreduce.v2.hs.JobHistory;
+ import org.apache.hadoop.mapreduce.v2.hs.proto.HSAdminRefreshProtocolProtos.HSAdminRefreshProtocolService;
+-import org.apache.hadoop.mapreduce.v2.hs.protocol.HSAdminProtocol;
+-import org.apache.hadoop.mapreduce.v2.hs.protocolPB.HSAdminRefreshProtocolPB;
+ import org.apache.hadoop.mapreduce.v2.hs.protocolPB.HSAdminRefreshProtocolServerSideTranslatorPB;
+ 
+ import com.google.protobuf.BlockingService;
+@@ -110,6 +111,13 @@ public void serviceInit(Configuration conf) throws Exception {
+     addProtocol(conf, HSAdminRefreshProtocolPB.class,
+         refreshHSAdminProtocolService);
+ 
++    // Enable service authorization?
++    if (conf.getBoolean(
++        CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHORIZATION,
++        false)) {
++      clientRpcServer.refreshServiceAcl(conf, new ClientHSPolicyProvider());
++    }
++
+     adminAcl = new AccessControlList(conf.get(JHAdminConfig.JHS_ADMIN_ACL,
+         JHAdminConfig.DEFAULT_JHS_ADMIN_ACL));
+ 
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/proto/HSAdminRefreshProtocol.proto b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/proto/HSAdminRefreshProtocol.proto
+deleted file mode 100644
+index 1f95ee1..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/main/proto/HSAdminRefreshProtocol.proto
++++ /dev/null
+@@ -1,100 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-option java_package = "org.apache.hadoop.mapreduce.v2.hs.proto";
+-option java_outer_classname = "HSAdminRefreshProtocolProtos";
+-option java_generic_services = true;
+-option java_generate_equals_and_hash = true;
+-package hadoop.mapreduce;
+-
+-/**
+- *  refresh admin acls request.
+- */
+-message RefreshAdminAclsRequestProto {
+-}
+-
+-/**
+- * Response for refresh admin acls.
+- */
+-message RefreshAdminAclsResponseProto {
+-}
+-
+-/**
+- *  refresh loaded job cache request.
+- */
+-message RefreshLoadedJobCacheRequestProto {
+-}
+-
+-/**
+- * Response for refresh loaded job cache.
+- */
+-message RefreshLoadedJobCacheResponseProto {
+-}
+-
+-/**
+- *  refresh job retention settings request.
+- */
+-message RefreshJobRetentionSettingsRequestProto {
+-}
+-
+-/**
+- * Response for refresh job retention.
+- */
+-message RefreshJobRetentionSettingsResponseProto {
+-}
+-
+-/*
+- *  refresh log retention request.
+- */
+-message RefreshLogRetentionSettingsRequestProto {
+-}
+-
+-/**
+- * Response for refresh log retention.
+- */
+-message RefreshLogRetentionSettingsResponseProto {
+-}
+-
+-/**
+- * Refresh Protocols implemented by the History server
+- */
+-service HSAdminRefreshProtocolService {
+-  /**
+-   * Refresh admin acls
+-   */
+-  rpc refreshAdminAcls(RefreshAdminAclsRequestProto)
+-      returns(RefreshAdminAclsResponseProto);
+-  
+-  /**
+-   * Refresh loaded job cache
+-   */
+-  rpc refreshLoadedJobCache(RefreshLoadedJobCacheRequestProto)
+-      returns(RefreshLoadedJobCacheResponseProto);
+-      
+-  /**
+-   * Refresh job retention.
+-   */
+-  rpc refreshJobRetentionSettings(RefreshJobRetentionSettingsRequestProto)
+-      returns(RefreshJobRetentionSettingsResponseProto);
+-
+-   /**
+-   * Refresh log retention
+-   */
+-  rpc refreshLogRetentionSettings(RefreshLogRetentionSettingsRequestProto)
+-      returns(RefreshLogRetentionSettingsResponseProto);
+-}
+\ No newline at end of file
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/server/TestHSAdminServer.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/server/TestHSAdminServer.java
+index 2c239ec..7ab90f0 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/server/TestHSAdminServer.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-hs/src/test/java/org/apache/hadoop/mapreduce/v2/hs/server/TestHSAdminServer.java
+@@ -23,10 +23,12 @@
+ import java.io.IOException;
+ import java.util.ArrayList;
+ import java.util.Arrays;
++import java.util.Collection;
+ import java.util.List;
+ 
+ import org.apache.hadoop.HadoopIllegalArgumentException;
+ import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
+ import org.apache.hadoop.ipc.RemoteException;
+ import org.apache.hadoop.mapred.JobConf;
+ import org.apache.hadoop.mapreduce.v2.hs.JobHistory;
+@@ -39,6 +41,10 @@
+ import org.junit.After;
+ import org.junit.Before;
+ import org.junit.Test;
++import org.junit.runner.RunWith;
++import org.junit.runners.Parameterized;
++import org.junit.runners.Parameterized.Parameters;
++
+ import static org.mockito.Mockito.mock;
+ import static org.mockito.Mockito.when;
+ import static org.mockito.Mockito.verify;
+@@ -46,7 +52,9 @@
+ import org.apache.hadoop.security.authorize.AuthorizationException;
+ import org.apache.hadoop.yarn.logaggregation.AggregatedLogDeletionService;
+ 
++@RunWith(Parameterized.class)
+ public class TestHSAdminServer {
++  private boolean securityEnabled = true;
+   private HSAdminServer hsAdminServer = null;
+   private HSAdmin hsAdminClient = null;
+   JobConf conf = null;
+@@ -80,6 +88,15 @@ public void cacheGroupsAdd(List<String> groups) throws IOException {
+     }
+   }
+ 
++  @Parameters
++  public static Collection<Object[]> testParameters() {
++    return Arrays.asList(new Object[][] { { false }, { true } });
++  }
++
++  public TestHSAdminServer(boolean enableSecurity) {
++    securityEnabled = enableSecurity;
++  }
++
+   @Before
+   public void init() throws HadoopIllegalArgumentException, IOException {
+     conf = new JobConf();
+@@ -87,6 +104,9 @@ public void init() throws HadoopIllegalArgumentException, IOException {
+     conf.setClass("hadoop.security.group.mapping", MockUnixGroupsMapping.class,
+         GroupMappingServiceProvider.class);
+     conf.setLong("hadoop.security.groups.cache.secs", groupRefreshTimeoutSec);
++    conf.setBoolean(
++          CommonConfigurationKeysPublic.HADOOP_SECURITY_AUTHORIZATION,
++          securityEnabled);
+     Groups.getUserToGroupsMappingService(conf);
+     jobHistoryService = mock(JobHistory.class);
+     alds = mock(AggregatedLogDeletionService.class);
+-- 
+1.7.9.5
+

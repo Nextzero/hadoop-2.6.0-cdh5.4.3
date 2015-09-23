@@ -1,0 +1,685 @@
+From 949c31afdf6ed7d7edc960173449cd3bc6aeb2cc Mon Sep 17 00:00:00 2001
+From: Arpit Agarwal <arp@apache.org>
+Date: Thu, 22 Jan 2015 14:08:20 -0800
+Subject: [PATCH 496/596] HDFS-7575. Upgrade should generate a unique storage
+ ID for each volume. (Contributed by Arpit Agarwal)
+
+(cherry picked from commit d34074e237ee10b83aeb02294f595714d43e39e4)
+(cherry picked from commit f1a2fce5b3c21e3335f99fe210edbb1f9c7bb29f)
+---
+ .../hadoop/hdfs/server/datanode/DataStorage.java   |   35 +++--
+ .../hdfs/server/protocol/DatanodeStorage.java      |   19 ++-
+ .../hadoop/hdfs/TestDFSUpgradeFromImage.java       |   19 ++-
+ .../hadoop/hdfs/TestDatanodeLayoutUpgrade.java     |    2 +-
+ .../TestDatanodeStartupFixesLegacyStorageIDs.java  |  139 ++++++++++++++++++++
+ .../org/apache/hadoop/hdfs/UpgradeUtilities.java   |    2 +-
+ .../hdfs/server/datanode/SimulatedFSDataset.java   |    2 +-
+ .../datanode/fsdataset/impl/TestFsDatasetImpl.java |    2 +-
+ .../resources/testUpgradeFrom22FixesStorageIDs.tgz |  Bin 0 -> 3260 bytes
+ .../resources/testUpgradeFrom22FixesStorageIDs.txt |   25 ++++
+ .../testUpgradeFrom22via26FixesStorageIDs.tgz      |  Bin 0 -> 3635 bytes
+ .../testUpgradeFrom22via26FixesStorageIDs.txt      |   25 ++++
+ .../testUpgradeFrom26PreservesStorageIDs.tgz       |  Bin 0 -> 3852 bytes
+ .../testUpgradeFrom26PreservesStorageIDs.txt       |   25 ++++
+ 14 files changed, 274 insertions(+), 21 deletions(-)
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeStartupFixesLegacyStorageIDs.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22FixesStorageIDs.tgz
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22FixesStorageIDs.txt
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22via26FixesStorageIDs.tgz
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22via26FixesStorageIDs.txt
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom26PreservesStorageIDs.tgz
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom26PreservesStorageIDs.txt
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java
+index 674953a..0dbcdfd 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java
+@@ -37,6 +37,7 @@
+ import org.apache.hadoop.hdfs.protocol.Block;
+ import org.apache.hadoop.hdfs.protocol.HdfsConstants;
+ import org.apache.hadoop.hdfs.protocol.LayoutVersion;
++import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeStorageInfo;
+ import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.NodeType;
+ import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.StartupOption;
+ import org.apache.hadoop.hdfs.server.common.InconsistentFSStateException;
+@@ -142,11 +143,20 @@ public synchronized void setDatanodeUuid(String newDatanodeUuid) {
+     this.datanodeUuid = newDatanodeUuid;
+   }
+ 
+-  /** Create an ID for this storage. */
+-  public synchronized void createStorageID(StorageDirectory sd) {
+-    if (sd.getStorageUuid() == null) {
++  /** Create an ID for this storage.
++   * @return true if a new storage ID was generated.
++   * */
++  public synchronized boolean createStorageID(
++      StorageDirectory sd, boolean regenerateStorageIds) {
++    final String oldStorageID = sd.getStorageUuid();
++    if (oldStorageID == null || regenerateStorageIds) {
+       sd.setStorageUuid(DatanodeStorage.generateUuid());
++      LOG.info("Generated new storageID " + sd.getStorageUuid() +
++          " for directory " + sd.getRoot() +
++          (oldStorageID == null ? "" : (" to replace " + oldStorageID)));
++      return true;
+     }
++    return false;
+   }
+ 
+   /**
+@@ -678,20 +688,25 @@ private void doTransition( DataNode datanode,
+           + sd.getRoot().getCanonicalPath() + ": namenode clusterID = "
+           + nsInfo.getClusterID() + "; datanode clusterID = " + getClusterID());
+     }
+-    
+-    // After addition of the federation feature, ctime check is only 
+-    // meaningful at BlockPoolSliceStorage level. 
+ 
+-    // regular start up. 
++    // Clusters previously upgraded from layout versions earlier than
++    // ADD_DATANODE_AND_STORAGE_UUIDS failed to correctly generate a
++    // new storage ID. We check for that and fix it now.
++    boolean haveValidStorageId =
++        DataNodeLayoutVersion.supports(
++            LayoutVersion.Feature.ADD_DATANODE_AND_STORAGE_UUIDS, layoutVersion) &&
++            DatanodeStorage.isValidStorageId(sd.getStorageUuid());
++
++    // regular start up.
+     if (this.layoutVersion == HdfsConstants.DATANODE_LAYOUT_VERSION) {
+-      createStorageID(sd);
++      createStorageID(sd, !haveValidStorageId);
+       return; // regular startup
+     }
+-    
++
+     // do upgrade
+     if (this.layoutVersion > HdfsConstants.DATANODE_LAYOUT_VERSION) {
+       doUpgrade(datanode, sd, nsInfo);  // upgrade
+-      createStorageID(sd);
++      createStorageID(sd, !haveValidStorageId);
+       return;
+     }
+     
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/protocol/DatanodeStorage.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/protocol/DatanodeStorage.java
+index 4fe07b9..4d224d5 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/protocol/DatanodeStorage.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/protocol/DatanodeStorage.java
+@@ -47,6 +47,7 @@
+   private final String storageID;
+   private final State state;
+   private final StorageType storageType;
++  private static final String STORAGE_ID_PREFIX = "DS-";
+ 
+   /**
+    * Create a storage with {@link State#NORMAL} and {@link StorageType#DEFAULT}.
+@@ -80,7 +81,23 @@ public StorageType getStorageType() {
+    * @return unique storage ID
+    */
+   public static String generateUuid() {
+-    return "DS-" + UUID.randomUUID();
++    return STORAGE_ID_PREFIX + UUID.randomUUID();
++  }
++
++  /**
++   * Verify that a given string is a storage ID in the "DS-..uuid.." format.
++   */
++  public static boolean isValidStorageId(final String storageID) {
++    try {
++      // Attempt to parse the UUID.
++      if (storageID != null && storageID.indexOf(STORAGE_ID_PREFIX) == 0) {
++        UUID.fromString(storageID.substring(STORAGE_ID_PREFIX.length()));
++        return true;
++      }
++    } catch (IllegalArgumentException iae) {
++    }
++
++    return false;
+   }
+ 
+   @Override
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDFSUpgradeFromImage.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDFSUpgradeFromImage.java
+index 88ad0cc..ad907f6 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDFSUpgradeFromImage.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDFSUpgradeFromImage.java
+@@ -24,7 +24,6 @@
+ 
+ import java.io.BufferedReader;
+ import java.io.File;
+-import java.io.FileInputStream;
+ import java.io.FileOutputStream;
+ import java.io.FileReader;
+ import java.io.IOException;
+@@ -91,6 +90,10 @@
+     }
+   }
+   
++  public interface ClusterVerifier {
++    public void verifyClusterPostUpgrade(final MiniDFSCluster cluster) throws IOException;
++  }
++
+   final LinkedList<ReferenceFileInfo> refList = new LinkedList<ReferenceFileInfo>();
+   Iterator<ReferenceFileInfo> refIter;
+   
+@@ -119,7 +122,7 @@ void unpackStorage(String tarFileName, String referenceName)
+       if (line.length() <= 0 || line.startsWith("#")) {
+         continue;
+       }
+-      String[] arr = line.split("\\s+\t\\s+");
++      String[] arr = line.split("\\s+");
+       if (arr.length < 1) {
+         continue;
+       }
+@@ -288,7 +291,7 @@ public void testFailOnPreUpgradeImage() throws IOException {
+   public void testUpgradeFromRel22Image() throws IOException {
+     unpackStorage(HADOOP22_IMAGE, HADOOP_DFS_DIR_TXT);
+     upgradeAndVerify(new MiniDFSCluster.Builder(upgradeConf).
+-        numDataNodes(4));
++        numDataNodes(4), null);
+   }
+   
+   /**
+@@ -316,7 +319,7 @@ public void testUpgradeFromCorruptRel22Image() throws IOException {
+     // Upgrade should now fail
+     try {
+       upgradeAndVerify(new MiniDFSCluster.Builder(upgradeConf).
+-          numDataNodes(4));
++          numDataNodes(4), null);
+       fail("Upgrade did not fail with bad MD5");
+     } catch (IOException ioe) {
+       String msg = StringUtils.stringifyException(ioe);
+@@ -573,7 +576,7 @@ static void recoverAllLeases(DFSClient dfs,
+     } while (dirList.hasMore());
+   }
+   
+-  void upgradeAndVerify(MiniDFSCluster.Builder bld)
++  void upgradeAndVerify(MiniDFSCluster.Builder bld, ClusterVerifier verifier)
+       throws IOException {
+     MiniDFSCluster cluster = null;
+     try {
+@@ -592,6 +595,10 @@ void upgradeAndVerify(MiniDFSCluster.Builder bld)
+       }
+       recoverAllLeases(dfsClient, new Path("/"));
+       verifyFileSystem(dfs);
++
++      if (verifier != null) {
++        verifier.verifyClusterPostUpgrade(cluster);
++      }
+     } finally {
+       if (cluster != null) { cluster.shutdown(); }
+     } 
+@@ -611,6 +618,6 @@ public void testUpgradeFromRel1BBWImage() throws IOException {
+         "data1");
+     upgradeAndVerify(new MiniDFSCluster.Builder(conf).
+           numDataNodes(1).enableManagedDfsDirsRedundancy(false).
+-          manageDataDfsDirs(false));
++          manageDataDfsDirs(false), null);
+   }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeLayoutUpgrade.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeLayoutUpgrade.java
+index 0966301..343320c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeLayoutUpgrade.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeLayoutUpgrade.java
+@@ -43,6 +43,6 @@ public void testUpgradeToIdBasedLayout() throws IOException {
+         System.getProperty("test.build.data") + File.separator +
+             "dfs" + File.separator + "name");
+     upgrade.upgradeAndVerify(new MiniDFSCluster.Builder(conf).numDataNodes(1)
+-    .manageDataDfsDirs(false).manageNameDfsDirs(false));
++    .manageDataDfsDirs(false).manageNameDfsDirs(false), null);
+   }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeStartupFixesLegacyStorageIDs.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeStartupFixesLegacyStorageIDs.java
+new file mode 100644
+index 0000000..e262abc
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestDatanodeStartupFixesLegacyStorageIDs.java
+@@ -0,0 +1,139 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.hdfs;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.hdfs.server.protocol.DatanodeStorage;
++import org.apache.hadoop.hdfs.server.protocol.StorageReport;
++import org.apache.hadoop.test.GenericTestUtils;
++import org.junit.Test;
++
++import java.io.File;
++import java.io.IOException;
++
++import org.apache.hadoop.hdfs.TestDFSUpgradeFromImage.ClusterVerifier;
++
++import static org.hamcrest.core.Is.is;
++import static org.junit.Assert.assertThat;
++import static org.junit.Assert.assertTrue;
++
++
++/**
++ * The test verifies that legacy storage IDs in older DataNode
++ * images are replaced with UUID-based storage IDs. The startup may
++ * or may not involve a Datanode Layout upgrade. Each test case uses
++ * the following resource files.
++ *
++ *    1. testCaseName.tgz - NN and DN directories corresponding
++ *                          to a specific layout version.
++ *    2. testCaseName.txt - Text file listing the checksum of each file
++ *                          in the cluster and overall checksum. See
++ *                          TestUpgradeFromImage for the file format.
++ *
++ * If any test case is renamed then the corresponding resource files must
++ * also be renamed.
++ */
++public class TestDatanodeStartupFixesLegacyStorageIDs {
++
++  /**
++   * Perform a upgrade using the test image corresponding to
++   * testCaseName.
++   *
++   * @param testCaseName
++   * @param expectedStorageId if null, then the upgrade generates a new
++   *                          unique storage ID.
++   * @throws IOException
++   */
++  private static void runLayoutUpgradeTest(final String testCaseName,
++                                           final String expectedStorageId)
++      throws IOException {
++    TestDFSUpgradeFromImage upgrade = new TestDFSUpgradeFromImage();
++    upgrade.unpackStorage(testCaseName + ".tgz", testCaseName + ".txt");
++    Configuration conf = new Configuration(TestDFSUpgradeFromImage.upgradeConf);
++    initStorageDirs(conf, testCaseName);
++    upgradeAndVerify(upgrade, conf, new ClusterVerifier() {
++      @Override
++      public void verifyClusterPostUpgrade(MiniDFSCluster cluster) throws IOException {
++        // Verify that a GUID-based storage ID was generated.
++        final String bpid = cluster.getNamesystem().getBlockPoolId();
++        StorageReport[] reports =
++            cluster.getDataNodes().get(0).getFSDataset().getStorageReports(bpid);
++        assertThat(reports.length, is(1));
++        final String storageID = reports[0].getStorage().getStorageID();
++        assertTrue(DatanodeStorage.isValidStorageId(storageID));
++
++        if (expectedStorageId != null) {
++          assertThat(storageID, is(expectedStorageId));
++        }
++      }
++    });
++  }
++
++  private static void initStorageDirs(final Configuration conf,
++                                      final String testName) {
++    conf.set(DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY,
++             System.getProperty("test.build.data") + File.separator +
++                 testName + File.separator + "dfs" + File.separator + "data");
++    conf.set(DFSConfigKeys.DFS_NAMENODE_NAME_DIR_KEY,
++             System.getProperty("test.build.data") + File.separator +
++                 testName + File.separator + "dfs" + File.separator + "name");
++
++  }
++
++  private static void upgradeAndVerify(final TestDFSUpgradeFromImage upgrade,
++                                       final Configuration conf,
++                                       final ClusterVerifier verifier)
++      throws IOException{
++    upgrade.upgradeAndVerify(new MiniDFSCluster.Builder(conf)
++                                 .numDataNodes(1)
++                                 .manageDataDfsDirs(false)
++                                 .manageNameDfsDirs(false), verifier);
++  }
++
++  /**
++   * Upgrade from 2.2 (no storage IDs per volume) correctly generates
++   * GUID-based storage IDs. Test case for HDFS-7575.
++   */
++  @Test (timeout=300000)
++  public void testUpgradeFrom22FixesStorageIDs() throws IOException {
++    runLayoutUpgradeTest(GenericTestUtils.getMethodName(), null);
++  }
++
++  /**
++   * Startup from a 2.6-layout that has legacy storage IDs correctly
++   * generates new storage IDs.
++   * Test case for HDFS-7575.
++   */
++  @Test (timeout=300000)
++  public void testUpgradeFrom22via26FixesStorageIDs() throws IOException {
++    runLayoutUpgradeTest(GenericTestUtils.getMethodName(), null);
++  }
++
++  /**
++   * Startup from a 2.6-layout that already has unique storage IDs does
++   * not regenerate the storage IDs.
++   * Test case for HDFS-7575.
++   */
++  @Test (timeout=300000)
++  public void testUpgradeFrom26PreservesStorageIDs() throws IOException {
++    // StorageId present in the image testUpgradeFrom26PreservesStorageId.tgz
++    runLayoutUpgradeTest(GenericTestUtils.getMethodName(),
++                         "DS-a0e39cfa-930f-4abd-813c-e22b59223774");
++  }
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/UpgradeUtilities.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/UpgradeUtilities.java
+index bbaf3ed..dac26a0 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/UpgradeUtilities.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/UpgradeUtilities.java
+@@ -476,7 +476,7 @@ public static void createDataNodeVersionFile(File[] parent,
+     for (int i = 0; i < parent.length; i++) {
+       File versionFile = new File(parent[i], "VERSION");
+       StorageDirectory sd = new StorageDirectory(parent[i].getParentFile());
+-      storage.createStorageID(sd);
++      storage.createStorageID(sd, false);
+       storage.writeProperties(versionFile, sd);
+       versionFiles[i] = versionFile;
+       File bpDir = BlockPoolSliceStorage.getBpRoot(bpid, parent[i]);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
+index abed2c3..40cfeca 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
+@@ -511,7 +511,7 @@ public FsDatasetSpi getDataset() {
+   public SimulatedFSDataset(DataStorage storage, Configuration conf) {
+     if (storage != null) {
+       for (int i = 0; i < storage.getNumStorageDirs(); ++i) {
+-        storage.createStorageID(storage.getStorageDir(i));
++        storage.createStorageID(storage.getStorageDir(i), false);
+       }
+       this.datanodeUuid = storage.getDatanodeUuid();
+     } else {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java
+index 5d4d80f..e55eca8 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java
+@@ -90,7 +90,7 @@
+ 
+   private static Storage.StorageDirectory createStorageDirectory(File root) {
+     Storage.StorageDirectory sd = new Storage.StorageDirectory(root);
+-    dsForStorageUuid.createStorageID(sd);
++    dsForStorageUuid.createStorageID(sd, false);
+     return sd;
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22FixesStorageIDs.tgz b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22FixesStorageIDs.tgz
+new file mode 100644
+index 0000000000000000000000000000000000000000..30b03246f955a25c184bcbd3334e0aef7995098e
+GIT binary patch
+literal 3260
+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
+bowK0<jDk4u&fmXWJ_V8B1@@Z4jcfi3s#XCG
+
+literal 0
+HcmV?d00001
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22FixesStorageIDs.txt b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22FixesStorageIDs.txt
+new file mode 100644
+index 0000000..6b0e1ea
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22FixesStorageIDs.txt
+@@ -0,0 +1,25 @@
++# Licensed to the Apache Software Foundation (ASF) under one or more
++# contributor license agreements.  See the NOTICE file distributed with
++# this work for additional information regarding copyright ownership.
++# The ASF licenses this file to You under the Apache License, Version 2.0
++# (the "License"); you may not use this file except in compliance with
++# the License.  You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Similar to hadoop-dfs-dir.txt, except this is used for a datanode layout
++# upgrade test.
++# Uncomment the following line to produce checksum info for a new DFS image.
++#printChecksums
++
++/f01    4021661486
++/f02    4021661486
++/f03    4021661486
++/f04    4021661486
++overallCRC	3193029345
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22via26FixesStorageIDs.tgz b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22via26FixesStorageIDs.tgz
+new file mode 100644
+index 0000000000000000000000000000000000000000..74c1649abcaf0824feecb00ebdd6dbfd273d3961
+GIT binary patch
+literal 3635
+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
+JRli}?zX4`C8mIsO
+
+literal 0
+HcmV?d00001
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22via26FixesStorageIDs.txt b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22via26FixesStorageIDs.txt
+new file mode 100644
+index 0000000..6b0e1ea
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom22via26FixesStorageIDs.txt
+@@ -0,0 +1,25 @@
++# Licensed to the Apache Software Foundation (ASF) under one or more
++# contributor license agreements.  See the NOTICE file distributed with
++# this work for additional information regarding copyright ownership.
++# The ASF licenses this file to You under the Apache License, Version 2.0
++# (the "License"); you may not use this file except in compliance with
++# the License.  You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Similar to hadoop-dfs-dir.txt, except this is used for a datanode layout
++# upgrade test.
++# Uncomment the following line to produce checksum info for a new DFS image.
++#printChecksums
++
++/f01    4021661486
++/f02    4021661486
++/f03    4021661486
++/f04    4021661486
++overallCRC	3193029345
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom26PreservesStorageIDs.tgz b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom26PreservesStorageIDs.tgz
+new file mode 100644
+index 0000000000000000000000000000000000000000..69fbaf61ac81465970bd7ed3b699241838365259
+GIT binary patch
+literal 3852
+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
+
+literal 0
+HcmV?d00001
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom26PreservesStorageIDs.txt b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom26PreservesStorageIDs.txt
+new file mode 100644
+index 0000000..6b0e1ea
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/resources/testUpgradeFrom26PreservesStorageIDs.txt
+@@ -0,0 +1,25 @@
++# Licensed to the Apache Software Foundation (ASF) under one or more
++# contributor license agreements.  See the NOTICE file distributed with
++# this work for additional information regarding copyright ownership.
++# The ASF licenses this file to You under the Apache License, Version 2.0
++# (the "License"); you may not use this file except in compliance with
++# the License.  You may obtain a copy of the License at
++#
++#     http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Similar to hadoop-dfs-dir.txt, except this is used for a datanode layout
++# upgrade test.
++# Uncomment the following line to produce checksum info for a new DFS image.
++#printChecksums
++
++/f01    4021661486
++/f02    4021661486
++/f03    4021661486
++/f04    4021661486
++overallCRC	3193029345
+-- 
+1.7.9.5
+

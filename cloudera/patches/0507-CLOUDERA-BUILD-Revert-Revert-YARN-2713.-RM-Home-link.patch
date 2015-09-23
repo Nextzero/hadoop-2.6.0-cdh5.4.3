@@ -1,0 +1,51 @@
+From 3724c8a754f4817a903b53435719aec1ef194032 Mon Sep 17 00:00:00 2001
+From: Anubhav Dhoot <adhoot@cloudera.com>
+Date: Thu, 19 Mar 2015 00:58:53 -0700
+Subject: [PATCH 507/596] CLOUDERA-BUILD Revert "Revert "YARN-2713. "RM Home"
+ link in NM should point to one of the RMs in an HA
+ setup. (kasha)""
+
+This reverts commit 3ee0f2f419c49d617b587ad43684ed94b720f08a.
+---
+ .../hadoop/yarn/webapp/util/WebAppUtils.java       |   19 +++++++++++++++++--
+ 1 file changed, 17 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/util/WebAppUtils.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/util/WebAppUtils.java
+index a8f67ff..3aeb33e 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/util/WebAppUtils.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/webapp/util/WebAppUtils.java
+@@ -143,14 +143,29 @@ public static String getResolvedRMWebAppURLWithoutScheme(Configuration conf) {
+   public static String getResolvedRMWebAppURLWithoutScheme(Configuration conf,
+       Policy httpPolicy) {
+     InetSocketAddress address = null;
++    String rmId = null;
++    if (HAUtil.isHAEnabled(conf)) {
++      // If HA enabled, pick one of the RM-IDs and rely on redirect to go to
++      // the Active RM
++      rmId = (String) HAUtil.getRMHAIds(conf).toArray()[0];
++    }
++
+     if (httpPolicy == Policy.HTTPS_ONLY) {
+       address =
+-          conf.getSocketAddr(YarnConfiguration.RM_WEBAPP_HTTPS_ADDRESS,
++          conf.getSocketAddr(
++              rmId == null
++                  ? YarnConfiguration.RM_WEBAPP_HTTPS_ADDRESS
++                  : HAUtil.addSuffix(
++                  YarnConfiguration.RM_WEBAPP_HTTPS_ADDRESS, rmId),
+               YarnConfiguration.DEFAULT_RM_WEBAPP_HTTPS_ADDRESS,
+               YarnConfiguration.DEFAULT_RM_WEBAPP_HTTPS_PORT);
+     } else {
+       address =
+-          conf.getSocketAddr(YarnConfiguration.RM_WEBAPP_ADDRESS,
++          conf.getSocketAddr(
++              rmId == null
++                  ? YarnConfiguration.RM_WEBAPP_ADDRESS
++                  : HAUtil.addSuffix(
++                  YarnConfiguration.RM_WEBAPP_ADDRESS, rmId),
+               YarnConfiguration.DEFAULT_RM_WEBAPP_ADDRESS,
+               YarnConfiguration.DEFAULT_RM_WEBAPP_PORT);      
+     }
+-- 
+1.7.9.5
+

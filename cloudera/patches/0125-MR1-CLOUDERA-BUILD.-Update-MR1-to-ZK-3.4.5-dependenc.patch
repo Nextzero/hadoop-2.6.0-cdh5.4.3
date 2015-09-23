@@ -1,0 +1,77 @@
+From 729bc1be8c53961fd3e5cbc85601bc808effcc95 Mon Sep 17 00:00:00 2001
+From: Todd Lipcon <todd@cloudera.com>
+Date: Wed, 2 Oct 2013 10:46:33 -0700
+Subject: [PATCH 125/596] MR1: CLOUDERA-BUILD. Update MR1 to ZK 3.4.5
+ dependency version
+
+This harmonizes the version number with Hadoop 2, which depends
+on 3.4.5 due to recently-committed HADOOP-8315.
+
+(cherry picked from commit 150bcf14d754c52f75be236c0f50b3c9a548ef04)
+(cherry picked from commit a08ee4a9dc4aad199d2d044033f117e08b792026)
+
+Conflicts:
+	hadoop-project/pom.xml
+
+(cherry picked from commit 72a669c7d8e2d9aee296326c767c458940d5bdd8)
+---
+ hadoop-common-project/hadoop-common/pom.xml        |    2 ++
+ hadoop-mapreduce1-project/ivy/libraries.properties |    2 +-
+ hadoop-project/pom.xml                             |    4 ++--
+ 3 files changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/pom.xml b/hadoop-common-project/hadoop-common/pom.xml
+index 0c6e447..c46be38 100644
+--- a/hadoop-common-project/hadoop-common/pom.xml
++++ b/hadoop-common-project/hadoop-common/pom.xml
+@@ -261,6 +261,7 @@
+     <dependency>
+       <groupId>org.apache.zookeeper</groupId>
+       <artifactId>zookeeper</artifactId>
++      <version>${cdh.zookeeper.version}</version>
+       <exclusions>
+         <exclusion>
+           <groupId>jline</groupId>
+@@ -288,6 +289,7 @@
+     <dependency>
+       <groupId>org.apache.zookeeper</groupId>
+       <artifactId>zookeeper</artifactId>
++      <version>${cdh.zookeeper.version}</version>
+       <type>test-jar</type>
+       <scope>test</scope>
+     </dependency>
+diff --git a/hadoop-mapreduce1-project/ivy/libraries.properties b/hadoop-mapreduce1-project/ivy/libraries.properties
+index 9ac1762..42a9bf9 100644
+--- a/hadoop-mapreduce1-project/ivy/libraries.properties
++++ b/hadoop-mapreduce1-project/ivy/libraries.properties
+@@ -82,4 +82,4 @@ wagon-http.version=1.0-beta-2
+ xmlenc.version=0.52
+ xerces.version=1.4.4
+ 
+-zookeeper.version=3.4.2
++zookeeper.version=3.4.5
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index 7bc940b..4d5c1fe 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -785,7 +785,7 @@
+       <dependency>
+         <groupId>org.apache.zookeeper</groupId>
+         <artifactId>zookeeper</artifactId>
+-        <version>${zookeeper.version}</version>
++        <version>${cdh.zookeeper.version}</version>
+         <exclusions>
+           <exclusion>
+             <!-- otherwise seems to drag in junit 3.8.1 via jline -->
+@@ -809,7 +809,7 @@
+       <dependency>
+         <groupId>org.apache.zookeeper</groupId>
+         <artifactId>zookeeper</artifactId>
+-        <version>${zookeeper.version}</version>
++        <version>${cdh.zookeeper.version}</version>
+         <type>test-jar</type>
+         <scope>test</scope>
+         <exclusions>
+-- 
+1.7.9.5
+

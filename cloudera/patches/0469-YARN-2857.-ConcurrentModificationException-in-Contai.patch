@@ -1,0 +1,105 @@
+From f235cccdc79c9c5f2bc49f7a7433683a7bf986a2 Mon Sep 17 00:00:00 2001
+From: Jason Lowe <jlowe@apache.org>
+Date: Fri, 14 Nov 2014 20:47:26 +0000
+Subject: [PATCH 469/596] YARN-2857. ConcurrentModificationException in
+ ContainerLogAppender. Contributed by Mohammad
+ Kamrul Islam (cherry picked from commit
+ f2fe8a800e5b0f3875931adba9ae20c6a95aa4ff) (cherry
+ picked from commit
+ 00d135d75a8e89fa00fc4f58217ed3b90959c697)
+
+(cherry picked from commit 4eec6619548beebb3a68c3a17bcb2431bd431a5d)
+---
+ .../apache/hadoop/yarn/ContainerLogAppender.java   |    7 ++-
+ .../hadoop/yarn/TestContainerLogAppender.java      |   46 ++++++++++++++++++++
+ 2 files changed, 52 insertions(+), 1 deletion(-)
+ create mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/TestContainerLogAppender.java
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/ContainerLogAppender.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/ContainerLogAppender.java
+index 95876ef..0aba8b5 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/ContainerLogAppender.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/ContainerLogAppender.java
+@@ -41,6 +41,7 @@
+   //so that log4j can configure it from the configuration(log4j.properties). 
+   private int maxEvents;
+   private Queue<LoggingEvent> tail = null;
++  private boolean closing = false;
+ 
+   @Override
+   public void activateOptions() {
+@@ -57,6 +58,9 @@ public void activateOptions() {
+   @Override
+   public void append(LoggingEvent event) {
+     synchronized (this) {
++      if (closing) { // When closing drop any new/transitive CLA appending
++        return;
++      }
+       if (tail == null) {
+         super.append(event);
+       } else {
+@@ -77,8 +81,9 @@ public void flush() {
+ 
+   @Override
+   public synchronized void close() {
++    closing = true;
+     if (tail != null) {
+-      for(LoggingEvent event: tail) {
++      for (LoggingEvent event : tail) {
+         super.append(event);
+       }
+     }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/TestContainerLogAppender.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/TestContainerLogAppender.java
+new file mode 100644
+index 0000000..3b20d18
+--- /dev/null
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/test/java/org/apache/hadoop/yarn/TestContainerLogAppender.java
+@@ -0,0 +1,46 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.yarn;
++
++import org.apache.log4j.Logger;
++import org.apache.log4j.PatternLayout;
++import org.junit.Test;
++
++public class TestContainerLogAppender {
++
++  @Test
++  public void testAppendInClose() throws Exception {
++    final ContainerLogAppender claAppender = new ContainerLogAppender();
++    claAppender.setName("testCLA");
++    claAppender.setLayout(new PatternLayout("%-5p [%t]: %m%n"));
++    claAppender.setContainerLogDir("target/testAppendInClose/logDir");
++    claAppender.setTotalLogFileSize(1000);
++    claAppender.activateOptions();
++    final Logger claLog = Logger.getLogger("testAppendInClose-catergory");
++    claLog.setAdditivity(false);
++    claLog.addAppender(claAppender);
++    claLog.info(new Object() {
++      public String toString() {
++        claLog.info("message1");
++        return "return message1";
++      }
++    });
++    claAppender.close();
++  }
++}
+-- 
+1.7.9.5
+

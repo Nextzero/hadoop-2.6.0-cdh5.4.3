@@ -1,0 +1,176 @@
+From c6890723664a3e7455dfa6e6f66308aaf8118833 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Wed, 14 Jan 2015 17:42:59 -0800
+Subject: [PATCH 366/596] HDFS-7067. ClassCastException while using a key
+ created by keytool to create encryption zone.
+ (Charles Lamb via Colin P. McCabe)
+
+(cherry picked from commit a5a033c7ca130528f8c509b035fc090ad4eb981a)
+(cherry picked from commit e6a251ff687be7e859934de7278c138dcd95e91f)
+---
+ .../hadoop/crypto/key/JavaKeyStoreProvider.java    |    5 +-
+ .../hadoop/crypto/key/TestKeyProviderFactory.java  |   48 ++++++++++++++++++++
+ .../src/test/resources/hdfs7067.keystore           |  Bin 0 -> 6067 bytes
+ 3 files changed, 52 insertions(+), 1 deletion(-)
+ create mode 100644 hadoop-common-project/hadoop-common/src/test/resources/hdfs7067.keystore
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/JavaKeyStoreProvider.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/JavaKeyStoreProvider.java
+index 75981c4..65df812 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/JavaKeyStoreProvider.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/JavaKeyStoreProvider.java
+@@ -21,7 +21,6 @@
+ import com.google.common.base.Preconditions;
+ import org.apache.commons.io.IOUtils;
+ import org.apache.hadoop.classification.InterfaceAudience;
+-import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FSDataOutputStream;
+ import org.apache.hadoop.fs.FileStatus;
+@@ -406,6 +405,10 @@ public Metadata getMetadata(String name) throws IOException {
+         Metadata meta = ((KeyMetadata) keyStore.getKey(name, password)).metadata;
+         cache.put(name, meta);
+         return meta;
++      } catch (ClassCastException e) {
++        throw new IOException("Can't cast key for " + name + " in keystore " +
++            path + " to a KeyMetadata. Key may have been added using " +
++            " keytool or some other non-Hadoop method.", e);
+       } catch (KeyStoreException e) {
+         throw new IOException("Can't get metadata for " + name +
+             " from keystore " + path, e);
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/crypto/key/TestKeyProviderFactory.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/crypto/key/TestKeyProviderFactory.java
+index 998cd6f..ef09d94 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/crypto/key/TestKeyProviderFactory.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/crypto/key/TestKeyProviderFactory.java
+@@ -42,6 +42,7 @@
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertTrue;
+ import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.fail;
+ 
+ public class TestKeyProviderFactory {
+ 
+@@ -430,4 +431,51 @@ public void testGetProviderViaURI() throws Exception {
+     Assert.assertNull(kp);
+ 
+   }
++
++  @Test
++  public void testJksProviderWithKeytoolKeys() throws Exception {
++    final Configuration conf = new Configuration();
++    final String keystoreDirAbsolutePath =
++        conf.getResource("hdfs7067.keystore").getPath();
++    final String ourUrl = JavaKeyStoreProvider.SCHEME_NAME + "://file@/" +
++        keystoreDirAbsolutePath;
++
++    conf.set(KeyProviderFactory.KEY_PROVIDER_PATH, ourUrl);
++
++    final KeyProvider provider = KeyProviderFactory.getProviders(conf).get(0);
++
++    // Sanity check that we are using the right keystore
++    @SuppressWarnings("unused")
++    final KeyProvider.KeyVersion keyVersion =
++            provider.getKeyVersion("testkey5@0");
++    try {
++      @SuppressWarnings("unused")
++      final KeyProvider.KeyVersion keyVersionWrongKeyNameFormat =
++          provider.getKeyVersion("testkey2");
++      fail("should have thrown an exception");
++    } catch (IOException e) {
++      // No version in key path testkey2/
++      GenericTestUtils.assertExceptionContains("No version in key path", e);
++    }
++    try {
++      @SuppressWarnings("unused")
++      final KeyProvider.KeyVersion keyVersionCurrentKeyNotWrongKeyNameFormat =
++          provider.getCurrentKey("testkey5@0");
++      fail("should have thrown an exception getting testkey5@0");
++    } catch (IOException e) {
++      // javax.crypto.spec.SecretKeySpec cannot be cast to
++      // org.apache.hadoop.crypto.key.JavaKeyStoreProvider$KeyMetadata
++      GenericTestUtils.assertExceptionContains("other non-Hadoop method", e);
++    }
++    try {
++      @SuppressWarnings("unused")
++      KeyProvider.KeyVersion keyVersionCurrentKeyNotReally =
++          provider.getCurrentKey("testkey2");
++      fail("should have thrown an exception getting testkey2");
++    } catch (IOException e) {
++      // javax.crypto.spec.SecretKeySpec cannot be cast to
++      // org.apache.hadoop.crypto.key.JavaKeyStoreProvider$KeyMetadata
++      GenericTestUtils.assertExceptionContains("other non-Hadoop method", e);
++    }
++  }
+ }
+diff --git a/hadoop-common-project/hadoop-common/src/test/resources/hdfs7067.keystore b/hadoop-common-project/hadoop-common/src/test/resources/hdfs7067.keystore
+new file mode 100644
+index 0000000000000000000000000000000000000000..a0a69b194a31eb44c01b12cf3779f6a11bf3d16f
+GIT binary patch
+literal 6067
+zcmd^@`8!nY<HyHfkc;eVD6$(%43&M0l4Tmp$U4kq8-tm#mx%0@twGtcWJ|J?Y-1_=
+zQV|Jd$;iI%9z7o|&-c>zy5=wN!~MfK?|VDf>vit?+^4s<w-*2a01pfOVW9-jxuN_O
+z&Ip~=kOcrJu5e^?oO!kgpvGYV@{S(v(l~F7v?JEv6YnAIiS_VtL87qIFcbofLK-``
+zq8#y;Jg^2Re-o?+{_w&B+hfsb`CYaacG$fi7QpR_@Im<f*ZycTHAU5@Z>mf^fdDEi
+z00Ro+=z&BbO%PawI}Q&3T4`AUm=16L92bSu_Q2p#7`zuC2mrhap!57yOB3yc2e4fI
+zIe-irfpL<7;ju0lC*`XE8r<RZ4&$HoDg8XXu|NBJw$8Z&qBR}=IWNz{$37{`Kt&t2
+zU2vL@LevIG!RGz5HuYhURi-|uJ5dD6V}7ams(6f%hM+mb$=g2E<I<Ld)*pxo{4OKa
+zWpmxag6dIHMUj}SBERdNWx2E2xMtg{3&KKi5`wU4uAx(%O}<9avH?$8_FCTGn$C|<
+z@T0ml8MTyUUCtVg($1$#p+CUvgf>=p!O{vW`B@hdAe0|%kyT;C*{(sBkz5RQ0ePKi
+zj%TcvqgA*Do+O}3y;50rdirmEb;AQVOtf?@T=33@IuK0^(iH3BiAL$@!pH`{D4#f_
+zEPqDh5VPDb%n@Sd#|5)1i-T!7I^^PCn8O&LfGNKjOfR-X+`E0&|H-T6+6xJac9)XP
+zo4A_gsc0wkiMAn~A=+E`m!ES%`Ssg#1yk8z-r>^11pDAYr&3yWi3g^!L{Mhx)Swc_
+zcdr-45kd2TDB`GB5-DUafl1OXkq2#Fyw>B?-U|_q9$Ly^yRwm9$mym=KkB6L%1%uc
+z8@Jv+bH}H0<s4juN{hMGA=P^HL(GIv_=_Cx_hf034gMeI-*2<8`uK6d9L4u~E5sJw
+z@)u??ye_Rs`5WiK<pB-$*TWX~k{fOZnjtA&(~bD$uI}cZd0e$|pdc67D2QYYEtyD8
+zms(p2ZV`@T{a1}KWvuDi@)*IOrwKgWy6p-b>u+SBCm1WVtuN`U*d1^Xur`jA-*&o5
+z2~wu_QnS@%>@Sv=-NhB&H(E4gp_t<WmPPh;-UHY!KuuYJ6FMs@@^8a}yH-a7|JjU&
+zjDriF^WsTlX_5_oVW#=BX8&2SV~z`BVF&!E=-TPUBaA7y4s=54o=o03zd8#sXjMtv
+z%|v}^U3!!<xNi&|f5fd}0@b(2alRc%8=+l0MNQr2+Z)c5(t++W{cy@=22%Nib+tUj
+zz^;NV4!xDIxP&oD$=CKj5oFV0>D?plsLtl!B-qjh4g~g<7+36ZiVuhBD&wr3Y5NG!
+zUDBY;?6+lm@pGU{-B$jV5lCpBt$z<gjg^s%bW1(x;r)$*Vm3CVY-;N1(7RYEbBA=B
+zh(*;jr<rBAQ1P4nv)o_CtTcHUppqRk!z!^n+?JTY6gS(<DT*5;q@CSNhe?f$inm^y
+zkEC*)oaFhn3?<30qy|FOZp=)imzC^mtsFmrecNFJ+r*VPNjF*I$fx(4dvrG&&R4ln
+z#`*6ql2wRo@Ouftqj2~`zaYOq2sk~6sN<s7bCy@1PRBBO9My|fnVl(0r7@$<H@t-_
+zOIk^*A~#B^3m!P2Zmj^drsOL96x3EG#d#HOLDTW^dE}HsRKlx-e+G>5?{oskueGvs
+z4YJ7U$~8Vdkn(_x4Aj*Rv3#Cm74K;lW70?L69RRNfXjpHTL-na5}y}CTQ8oN-Brcy
+zjjYTwe>rU&T7$E>3%k8ihAqguyAhYITQJ$!b(=b~8CzON0GX)_WC~HRj!Ayx$r^5m
+zvOmemDGIusBikfH(vSudGi#T32VE*W-BxQ_(T3M7cd<E;(Bvw^3*v3Kdm|+h8{Q-R
+z+Dg*1yp>SWr{KP`+GfoHA4=`o);C$$a+G!BB(!B;E^I||_pffLCa{J#khO+v@JlDU
+zKRU@Fet&nUq#PHU#Hcs+v;-}Cj@rb<=<|$yPk(NeI`P6SNwZ+llqE(&cmFId@<E~@
+z)S^|zKgOCr1}3bv9IFPx`9*AO4oDF?Y51+RN%1#xM)^v&g;Git*|Qs%yH;Lz8t1U`
+zg~o7$By^RfXu=uy^Jf&L-^(peQ<$W;c=!mj-(dH-J-OOH{4gp-I=#N3=PU37KtX#N
+zIQ1eA(JVb@T%^fnWL^{<zrjqhPjYc-u8O;2D{;v@?95)-{q}_tO%aXl?_8k+H`o3d
+zk;mmq;o{sV8X~Gn9h}SA=g#&kc+Jy`Oy2a}aeWwPjD87Xr_^vD<Qo)Z__!Lmn{?0{
+zxhDqyt9ltk8ett2n5|k8oW0`y044|L=BHHG$u*<yMq5@NC<^e<@U6B-kd=sR@XIdx
+z|Fi4Q@x?Q!>bUrYWJ<n&qM`oj5x)RgR6KX85ncQHJF4LWb)u{{CgfJ2a^@mH<1axg
+z3a?!@X3j-#v%Q@2)!guP`K0&FKkYeTqAPv8c|Kq>A5m;BGxmNe+WKSHotnp-DRM)w
+zvh?y1LY_rSIJ<9S?n5{j$OAFBBjT#bq`K(xK}a6Z_9ma$!7u4;TU20lPsF;%cA~(5
+zI+drpX0xYoF&o#V$B|Ko*j$h#^@!cRhERt%lEq0j_-j*=`wz3|o8y8xcg6@-#nlh~
+z3-i2BQhia>QamZ5t~KF=Fv!d~faK;mj|ylHGB~00q`Bh@W-ZbkQ=zAoEezLj6`#+d
+zo$R}%_y)SfpN3X=8f~&Vne^j+M}2Da)OA!rke%V?rXw#m&eR@IuIs$iM#m(Ws*9CU
+zmL1H|4<`sM1vj7=EEK(#krzQ4aH=E*5=hPNPMKZjECri#8}U)W7Bh$HpdwmLlTaNl
+zC7>N}oh(hV!7t3T|D96*>=miU1v1t9>$#8w!?`1nDY#-%<rhNN5_cn&Ca7EA8QNBU
+zSnHIngWeMZ%&m;XrhfknX-b2JB%VfcEla&mXcA=;cxt|j_$CsdnX*J(mfci>ROX(D
+z>|t#L!>vRoOM3lOg-q28FgdVJD~70RFSP|Ds(1$;C#$8#R5_?)W$Mk4w6nKEuVnwQ
+zn|W7$clN3@eOihQul|E5mS()|*yW-8ba`gPTwYyX9~8J6_93TEU5j%km&bDZGUX`<
+zTS)KBfwstacnWNE0V7xG<*&a(lE7w{+yq#?^9H+7)>AlJb-d9q5tF~XzR9O4d|fXQ
+zC3Kw*F61)$8ur7+exL>XmNUlDg7uk#Cyt@Wg5WhejlJ|`p?V?A)n`Z^-wuBkU!$aV
+zE*MVMA+o`5x&G`G=YGn?i4_q$E^_rtu48N#&$S<wix$;ACl>26sYNu4k2(*AwsjJv
+zC<WT-wj9*~!1EUb<3a9Wi<x3{Y9}RTkn$fLYGoQ)hcZuB+_{>l)H*@9VxKF<b~ojv
+z_PGNjH;Ibq0Iqd*>rUO;D6WLnocuQ=T;?<0ni5z)WJ(2XN{;6(<?{s_JZJ;gl<>`#
+z7^pp8Nn{9<J}C$TM!yxwdp;fr-zd-wkO`Zz7h_M}6!(L#C!s~l8Rbf20{0&`RMu8H
+zo1p}dJ$~>v4_Ebm^clw&xpwaADtJR_o_Hv}d%k4FM4aGPbeA>cZRP1u&ByOcmhDPE
+z65^TV7LDN+gk@agAYAG$=FDevY*sixr4r*024aGzvzdp@(PW(=8~i2HpTB7;gySNU
+ztF?qlQ5aI@s7zcL{$t@j6jk1V=-v44>i!7ghh9DRzIB9-u6jd^b}GCHXEfw2-G0OV
+zfHyKP>&v=6ANX4bU`#bzi?}tOe}*V?DZTg`<h4)cL5Nj0mCmkm=S8gBsdY`#DtDC|
+z_@V*w1wGWMQ9_<gzp%q2N{3#gTJJlrIPEME601>d@lB@OWM){bsTLdVznsk2^zKD|
+zc}Q!`*Y;a<A^e`qE#3^@2XCas)<h|7vlO0qk>OETP#uZj&Bqm6r+N8C=mNDdqN&r;
+z-(g?h7Cxeby<J`OV|6i}QSTj`KkHP)SvQfTrB;5i+kW)Xi(A}muRON4_CF>9AGG-H
+zSeaj4Ox{Kz%$nx<f|8SNbq}FKyI&-3QKeQ`fk1gRWE~<KNbqDVF=rWgt3l#FT^ELM
+JKCtk+`#&ecU)lfw
+
+literal 0
+HcmV?d00001
+
+-- 
+1.7.9.5
+

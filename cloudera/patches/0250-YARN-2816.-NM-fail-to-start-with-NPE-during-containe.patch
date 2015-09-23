@@ -1,0 +1,27 @@
+From 27730b3345a24ad7a168974cdcab3e96ce4a6e8f Mon Sep 17 00:00:00 2001
+From: Zhihai Xu <zxu@cloudera.com>
+Date: Thu, 20 Nov 2014 19:44:40 -0800
+Subject: [PATCH 250/596] YARN-2816. NM fail to start with NPE during
+ container recovery. Fix compilation error
+
+(cherry picked from commit c47e58c4ee89e3c99e82002e4d12fa3640647219)
+---
+ .../recovery/TestNMLeveldbStateStoreService.java   |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/recovery/TestNMLeveldbStateStoreService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/recovery/TestNMLeveldbStateStoreService.java
+index f7f43cc..9eb78bc 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/recovery/TestNMLeveldbStateStoreService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/recovery/TestNMLeveldbStateStoreService.java
+@@ -275,7 +275,7 @@ public void testContainerStorage() throws IOException {
+     assertTrue(rcs.getDiagnostics().isEmpty());
+ 
+     // store a new container record without StartContainerRequest
+-    ContainerId containerId1 = ContainerId.newContainerId(appAttemptId, 6);
++    ContainerId containerId1 = ContainerId.newInstance(appAttemptId, 6);
+     stateStore.storeContainerLaunched(containerId1);
+     recoveredContainers = stateStore.loadContainersState();
+     // check whether the new container record is discarded
+-- 
+1.7.9.5
+

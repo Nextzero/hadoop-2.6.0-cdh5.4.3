@@ -1,0 +1,140 @@
+From 9a89a84b4c063e946d4dac0b3264bc2eba986b94 Mon Sep 17 00:00:00 2001
+From: yliu <yliu@apache.org>
+Date: Thu, 12 Feb 2015 03:09:38 +0800
+Subject: [PATCH 501/596] HDFS-7761. cleanup unnecssary code logic in
+ LocatedBlock. (yliu)
+
+(cherry picked from commit f8d0825f39f2938703e179b9b572177a6322201f)
+(cherry picked from commit 30a630f1af3aa91a5c3f30b3a9f9ce6d901c25b7)
+---
+ .../hdfs/protocol/DatanodeInfoWithStorage.java     |    4 ++
+ .../apache/hadoop/hdfs/protocol/LocatedBlock.java  |   47 ++++++--------------
+ .../server/blockmanagement/DatanodeManager.java    |    4 +-
+ 3 files changed, 20 insertions(+), 35 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/DatanodeInfoWithStorage.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/DatanodeInfoWithStorage.java
+index db2c2e7..54ffec65 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/DatanodeInfoWithStorage.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/DatanodeInfoWithStorage.java
+@@ -33,6 +33,10 @@ public DatanodeInfoWithStorage(DatanodeInfo from, String storageID,
+     super(from);
+     this.storageID = storageID;
+     this.storageType = storageType;
++    setSoftwareVersion(from.getSoftwareVersion());
++    setDependentHostNames(from.getDependentHostNames());
++    setLevel(from.getLevel());
++    setParent(from.getParent());
+   }
+ 
+   public String getStorageID() {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/LocatedBlock.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/LocatedBlock.java
+index 4ff24b9..f14c8da 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/LocatedBlock.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/LocatedBlock.java
+@@ -43,8 +43,6 @@
+   private final ExtendedBlock b;
+   private long offset;  // offset of the first byte of the block in the file
+   private final DatanodeInfoWithStorage[] locs;
+-  private final boolean hasStorageIDs;
+-  private final boolean hasStorageTypes;
+   /** Cached storage ID for each replica */
+   private String[] storageIDs;
+   /** Cached storage type for each replica, if reported. */
+@@ -104,16 +102,11 @@ public LocatedBlock(ExtendedBlock b, DatanodeInfo[] locs, String[] storageIDs,
+         DatanodeInfoWithStorage storage = new DatanodeInfoWithStorage(di,
+             storageIDs != null ? storageIDs[i] : null,
+             storageTypes != null ? storageTypes[i] : null);
+-        storage.setDependentHostNames(di.getDependentHostNames());
+-        storage.setLevel(di.getLevel());
+-        storage.setParent(di.getParent());
+         this.locs[i] = storage;
+       }
+     }
+     this.storageIDs = storageIDs;
+     this.storageTypes = storageTypes;
+-    this.hasStorageIDs = storageIDs != null;
+-    this.hasStorageTypes = storageTypes != null;
+ 
+     if (cachedLocs == null || cachedLocs.length == 0) {
+       this.cachedLocs = EMPTY_LOCS;
+@@ -137,48 +130,36 @@ public ExtendedBlock getBlock() {
+   /**
+    * Returns the locations associated with this block. The returned array is not
+    * expected to be modified. If it is, caller must immediately invoke
+-   * {@link org.apache.hadoop.hdfs.protocol.LocatedBlock#invalidateCachedStorageInfo}
+-   * to invalidate the cached Storage ID/Type arrays.
++   * {@link org.apache.hadoop.hdfs.protocol.LocatedBlock#updateCachedStorageInfo}
++   * to update the cached Storage ID/Type arrays.
+    */
+   public DatanodeInfo[] getLocations() {
+     return locs;
+   }
+ 
+   public StorageType[] getStorageTypes() {
+-    if(!hasStorageTypes) {
+-      return null;
+-    }
+-    if(storageTypes != null) {
+-      return storageTypes;
+-    }
+-    storageTypes = new StorageType[locs.length];
+-    for(int i = 0; i < locs.length; i++) {
+-      storageTypes[i] = locs[i].getStorageType();
+-    }
+     return storageTypes;
+   }
+   
+   public String[] getStorageIDs() {
+-    if(!hasStorageIDs) {
+-      return null;
+-    }
+-    if(storageIDs != null) {
+-      return storageIDs;
+-    }
+-    storageIDs = new String[locs.length];
+-    for(int i = 0; i < locs.length; i++) {
+-      storageIDs[i] = locs[i].getStorageID();
+-    }
+     return storageIDs;
+   }
+ 
+   /**
+-   * Invalidates the cached StorageID and StorageType information. Must be
++   * Updates the cached StorageID and StorageType information. Must be
+    * called when the locations array is modified.
+    */
+-  public void invalidateCachedStorageInfo() {
+-    storageIDs = null;
+-    storageTypes = null;
++  public void updateCachedStorageInfo() {
++    if (storageIDs != null) {
++      for(int i = 0; i < locs.length; i++) {
++        storageIDs[i] = locs[i].getStorageID();
++      }
++    }
++    if (storageTypes != null) {
++      for(int i = 0; i < locs.length; i++) {
++        storageTypes[i] = locs[i].getStorageType();
++      }
++    }
+   }
+ 
+   public long getStartOffset() {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+index 5ff6ffd..cca2b90 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+@@ -384,8 +384,8 @@ public void sortLocatedBlocks(final String targethost,
+       }
+       int activeLen = lastActiveIndex + 1;      
+       networktopology.sortByDistance(client, b.getLocations(), activeLen);
+-      // must invalidate cache since we modified locations array
+-      b.invalidateCachedStorageInfo();
++      // must update cache since we modified locations array
++      b.updateCachedStorageInfo();
+     }
+   }
+   
+-- 
+1.7.9.5
+

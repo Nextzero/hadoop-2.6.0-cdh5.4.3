@@ -1,0 +1,30 @@
+From f0d1789af127083bddd4ef9405bde9eb3ef63888 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Thu, 4 Dec 2014 12:51:42 -0800
+Subject: [PATCH 293/596] HADOOP-11348. Remove unused variable from CMake
+ error message for finding openssl (Dian Fu via
+ Colin P. McCabe)
+
+(cherry picked from commit 565b0e60a8fc4ae5bc0083cc6a6ddb2d01952f32)
+(cherry picked from commit a0976152e66dd2cdfbc06f5c3e771966cb2d08ec)
+(cherry picked from commit 90ee754e884e7da7bdfe40cc743596baa0dabe18)
+---
+ .../hadoop-common/src/CMakeLists.txt               |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/CMakeLists.txt b/hadoop-common-project/hadoop-common/src/CMakeLists.txt
+index b8ac460..29fa2b8 100644
+--- a/hadoop-common-project/hadoop-common/src/CMakeLists.txt
++++ b/hadoop-common-project/hadoop-common/src/CMakeLists.txt
+@@ -202,7 +202,7 @@ if (USABLE_OPENSSL)
+         "${D}/crypto/OpensslCipher.c"
+         "${D}/crypto/random/OpensslSecureRandom.c")
+ else (USABLE_OPENSSL)
+-    MESSAGE("Cannot find a usable OpenSSL library.  OPENSSL_LIBRARY=${OPENSSL_LIBRARY}, OPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR}, CUSTOM_OPENSSL_INCLUDE_DIR=${CUSTOM_OPENSSL_INCLUDE_DIR}, CUSTOM_OPENSSL_PREFIX=${CUSTOM_OPENSSL_PREFIX}, CUSTOM_OPENSSL_INCLUDE=${CUSTOM_OPENSSL_INCLUDE}")
++    MESSAGE("Cannot find a usable OpenSSL library.  OPENSSL_LIBRARY=${OPENSSL_LIBRARY}, OPENSSL_INCLUDE_DIR=${OPENSSL_INCLUDE_DIR}, CUSTOM_OPENSSL_LIB=${CUSTOM_OPENSSL_LIB}, CUSTOM_OPENSSL_PREFIX=${CUSTOM_OPENSSL_PREFIX}, CUSTOM_OPENSSL_INCLUDE=${CUSTOM_OPENSSL_INCLUDE}")
+     IF(REQUIRE_OPENSSL)
+         MESSAGE(FATAL_ERROR "Terminating build because require.openssl was specified.")
+     ENDIF(REQUIRE_OPENSSL)
+-- 
+1.7.9.5
+

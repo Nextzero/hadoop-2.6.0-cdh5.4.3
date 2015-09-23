@@ -1,0 +1,129 @@
+From 80fcbb78a4f1ba4e516c295c991b13310f2f8f9e Mon Sep 17 00:00:00 2001
+From: Binglin Chang <bchang@apache.org>
+Date: Thu, 24 Jul 2014 11:44:09 +0000
+Subject: [PATCH 332/596] MAPREDUCE-5991. native-task should not run unit
+ tests if native profile is not enabled. Contributed
+ by Binglin Chang.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/MR-2841@1613072 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit ea9e5b7baae34c7ba660681d1e5aceb9c1047e6f)
+(cherry picked from commit f907ab23abbeb078c5db5c79343d90d5b9a12779)
+---
+ .../CHANGES.MAPREDUCE-2841.txt                     |    1 +
+ .../hadoop-mapreduce-client-common/pom.xml         |   11 ++++++
+ .../hadoop-mapreduce-client-nativetask/pom.xml     |   35 ++++++++++++++++----
+ hadoop-project/pom.xml                             |    6 ++++
+ 4 files changed, 46 insertions(+), 7 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+index aa695cf..92c94a8 100644
+--- a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
++++ b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+@@ -6,3 +6,4 @@ MAPREDUCE-5994. Simplify ByteUtils and fix failing test. (todd)
+ MAPREDUCE-5996. native-task: Rename system tests into standard directory layout (todd)
+ MAPREDUCE-5997. native-task: Use DirectBufferPool from Hadoop Common (todd)
+ MAPREDUCE-6000. native-task: Simplify ByteBufferDataReader/Writer (todd)
++MAPREDUCE-5991. native-task should not run unit tests if native profile is not enabled. (Binglin Chang)
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml
+index 0033488..f9e266b 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-common/pom.xml
+@@ -85,6 +85,17 @@
+           </execution>
+         </executions>
+       </plugin>
++      <plugin>
++        <artifactId>maven-jar-plugin</artifactId>
++        <executions>
++          <execution>
++            <goals>
++              <goal>test-jar</goal>
++            </goals>
++            <phase>test-compile</phase>
++          </execution>
++        </executions>
++      </plugin>
+     </plugins>
+   </build>
+ </project>
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+index ea0fd41..f0b7848 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+@@ -63,6 +63,12 @@
+       <type>test-jar</type>
+       <scope>test</scope>
+     </dependency>
++    <dependency>
++      <groupId>org.apache.hadoop</groupId>
++      <artifactId>hadoop-mapreduce-client-common</artifactId>
++      <type>test-jar</type>
++      <scope>test</scope>
++    </dependency>
+   </dependencies>
+ 
+   <build>
+@@ -82,14 +88,7 @@
+             <include>**/buffer/Test*.java</include>
+             <include>**/handlers/Test*.java</include>
+             <include>**/serde/Test*.java</include>
+-            <include>**/combinertest/*Test.java</include>
+-            <include>**/compresstest/*Test.java</include>
+-            <include>**/nonsorttest/*Test.java</include>
+-            <include>**/kvtest/*Test.java</include>
+           </includes>
+-          <additionalClasspathElements>
+-            <additionalClasspathElement>${basedir}/../hadoop-mapreduce-client-common/target/classes</additionalClasspathElement>
+-          </additionalClasspathElements>
+         </configuration>
+       </plugin>
+     </plugins>
+@@ -184,6 +183,28 @@
+               </execution>
+             </executions>
+           </plugin>
++          <plugin>
++            <groupId>org.apache.maven.plugins</groupId>
++            <artifactId>maven-surefire-plugin</artifactId>
++            <configuration>
++              <properties>
++                <property>
++                  <name>listener</name>
++                  <value>org.apache.hadoop.test.TimedOutTestsListener</value>
++                </property>
++              </properties>
++              <includes>
++                <include>**/TestTaskContext.java</include>
++                <include>**/buffer/Test*.java</include>
++                <include>**/handlers/Test*.java</include>
++                <include>**/serde/Test*.java</include>
++                <include>**/combinertest/*Test.java</include>
++                <include>**/compresstest/*Test.java</include>
++                <include>**/nonsorttest/*Test.java</include>
++                <include>**/kvtest/*Test.java</include>
++              </includes>
++            </configuration>
++          </plugin>
+         </plugins>
+       </build>
+     </profile>
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index 9315ade..679f031 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -148,6 +148,12 @@
+       </dependency>
+       <dependency>
+         <groupId>org.apache.hadoop</groupId>
++        <artifactId>hadoop-mapreduce-client-common</artifactId>
++        <version>${project.version}</version>
++        <type>test-jar</type>
++      </dependency>
++      <dependency>
++        <groupId>org.apache.hadoop</groupId>
+         <artifactId>hadoop-yarn-api</artifactId>
+         <version>${project.version}</version>
+       </dependency>
+-- 
+1.7.9.5
+

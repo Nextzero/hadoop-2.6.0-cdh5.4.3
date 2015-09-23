@@ -1,0 +1,35 @@
+From cc4f80a74d874bd54a7f127869b659bc6aedb26d Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Tue, 12 Mar 2013 07:14:48 -0700
+Subject: [PATCH 043/596] MR1: Remove stripping of scheme, authority from
+ submit dir in support of viewfs.
+
+  Reason: bug
+  Author: Alejandro Abdelnur
+  Ref: CDH-10922
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-0.20-security-patches@1077795 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 6dc476279ad119495993caad3b0648f1b20287f0)
+(cherry picked from commit 6ac85e8e78e60cb723d84beba4391bb05de91e18)
+(cherry picked from commit ce3bb19673508cc00c983f7cde2dae0c9bf4e9f9)
+(cherry picked from commit ca5f588f673c661dd85e5ab4a68250d36c8bb948)
+(cherry picked from commit b25905cac219362d868ac5b73643c78f66855e5f)
+---
+ .../mapred/org/apache/hadoop/mapred/JobClient.java |    1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+index 2e2b21e..06fd369 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+@@ -779,7 +779,6 @@ private void copyAndConfigureFiles(JobConf job, Path submitJobDir,
+           " that directory");
+     }
+     submitJobDir = fs.makeQualified(submitJobDir);
+-    submitJobDir = new Path(submitJobDir.toUri().getPath());
+     FsPermission mapredSysPerms = new FsPermission(JobSubmissionFiles.JOB_DIR_PERMISSION);
+     FileSystem.mkdirs(fs, submitJobDir, mapredSysPerms);
+     Path filesDir = JobSubmissionFiles.getJobDistCacheFiles(submitJobDir);
+-- 
+1.7.9.5
+

@@ -1,0 +1,100 @@
+From 989a933c186fa9484055e73dd58ba70259d4bb15 Mon Sep 17 00:00:00 2001
+From: Jason Lowe <jlowe@apache.org>
+Date: Fri, 6 Feb 2015 20:39:01 +0000
+Subject: [PATCH 483/596] YARN-3089. LinuxContainerExecutor does not handle
+ file arguments to deleteAsUser. Contributed by Eric
+ Payne (cherry picked from commit
+ 4c484320b430950ce195cfad433a97099e117bad)
+
+(cherry picked from commit 83449a4e4d1e3d03ac782d36af8bee596f64fabe)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../container-executor/impl/container-executor.c   |   26 ++++++++++++++++----
+ .../test/test-container-executor.c                 |   21 ++++++++++++++++
+ 2 files changed, 42 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/native/container-executor/impl/container-executor.c b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/native/container-executor/impl/container-executor.c
+index 9af9161..fca7470 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/native/container-executor/impl/container-executor.c
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/native/container-executor/impl/container-executor.c
+@@ -1354,21 +1354,37 @@ int delete_as_user(const char *user,
+                    const char *subdir,
+                    char* const* baseDirs) {
+   int ret = 0;
+-
++  int subDirEmptyStr = (subdir == NULL || subdir[0] == 0);
++  int needs_tt_user = subDirEmptyStr;
+   char** ptr;
+ 
+   // TODO: No switching user? !!!!
+   if (baseDirs == NULL || *baseDirs == NULL) {
+-    return delete_path(subdir, strlen(subdir) == 0);
++    return delete_path(subdir, needs_tt_user);
+   }
+   // do the delete
+   for(ptr = (char**)baseDirs; *ptr != NULL; ++ptr) {
+-    char* full_path = concatenate("%s/%s", "user subdir", 2,
+-                              *ptr, subdir);
++    char* full_path = NULL;
++    struct stat sb;
++    if (stat(*ptr, &sb) != 0) {
++      fprintf(LOGFILE, "Could not stat %s\n", *ptr);
++      return -1;
++    }
++    if (!S_ISDIR(sb.st_mode)) {
++      if (!subDirEmptyStr) {
++        fprintf(LOGFILE, "baseDir \"%s\" is a file and cannot contain subdir \"%s\".\n", *ptr, subdir);
++        return -1;
++      }
++      full_path = strdup(*ptr);
++      needs_tt_user = 0;
++    } else {
++      full_path = concatenate("%s/%s", "user subdir", 2, *ptr, subdir);
++    }
++
+     if (full_path == NULL) {
+       return -1;
+     }
+-    int this_ret = delete_path(full_path, strlen(subdir) == 0);
++    int this_ret = delete_path(full_path, needs_tt_user);
+     free(full_path);
+     // delete as much as we can, but remember the error
+     if (this_ret != 0) {
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/native/container-executor/test/test-container-executor.c b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/native/container-executor/test/test-container-executor.c
+index e9ac234..7f08e06 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/native/container-executor/test/test-container-executor.c
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/native/container-executor/test/test-container-executor.c
+@@ -382,7 +382,28 @@ void test_delete_user() {
+   if (mkdirs(app_dir, 0700) != 0) {
+     exit(1);
+   }
++
+   char buffer[100000];
++  sprintf(buffer, "%s/test.cfg", app_dir);
++  if (write_config_file(buffer) != 0) {
++    exit(1);
++  }
++
++  char * dirs[] = {buffer, 0};
++  int ret = delete_as_user(yarn_username, "file1" , dirs);
++  if (ret == 0) {
++    printf("FAIL: if baseDir is a file, delete_as_user should fail if a subdir is also passed\n");
++    exit(1);
++  }
++
++  // Pass a file to delete_as_user in the baseDirs parameter. The file should
++  // be deleted.
++  ret = delete_as_user(yarn_username, "" , dirs);
++  if (ret != 0) {
++    printf("FAIL: delete_as_user could not delete baseDir when baseDir is a file: return code is %d\n", ret);
++    exit(1);
++  }
++
+   sprintf(buffer, "%s/local-1/usercache/%s", TEST_ROOT, yarn_username);
+   if (access(buffer, R_OK) != 0) {
+     printf("FAIL: directory missing before test\n");
+-- 
+1.7.9.5
+

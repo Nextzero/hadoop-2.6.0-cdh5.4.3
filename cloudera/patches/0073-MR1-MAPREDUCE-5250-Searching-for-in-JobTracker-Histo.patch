@@ -1,0 +1,33 @@
+From 2b6e1ae31653ae81046498e6147a56415967f8cc Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Mon, 3 Jun 2013 12:57:59 -0700
+Subject: [PATCH 073/596] MR1: MAPREDUCE-5250 Searching for ';' in JobTracker
+ History throws ArrayOutOfBoundException. (kkambatl
+ via tucu)
+
+Reason: CDH-12176 (Customer request)
+(cherry picked from commit 4ad5b8337426ecb7046926f82aac2030f4a4fc85)
+(cherry picked from commit f0ff2208a65499b771acfcc30e79427ceb83ab81)
+(cherry picked from commit debd9ca7a163bd93570e4dcfdc16a9851f800f0b)
+(cherry picked from commit 5ca261068319727b7b504c40f76d67add05a42b4)
+---
+ .../src/webapps/job/jobhistory.jsp                 |    3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/webapps/job/jobhistory.jsp b/hadoop-mapreduce1-project/src/webapps/job/jobhistory.jsp
+index 5fba471..0ee5e48 100644
+--- a/hadoop-mapreduce1-project/src/webapps/job/jobhistory.jsp
++++ b/hadoop-mapreduce1-project/src/webapps/job/jobhistory.jsp
+@@ -84,7 +84,8 @@ window.location.href = url;
+ 
+     final String soughtDate = dateSplit.length > 1 ? dateSplit[1] : "";
+ 
+-    final String parts[] = dateSplit[0].split(":");
++    final String parts[] = dateSplit.length >= 1 ? dateSplit[0].split(":")
++                                                 : new String[0];
+ 
+     final String user = (parts.length >= 1)
+                         ? parts[0].toLowerCase()
+-- 
+1.7.9.5
+

@@ -1,0 +1,25 @@
+From e3b3f2ff5735e35c1c4b903222a9904d70308e5d Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Thu, 3 Oct 2013 18:24:29 -0700
+Subject: [PATCH 105/596] MR1: CLOUDERA-BUILD. Update
+ TestDelegationTokenRenewal to use new location of
+ FakeRenewer provider (CDH-14653)
+
+(cherry picked from commit 1439d69bc8e53c8237a3d6b711cc0f5185921c3c)
+(cherry picked from commit 634c04b6efaca60e31783178bf655d951aac8109)
+(cherry picked from commit 901f3e421c4649392c3875de745eb007d443e62a)
+---
+ .../org.apache.hadoop.security.token.TokenRenewer  |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/test/META-INF/services/org.apache.hadoop.security.token.TokenRenewer b/hadoop-mapreduce1-project/src/test/META-INF/services/org.apache.hadoop.security.token.TokenRenewer
+index b39f5a9..0cc2a53 100644
+--- a/hadoop-mapreduce1-project/src/test/META-INF/services/org.apache.hadoop.security.token.TokenRenewer
++++ b/hadoop-mapreduce1-project/src/test/META-INF/services/org.apache.hadoop.security.token.TokenRenewer
+@@ -1,2 +1,2 @@
+-org.apache.hadoop.tools.TestDelegationTokenFetcher$FakeRenewer
++org.apache.hadoop.tools.FakeRenewer
+ org.apache.hadoop.mapreduce.security.token.TestDelegationTokenRenewal$Renewer
+-- 
+1.7.9.5
+

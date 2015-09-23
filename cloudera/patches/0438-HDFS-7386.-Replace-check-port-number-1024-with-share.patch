@@ -1,0 +1,108 @@
+From 7825f1a1a6158911ac7bee0f35a4632468d0ea81 Mon Sep 17 00:00:00 2001
+From: cnauroth <cnauroth@apache.org>
+Date: Fri, 14 Nov 2014 16:43:09 -0800
+Subject: [PATCH 438/596] HDFS-7386. Replace check "port number < 1024" with
+ shared isPrivilegedPort method. Contributed by
+ Yongjun Zhang.
+
+(cherry picked from commit 1925e2a4ae78ef4178393848b4d1d71b0f4a4709)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../org/apache/hadoop/security/SecurityUtil.java   |   15 +++++++++++++++
+ .../datatransfer/sasl/SaslDataTransferClient.java  |    3 ++-
+ .../datatransfer/sasl/SaslDataTransferServer.java  |    3 ++-
+ .../server/datanode/SecureDataNodeStarter.java     |    3 ++-
+ 4 files changed, 21 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/SecurityUtil.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/SecurityUtil.java
+index b5bf26f..4f05a3c 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/SecurityUtil.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/SecurityUtil.java
+@@ -619,4 +619,19 @@ public static void setAuthenticationMethod(
+     conf.set(HADOOP_SECURITY_AUTHENTICATION,
+              authenticationMethod.toString().toLowerCase(Locale.ENGLISH));
+   }
++
++  /*
++   * Check if a given port is privileged.
++   * The ports with number smaller than 1024 are treated as privileged ports in
++   * unix/linux system. For other operating systems, use this method with care.
++   * For example, Windows doesn't have the concept of privileged ports.
++   * However, it may be used at Windows client to check port of linux server.
++   * 
++   * @param port the port number
++   * @return true for privileged ports, false otherwise
++   * 
++   */
++  public static boolean isPrivilegedPort(final int port) {
++    return port < 1024;
++  }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/sasl/SaslDataTransferClient.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/sasl/SaslDataTransferClient.java
+index 98cdcfe..00b131f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/sasl/SaslDataTransferClient.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/sasl/SaslDataTransferClient.java
+@@ -52,6 +52,7 @@
+ import org.apache.hadoop.hdfs.security.token.block.BlockTokenIdentifier;
+ import org.apache.hadoop.hdfs.security.token.block.DataEncryptionKey;
+ import org.apache.hadoop.security.SaslPropertiesResolver;
++import org.apache.hadoop.security.SecurityUtil;
+ import org.apache.hadoop.security.UserGroupInformation;
+ import org.apache.hadoop.security.token.Token;
+ import org.slf4j.Logger;
+@@ -245,7 +246,7 @@ private IOStreamPair send(InetAddress addr, OutputStream underlyingOut,
+         "SASL client skipping handshake in unsecured configuration for "
+         + "addr = {}, datanodeId = {}", addr, datanodeId);
+       return null;
+-    } else if (datanodeId.getXferPort() < 1024) {
++    } else if (SecurityUtil.isPrivilegedPort(datanodeId.getXferPort())) {
+       LOG.debug(
+         "SASL client skipping handshake in secured configuration with "
+         + "privileged port for addr = {}, datanodeId = {}", addr, datanodeId);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/sasl/SaslDataTransferServer.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/sasl/SaslDataTransferServer.java
+index 3fa7727..1d2b30b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/sasl/SaslDataTransferServer.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocol/datatransfer/sasl/SaslDataTransferServer.java
+@@ -50,6 +50,7 @@
+ import org.apache.hadoop.hdfs.security.token.block.BlockTokenIdentifier;
+ import org.apache.hadoop.hdfs.server.datanode.DNConf;
+ import org.apache.hadoop.security.SaslPropertiesResolver;
++import org.apache.hadoop.security.SecurityUtil;
+ import org.apache.hadoop.security.UserGroupInformation;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+@@ -112,7 +113,7 @@ public IOStreamPair receive(Peer peer, OutputStream underlyingOut,
+         "SASL server skipping handshake in unsecured configuration for "
+         + "peer = {}, datanodeId = {}", peer, datanodeId);
+       return new IOStreamPair(underlyingIn, underlyingOut);
+-    } else if (xferPort < 1024) {
++    } else if (SecurityUtil.isPrivilegedPort(xferPort)) {
+       LOG.debug(
+         "SASL server skipping handshake in secured configuration for "
+         + "peer = {}, datanodeId = {}", peer, datanodeId);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/SecureDataNodeStarter.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/SecureDataNodeStarter.java
+index 477b7f6..f0f83e4 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/SecureDataNodeStarter.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/SecureDataNodeStarter.java
+@@ -29,6 +29,7 @@
+ import org.apache.hadoop.hdfs.server.common.HdfsServerConstants;
+ import org.apache.hadoop.http.HttpConfig;
+ import org.apache.hadoop.http.HttpServer2;
++import org.apache.hadoop.security.SecurityUtil;
+ import org.apache.hadoop.security.UserGroupInformation;
+ import org.mortbay.jetty.Connector;
+ 
+@@ -110,7 +111,7 @@ public static SecureResources getSecureResources(Configuration conf)
+               + ss.getLocalPort());
+     }
+ 
+-    if (ss.getLocalPort() > 1023 && isSecure) {
++    if (!SecurityUtil.isPrivilegedPort(ss.getLocalPort()) && isSecure) {
+       throw new RuntimeException(
+         "Cannot start secure datanode with unprivileged RPC ports");
+     }
+-- 
+1.7.9.5
+

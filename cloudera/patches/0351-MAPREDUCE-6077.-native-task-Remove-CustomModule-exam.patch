@@ -1,0 +1,440 @@
+From ce9ea930896a7d67b9e4f3bfaa63895b234c5b01 Mon Sep 17 00:00:00 2001
+From: Sean Zhong <clockfly@gmail.com>
+Date: Sat, 6 Sep 2014 11:46:07 +0800
+Subject: [PATCH 351/596] MAPREDUCE-6077. native-task: Remove CustomModule
+ examples in nativetask (seanzhong)
+
+(cherry picked from commit 52a8b4db92a35598006103c59a2ff93afc5312ee)
+(cherry picked from commit a0d728d57ebde8a872800bb1640e2d5b8913f6eb)
+---
+ .../CHANGES.MAPREDUCE-2841.txt                     |    1 +
+ .../sdk/example/CustomModule/README.txt            |    1 -
+ .../sdk/example/CustomModule/pom.xml               |  131 --------------------
+ .../nativetask/platform/custom/CustomPlatform.java |   39 ------
+ .../nativetask/serde/custom/CustomWritable.java    |   75 -----------
+ .../serde/custom/CustomWritableSerializer.java     |   33 -----
+ .../src/main/native/src/CustomComparator.cpp       |   88 -------------
+ 7 files changed, 1 insertion(+), 367 deletions(-)
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/README.txt
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/pom.xml
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/platform/custom/CustomPlatform.java
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/serde/custom/CustomWritable.java
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/serde/custom/CustomWritableSerializer.java
+ delete mode 100644 hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/native/src/CustomComparator.cpp
+
+diff --git a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+index 539e7be..cfc9412 100644
+--- a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
++++ b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+@@ -23,3 +23,4 @@ MAPREDUCE-6055. native-task: findbugs, interface annotations, and other misc cle
+ MAPREDUCE-6067. native-task: fix some counter issues (Binglin Chang)
+ MAPREDUCE-6069. native-task: Lint/style fixes and removal of unused code (todd)
+ MAPREDUCE-6074. native-task: fix release audit, javadoc, javac warnings (todd)
++MAPREDUCE-6077. native-task: Remove CustomModule examples in nativetask (seanzhong)
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/README.txt b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/README.txt
+deleted file mode 100644
+index 0ad6f1e..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/README.txt
++++ /dev/null
+@@ -1 +0,0 @@
+-This project is depend on hadoop and hadoop-nativetask, so in order to complete the build, you have to specify the hadoop dir first.
+\ No newline at end of file
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/pom.xml
+deleted file mode 100644
+index 5bf67c7..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/pom.xml
++++ /dev/null
+@@ -1,131 +0,0 @@
+-<?xml version="1.0"?>
+-<!-- Licensed under the Apache License, Version 2.0 (the "License"); you 
+-  may not use this file except in compliance with the License. You may obtain 
+-  a copy of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless 
+-  required by applicable law or agreed to in writing, software distributed 
+-  under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES 
+-  OR CONDITIONS OF ANY KIND, either express or implied. See the License for 
+-  the specific language governing permissions and limitations under the License. 
+-  See accompanying LICENSE file. -->
+-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+-  xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+-                      http://maven.apache.org/xsd/maven-4.0.0.xsd">
+-  <modelVersion>4.0.0</modelVersion>
+-  <groupId>org.apache.hadoop</groupId>
+-  <artifactId>nativetask-sdk</artifactId>
+-  <version>2.2.0</version>
+-  <name>nativetask-sdk</name>
+-
+-  <properties>
+-  </properties>
+-
+-  <dependencies>
+-    <dependency>
+-      <groupId>org.apache.hadoop</groupId>
+-      <artifactId>hadoop-mapreduce-client-nativetask</artifactId>
+-      <version>2.2.0</version>
+-    </dependency>
+-  </dependencies>
+-
+-  <build>
+-    <plugins>
+-      <plugin>
+-        <groupId>org.apache.maven.plugins</groupId>
+-        <artifactId>maven-jar-plugin</artifactId>
+-      </plugin>
+-      <plugin>
+-        <groupId>org.apache.maven.plugins</groupId>
+-        <artifactId>maven-surefire-plugin</artifactId>
+-        <configuration>
+-        </configuration>
+-      </plugin>
+-    </plugins>
+-  </build>
+-
+-  <profiles>
+-    <profile>
+-      <id>native</id>
+-      <activation>
+-        <activeByDefault>false</activeByDefault>
+-      </activation>
+-      <build>
+-        <plugins>
+-          <plugin>
+-            <groupId>org.apache.maven.plugins</groupId>
+-            <artifactId>maven-enforcer-plugin</artifactId>
+-            <executions>
+-              <execution>
+-                <id>enforce-os</id>
+-                <goals>
+-                  <goal>enforce</goal>
+-                </goals>
+-                <configuration>
+-                  <rules>
+-                    <requireOS>
+-                      <family>mac</family>
+-                      <family>unix</family>
+-                      <message>native build only supported on Mac or
+-                        Unix</message>
+-                    </requireOS>
+-                  </rules>
+-                  <fail>true</fail>
+-                </configuration>
+-              </execution>
+-            </executions>
+-          </plugin>
+-          <plugin>
+-            <groupId>org.apache.maven.plugins</groupId>
+-            <artifactId>maven-antrun-plugin</artifactId>
+-            <executions>
+-              <execution>
+-                <id>make</id>
+-                <phase>compile</phase>
+-                <goals>
+-                  <goal>run</goal>
+-                </goals>
+-                <configuration>
+-                  <target>
+-                    <exec executable="sh" dir="${basedir}/src/main/native"
+-                      failonerror="true">
+-                      <arg value="${basedir}/src/main/native/build.sh" />
+-                      <arg value="all" />
+-                    </exec>
+-                    <copy toDir="${project.build.directory}/native/target/usr/local/lib" overwrite="true">
+-                      <fileset dir="${basedir}/src/main/native/.libs">
+-                        <exclude name="**/*.o"/>
+-                        <exclude name="nttest"/>
+-                      </fileset>
+-                    </copy>
+-                    <copy todir="${project.build.directory}/${project.artifactId}-${project.version}/lib/native/sdk/" overwrite="true">
+-                    	<fileset dir="${basedir}/src/main/native/.libs">
+-                    	  <exclude name="**/*.o"/>
+-                    	  <exclude name="nttest"/>
+-                    	</fileset>
+-                    	<fileset file="${basedir}/src/main/native/src/NativeTask.h" />
+-                    </copy>
+-     			  </target>
+-                </configuration>
+-              </execution>
+-              <execution>
+-                <id>make-clean</id>
+-                <phase>clean</phase>
+-                <goals>
+-                  <goal>run</goal>
+-                </goals>
+-                <configuration>
+-                  <target>
+-                    <exec executable="sh" dir="${basedir}/src/main/native"
+-                      failonerror="true">
+-                      <arg value="${basedir}/src/main/native/build.sh" />
+-                      <arg value="clean" />
+-                    </exec>
+-                  </target>
+-                </configuration>
+-              </execution>
+-            </executions>
+-          </plugin>
+-        </plugins>
+-      </build>
+-    </profile>
+-  </profiles>
+-</project>
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/platform/custom/CustomPlatform.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/platform/custom/CustomPlatform.java
+deleted file mode 100644
+index 1d67f43..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/platform/custom/CustomPlatform.java
++++ /dev/null
+@@ -1,39 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.hadoop.nativetask.platform.custom;
+-
+-import java.io.IOException;
+-
+-import org.apache.hadoop.mapred.nativetask.Platform;
+-import org.apache.hadoop.nativetask.serde.custom.CustomWritable;
+-import org.apache.hadoop.nativetask.serde.custom.CustomWritableSerializer;
+-
+-public class CustomPlatform extends Platform{
+-
+-  @Override
+-  public void init() throws IOException {
+-    registerKey(CustomWritable.class.getName(), 
+-        CustomWritableSerializer.class);
+-  }
+-
+-  @Override
+-  public String name() {
+-    return "CustomPlatform";
+-  }
+-
+-}
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/serde/custom/CustomWritable.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/serde/custom/CustomWritable.java
+deleted file mode 100644
+index 28162f9..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/serde/custom/CustomWritable.java
++++ /dev/null
+@@ -1,75 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.hadoop.nativetask.serde.custom;
+-
+-import java.io.DataInput;
+-import java.io.DataOutput;
+-import java.io.IOException;
+-
+-import org.apache.hadoop.io.WritableComparable;
+-
+-public class CustomWritable implements WritableComparable<CustomWritable>{
+-  
+-  private int Id_a;
+-  private long Id_b;
+-
+-  public CustomWritable() {
+-    this.Id_a = 0;
+-    this.Id_b = 0;
+-  }
+-  
+-  public CustomWritable(int a, long b){
+-    this.Id_a = a;
+-    this.Id_b = b;
+-  }
+-  
+-  @Override
+-  public void readFields(DataInput in) throws IOException {
+-    Id_a = in.readInt();
+-    Id_b = in.readLong();
+-  }
+-
+-  @Override
+-  public void write(DataOutput out) throws IOException {
+-    out.writeInt(Id_a);
+-    out.writeLong(Id_b);
+-  }
+-
+-  @Override
+-  public int compareTo(CustomWritable that) {
+-    if(Id_a > that.Id_a){
+-      return 1;
+-    }
+-    if(Id_a < that.Id_a){
+-      return -1;
+-    }
+-    if(Id_b > that.Id_b){
+-      return 1;
+-    }
+-    if(Id_b < that.Id_b){
+-      return -1;
+-    }
+-    return 0;
+-  }
+-  
+-  @Override
+-  public String toString() {
+-    return Id_a + "\t" + Id_b;
+-  }
+-
+-}
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/serde/custom/CustomWritableSerializer.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/serde/custom/CustomWritableSerializer.java
+deleted file mode 100644
+index 4424a2e..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/java/org/apache/hadoop/nativetask/serde/custom/CustomWritableSerializer.java
++++ /dev/null
+@@ -1,33 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-package org.apache.hadoop.nativetask.serde.custom;
+-
+-import java.io.IOException;
+-
+-import org.apache.hadoop.io.Writable;
+-import org.apache.hadoop.mapred.nativetask.INativeComparable;
+-import org.apache.hadoop.mapred.nativetask.serde.DefaultSerializer;
+-
+-public class CustomWritableSerializer extends DefaultSerializer implements
+-  INativeComparable{
+-
+-  @Override
+-  public int getLength(Writable w) throws IOException {
+-    return 12;
+-  }
+-}
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/native/src/CustomComparator.cpp b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/native/src/CustomComparator.cpp
+deleted file mode 100644
+index c8aa21d..0000000
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/sdk/example/CustomModule/src/main/native/src/CustomComparator.cpp
++++ /dev/null
+@@ -1,88 +0,0 @@
+-/**
+- * Licensed to the Apache Software Foundation (ASF) under one
+- * or more contributor license agreements.  See the NOTICE file
+- * distributed with this work for additional information
+- * regarding copyright ownership.  The ASF licenses this file
+- * to you under the Apache License, Version 2.0 (the
+- * "License"); you may not use this file except in compliance
+- * with the License.  You may obtain a copy of the License at
+- *
+- *     http://www.apache.org/licenses/LICENSE-2.0
+- *
+- * Unless required by applicable law or agreed to in writing, software
+- * distributed under the License is distributed on an "AS IS" BASIS,
+- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+- * See the License for the specific language governing permissions and
+- * limitations under the License.
+- */
+-
+-#include <iostream>
+-#include "NativeTask.h"
+-
+-using namespace NativeTask;
+-
+-namespace Custom {
+-using namespace std;
+-
+-inline uint32_t bswap(uint32_t val) {
+-  __asm__("bswap %0" : "=r" (val) : "0" (val));
+-  return val;
+-}
+-
+-int32_t ReadInt(const char * src) {
+-  return (int32_t) bswap(*(uint32_t*) src);
+-}
+-
+-inline uint64_t bswap64(uint64_t val) {
+-#ifdef __X64
+-  __asm__("bswapq %0" : "=r" (val) : "0" (val));
+-#else
+-
+-  uint64_t lower = val & 0xffffffffU;
+-  uint32_t higher = (val >> 32) & 0xffffffffU;
+-
+-  lower = bswap(lower);
+-  higher = bswap(higher);
+-
+-  return (lower << 32) + higher;
+-
+-#endif
+-  return val;
+-}
+-
+-int64_t ReadLong(const char * src) {
+-  return (int64_t) bswap64(*(uint64_t*) src);
+-}
+-
+-int CustomComparator(const char * src, uint32_t srcLength, const char * dest,
+-    uint32_t destLength) {
+-  int32_t src_IDa = ReadInt(src);
+-  int64_t src_IDb = ReadLong(src+4);
+-  int32_t dest_IDa = ReadInt(dest);
+-  int64_t dest_IDb = ReadLong(dest+4);
+-  if(src_IDa > dest_IDa){
+-    return 1;
+-  }
+-  if(src_IDa < dest_IDa){
+-    return -1;
+-  }
+-  if(src_IDb > dest_IDb){
+-    return 1;
+-  }
+-  if(src_IDb < dest_IDb){
+-    return -1;
+-  }
+-  return 0;
+-};
+-
+-DEFINE_NATIVE_LIBRARY(Custom) {
+-  REGISTER_FUNCTION(CustomComparator,Custom);
+-}
+-
+-}
+-
+-
+-
+-
+-
+-
+-- 
+1.7.9.5
+

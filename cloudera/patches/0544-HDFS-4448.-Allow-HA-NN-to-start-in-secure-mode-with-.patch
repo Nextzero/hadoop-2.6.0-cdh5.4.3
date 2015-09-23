@@ -1,0 +1,38 @@
+From 9a604830c039de3f529bbae10296f269c0693585 Mon Sep 17 00:00:00 2001
+From: Arun Suresh <asuresh@apache.org>
+Date: Thu, 23 Apr 2015 01:42:24 -0700
+Subject: [PATCH 544/596] HDFS-4448. Allow HA NN to start in secure mode with
+ wildcard address configured (atm via asuresh)
+
+(cherry picked from commit baf8bc6c488de170d2caf76d9fa4c99faaa8f1a6)
+(cherry picked from commit 889b92fa403f5bd82b20eb2333110c5793d28a34)
+---
+ .../main/java/org/apache/hadoop/hdfs/DFSUtil.java  |    9 +--------
+ 1 file changed, 1 insertion(+), 8 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSUtil.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSUtil.java
+index 151028f..6c7ad24 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSUtil.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSUtil.java
+@@ -1166,17 +1166,10 @@ public static String getHttpClientScheme(Configuration conf) {
+    */
+   @VisibleForTesting
+   static String substituteForWildcardAddress(String configuredAddress,
+-    String defaultHost) throws IOException {
++    String defaultHost) {
+     InetSocketAddress sockAddr = NetUtils.createSocketAddr(configuredAddress);
+-    InetSocketAddress defaultSockAddr = NetUtils.createSocketAddr(defaultHost
+-        + ":0");
+     final InetAddress addr = sockAddr.getAddress();
+     if (addr != null && addr.isAnyLocalAddress()) {
+-      if (UserGroupInformation.isSecurityEnabled() &&
+-          defaultSockAddr.getAddress().isAnyLocalAddress()) {
+-        throw new IOException("Cannot use a wildcard address with security. " +
+-            "Must explicitly set bind address for Kerberos");
+-      }
+       return defaultHost + ":" + sockAddr.getPort();
+     } else {
+       return configuredAddress;
+-- 
+1.7.9.5
+

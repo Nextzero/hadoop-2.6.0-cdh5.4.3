@@ -1,0 +1,40 @@
+From 697e99a14ef55701ce930399c555132c19794024 Mon Sep 17 00:00:00 2001
+From: Stephen Chu <schu@cloudera.com>
+Date: Wed, 4 Feb 2015 14:36:14 -0800
+Subject: [PATCH 358/596] CLOUDERA-BUILD. Update cdh-root version for
+ packaging job.
+
+---
+ .../cloudera/maven-packaging/pom.xml               |    2 +-
+ pom.xml                                            |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml
+index 2afc39b..64ddbb2 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml
+@@ -21,7 +21,7 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>cdh-root</artifactId>
+-    <version>5.4.0-SNAPSHOT</version>
++    <version>5.4.0-hadoop-rebase</version>
+     <relativePath>../../../../../pom.xml</relativePath>
+   </parent>
+   
+diff --git a/pom.xml b/pom.xml
+index 204c39f..4fedc57 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -19,7 +19,7 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>cdh-root</artifactId>
+-    <version>5.4.0-SNAPSHOT</version>
++    <version>5.4.0-hadoop-rebase</version>
+   </parent>
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-main</artifactId>
+-- 
+1.7.9.5
+

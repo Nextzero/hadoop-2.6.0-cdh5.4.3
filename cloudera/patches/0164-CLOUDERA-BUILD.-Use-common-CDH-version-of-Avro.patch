@@ -1,0 +1,29 @@
+From 3de802872b785fa705b88b809a2b759117fb6b51 Mon Sep 17 00:00:00 2001
+From: Tom White <tom@cloudera.com>
+Date: Fri, 13 Dec 2013 14:18:58 +0000
+Subject: [PATCH 164/596] CLOUDERA-BUILD. Use common CDH version of Avro.
+
+(cherry picked from commit bc06e2543a828201f410a807ee88fea9f089ec4a)
+(cherry picked from commit bf1ab18dad7c4f6f523912b3e0697a89a6c48df7)
+(cherry picked from commit 39e6f8384ad615c667d3dfa14f016a84316ae554)
+(cherry picked from commit 6f49f235ff29bd9b7c50687fdf4ce125b4665f4b)
+---
+ hadoop-project/pom.xml |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index 6cf6c0c..43539fa 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -56,7 +56,7 @@
+     <java.security.egd>file:///dev/urandom</java.security.egd>
+ 
+     <!-- avro version -->
+-    <avro.version>1.7.4</avro.version>
++    <avro.version>${cdh.avro.version}</avro.version>
+ 
+     <!-- jersey version -->
+     <jersey.version>1.9</jersey.version>
+-- 
+1.7.9.5
+

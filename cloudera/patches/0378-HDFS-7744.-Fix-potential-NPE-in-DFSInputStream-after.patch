@@ -1,0 +1,91 @@
+From 0a1f94703ca5ffa2f55ab59fe89b67f07f7ae5e3 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Mon, 9 Feb 2015 20:16:41 -0800
+Subject: [PATCH 378/596] HDFS-7744. Fix potential NPE in DFSInputStream after
+ setDropBehind or setReadahead is called (cmccabe)
+
+(cherry picked from commit a9dc5cd7069f721e8c55794b877026ba02537167)
+(cherry picked from commit 1465393d14b6d41c81d9913929d3f4a549cd3293)
+---
+ .../org/apache/hadoop/hdfs/DFSInputStream.java     |   11 ++-----
+ .../hdfs/server/datanode/TestCachingStrategy.java  |   30 ++++++++++++++++++++
+ 2 files changed, 33 insertions(+), 8 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+index ff65ebc..26c3113 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+@@ -543,10 +543,7 @@ private synchronized DatanodeInfo blockSeekTo(long target) throws IOException {
+     }
+ 
+     // Will be getting a new BlockReader.
+-    if (blockReader != null) {
+-      blockReader.close();
+-      blockReader = null;
+-    }
++    closeCurrentBlockReader();
+ 
+     //
+     // Connect to best DataNode for desired Block, with potential offset
+@@ -642,10 +639,7 @@ public void accept(ByteBuffer k, Object v) {
+           "unreleased ByteBuffers allocated by read().  " +
+           "Please release " + builder.toString() + ".");
+     }
+-    if (blockReader != null) {
+-      blockReader.close();
+-      blockReader = null;
+-    }
++    closeCurrentBlockReader();
+     super.close();
+     closed = true;
+   }
+@@ -1556,6 +1550,7 @@ private synchronized void closeCurrentBlockReader() {
+       DFSClient.LOG.error("error closing blockReader", e);
+     }
+     blockReader = null;
++    blockEnd = -1;
+   }
+ 
+   @Override
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestCachingStrategy.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestCachingStrategy.java
+index 542daa9..4ad677c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestCachingStrategy.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestCachingStrategy.java
+@@ -369,4 +369,34 @@ public void testNoFadviseAfterWriteThenRead() throws Exception {
+       }
+     }
+   }
++
++  @Test(timeout=120000)
++  public void testSeekAfterSetDropBehind() throws Exception {
++    // start a cluster
++    LOG.info("testSeekAfterSetDropBehind");
++    Configuration conf = new HdfsConfiguration();
++    MiniDFSCluster cluster = null;
++    String TEST_PATH = "/test";
++    int TEST_PATH_LEN = MAX_TEST_FILE_LEN;
++    try {
++      cluster = new MiniDFSCluster.Builder(conf).numDataNodes(1)
++          .build();
++      cluster.waitActive();
++      FileSystem fs = cluster.getFileSystem();
++      createHdfsFile(fs, new Path(TEST_PATH), TEST_PATH_LEN, false);
++      // verify that we can seek after setDropBehind
++      FSDataInputStream fis = fs.open(new Path(TEST_PATH));
++      try {
++        Assert.assertTrue(fis.read() != -1); // create BlockReader
++        fis.setDropBehind(false); // clear BlockReader
++        fis.seek(2); // seek
++      } finally {
++        fis.close();
++      }
++    } finally {
++      if (cluster != null) {
++        cluster.shutdown();
++      }
++    }
++  }
+ }
+-- 
+1.7.9.5
+

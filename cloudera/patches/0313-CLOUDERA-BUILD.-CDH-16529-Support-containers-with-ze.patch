@@ -1,0 +1,250 @@
+From 1ee995294e61bd5d8ec806faa8ececf285b16c74 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Fri, 3 Jan 2014 13:50:58 -0800
+Subject: [PATCH 313/596] CLOUDERA-BUILD. CDH-16529 Support containers with
+ zero CPU or MEM when cgroups and memory monitoring
+ is enabled
+
+(cherry picked from commit c33e9e44c7cb52d055481c8a5cb2bfc3b5feea34)
+(cherry picked from commit 0e5e45ce76bab505f1033646c7de707b7e27f61c)
+(cherry picked from commit 20e993ac67c33959b8c3af1517f6f3ef10c40258)
+
+Conflicts:
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/util/CgroupsLCEResourcesHandler.java
+---
+ .../containermanager/container/ContainerImpl.java  |    4 +
+ .../util/CgroupsLCEResourcesHandler.java           |   14 +++-
+ ...ContainerMemoryCapabilitiesAbsoluteMinimum.java |   83 ++++++++++++++++++++
+ ...estContainerCpuCapabilitiesAbsoluteMinimum.java |   68 ++++++++++++++++
+ 4 files changed, 165 insertions(+), 4 deletions(-)
+ create mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainerMemoryCapabilitiesAbsoluteMinimum.java
+ create mode 100644 hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/util/TestContainerCpuCapabilitiesAbsoluteMinimum.java
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+index 40f6b09..2136116 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+@@ -484,6 +484,10 @@ private void sendLaunchEvent() {
+   @SuppressWarnings("unchecked") // dispatcher not typed
+   private void sendContainerMonitorStartEvent() {
+       long pmemBytes = getResource().getMemory() * 1024 * 1024L;
++     
++      // absolute minimum of 5MB for zero memory containers
++      pmemBytes = Math.max(pmemBytes, 5L * 1024 * 1024);
++
+       float pmemRatio = daemonConf.getFloat(
+           YarnConfiguration.NM_VMEM_PMEM_RATIO,
+           YarnConfiguration.DEFAULT_NM_VMEM_PMEM_RATIO);
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/util/CgroupsLCEResourcesHandler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/util/CgroupsLCEResourcesHandler.java
+index 63039d8..cd1861d 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/util/CgroupsLCEResourcesHandler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/util/CgroupsLCEResourcesHandler.java
+@@ -220,7 +220,8 @@ private String pathForCgroup(String controller, String groupName) {
+     return controllerPath + "/" + cgroupPrefix + "/" + groupName;
+   }
+ 
+-  private void createCgroup(String controller, String groupName)
++  @VisibleForTesting
++  void createCgroup(String controller, String groupName)
+         throws IOException {
+     String path = pathForCgroup(controller, groupName);
+ 
+@@ -233,7 +234,8 @@ private void createCgroup(String controller, String groupName)
+     }
+   }
+ 
+-  private void updateCgroup(String controller, String groupName, String param,
++  @VisibleForTesting
++  void updateCgroup(String controller, String groupName, String param,
+                             String value) throws IOException {
+     FileWriter f = null;
+     String path = pathForCgroup(controller, groupName);
+@@ -292,15 +294,19 @@ boolean deleteCgroup(String cgroupPath) {
+   /*
+    * Next three functions operate on all the resources we are enforcing.
+    */
+-
+-  private void setupLimits(ContainerId containerId,
++  // package private for testing purposes
++  public void setupLimits(ContainerId containerId,
+                            Resource containerResource) throws IOException {
+     String containerName = containerId.toString();
+ 
+     if (isCpuWeightEnabled()) {
+       int containerVCores = containerResource.getVirtualCores();
+       createCgroup(CONTROLLER_CPU, containerName);
++
+       int cpuShares = CPU_DEFAULT_WEIGHT * containerVCores;
++      // absolute minimum of 10 shares for zero CPU containers
++      cpuShares = Math.max(cpuShares, 10);
++
+       updateCgroup(CONTROLLER_CPU, containerName, "shares",
+           String.valueOf(cpuShares));
+       if (strictResourceUsageMode) {
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainerMemoryCapabilitiesAbsoluteMinimum.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainerMemoryCapabilitiesAbsoluteMinimum.java
+new file mode 100644
+index 0000000..674e9bb
+--- /dev/null
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/TestContainerMemoryCapabilitiesAbsoluteMinimum.java
+@@ -0,0 +1,83 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.yarn.server.nodemanager.containermanager.container;
++
++import junit.framework.Assert;
++import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
++import org.apache.hadoop.yarn.api.records.ApplicationId;
++import org.apache.hadoop.yarn.api.records.ContainerId;
++import org.apache.hadoop.yarn.api.records.Resource;
++import org.apache.hadoop.yarn.conf.YarnConfiguration;
++import org.apache.hadoop.yarn.event.Dispatcher;
++import org.apache.hadoop.yarn.event.EventHandler;
++import org.apache.hadoop.yarn.security.ContainerTokenIdentifier;
++import org.apache.hadoop.yarn.server.nodemanager.containermanager.monitor.ContainerStartMonitoringEvent;
++import org.apache.hadoop.yarn.server.nodemanager.metrics.NodeManagerMetrics;
++import org.apache.hadoop.yarn.server.utils.BuilderUtils;
++import org.junit.Test;
++import org.mockito.ArgumentCaptor;
++import org.mockito.Mockito;
++
++import java.net.InetAddress;
++
++public class TestContainerMemoryCapabilitiesAbsoluteMinimum {
++
++  @SuppressWarnings("unchecked")
++  private void testMinimumMemory(int memoryMbSet, long memoryBytesExpected)
++      throws Exception {
++    ContainerImpl.LaunchTransition lt = new ContainerImpl.LaunchTransition();
++
++    ArgumentCaptor<ContainerStartMonitoringEvent> captor =
++        ArgumentCaptor.forClass(ContainerStartMonitoringEvent.class);
++
++    Resource resource = Resource.newInstance(memoryMbSet, 1);
++
++    ApplicationId appId = ApplicationId.newInstance(0, 1);
++    ApplicationAttemptId appAttemptID =
++        ApplicationAttemptId.newInstance(appId, 0);
++    ContainerId containerId = ContainerId.newInstance(appAttemptID, 1);
++
++    Dispatcher mockDispatcher = Mockito.mock(Dispatcher.class);
++    EventHandler mockEventHandler = Mockito.mock(EventHandler.class);
++    Mockito.when(mockDispatcher.getEventHandler()).thenReturn(mockEventHandler);
++    NodeManagerMetrics mockMetrics = Mockito.mock(NodeManagerMetrics.class);
++    ContainerTokenIdentifier containerToken = BuilderUtils
++        .newContainerTokenIdentifier(BuilderUtils.newContainerToken(
++            containerId, InetAddress.getByName("localhost")
++            .getCanonicalHostName(), 1234, "u", resource,
++            System.currentTimeMillis() + 10000, 123, "password".getBytes(),
++            System.currentTimeMillis()));
++    ContainerImpl container = new ContainerImpl(new YarnConfiguration(),
++        mockDispatcher, null, null, null, mockMetrics, containerToken);
++    lt.transition(container, null);
++    Mockito.verify(mockEventHandler, Mockito.times(1)).handle(captor.capture());
++    Assert.assertEquals(memoryBytesExpected, captor.getValue().getPmemLimit());
++  }
++
++  @Test
++  @SuppressWarnings("unchecked")
++  public void testAbsoluteMinimumMemory() throws Exception {
++    testMinimumMemory(0, 5L * 1024 * 1024);
++  }
++
++  @Test
++  public void testRegularMemory() throws Exception {
++    testMinimumMemory(1024, 1024L * 1024 * 1024);
++  }
++
++}
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/util/TestContainerCpuCapabilitiesAbsoluteMinimum.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/util/TestContainerCpuCapabilitiesAbsoluteMinimum.java
+new file mode 100644
+index 0000000..1728451
+--- /dev/null
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/util/TestContainerCpuCapabilitiesAbsoluteMinimum.java
+@@ -0,0 +1,68 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.yarn.server.nodemanager.util;
++
++import junit.framework.Assert;
++import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
++import org.apache.hadoop.yarn.api.records.ApplicationId;
++import org.apache.hadoop.yarn.api.records.ContainerId;
++import org.apache.hadoop.yarn.api.records.Resource;
++import org.junit.Test;
++
++import java.io.IOException;
++
++public class TestContainerCpuCapabilitiesAbsoluteMinimum {
++  private static int valueSet;
++
++  private static class TestCgroupsLCEResourcesHandler extends CgroupsLCEResourcesHandler {
++
++    @Override
++    void createCgroup(String controller, String groupName) throws IOException {
++    }
++
++    @Override
++    void updateCgroup(String controller, String groupName, String param,
++        String value) throws IOException {
++      valueSet = Integer.parseInt(value);
++    }
++  }
++
++  private void testCpu(int cpuSet, int sharesExpected) throws Exception {
++    Resource resource = Resource.newInstance(1, cpuSet);
++
++    ApplicationId appId = ApplicationId.newInstance(0, 1);
++    ApplicationAttemptId appAttemptID =
++        ApplicationAttemptId.newInstance(appId, 0);
++    ContainerId containerId = ContainerId.newInstance(appAttemptID, 1);
++
++    CgroupsLCEResourcesHandler handler = new TestCgroupsLCEResourcesHandler();
++    handler.setupLimits(containerId, resource);
++    Assert.assertEquals(sharesExpected, valueSet);
++  }
++
++  @Test
++  public void testAbsoluteMinimumCpu() throws Exception {
++    testCpu(0, 10);
++  }
++
++  @Test
++  public void testRegularCpu() throws Exception {
++    testCpu(1, 1024);
++  }
++
++}
+-- 
+1.7.9.5
+

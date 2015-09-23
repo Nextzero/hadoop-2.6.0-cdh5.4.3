@@ -1,0 +1,107 @@
+From 6a0b456c210d6fe30c885d76f9118fb076a9ba7b Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Fri, 23 Jan 2015 12:11:15 -0800
+Subject: [PATCH 310/596] HADOOP-11482. Use correct UGI when KMSClientProvider
+ is called by a proxy user. Contributed by Arun
+ Suresh.
+
+(cherry picked from commit 4b00935643f6c3656ccbd7eeb54884738bc12c2e)
+(cherry picked from commit 7b69719455a1a374c9417417ef0c8d7ba6bf593f)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+---
+ .../hadoop/crypto/key/kms/KMSClientProvider.java   |   31 ++++++++++++++++----
+ .../hadoop/crypto/key/kms/server/TestKMS.java      |    7 +++++
+ 2 files changed, 32 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
+index 760d1bd..853e6c1 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
+@@ -786,25 +786,44 @@ public int getEncKeyQueueSize(String keyName) throws IOException {
+   }
+ 
+   @Override
+-  public Token<?>[] addDelegationTokens(String renewer,
++  public Token<?>[] addDelegationTokens(final String renewer,
+       Credentials credentials) throws IOException {
+     Token<?>[] tokens = null;
+     Text dtService = getDelegationTokenService();
+     Token<?> token = credentials.getToken(dtService);
+     if (token == null) {
+-      URL url = createURL(null, null, null, null);
+-      DelegationTokenAuthenticatedURL authUrl =
++      final URL url = createURL(null, null, null, null);
++      final DelegationTokenAuthenticatedURL authUrl =
+           new DelegationTokenAuthenticatedURL(configurator);
+       try {
+-        token = authUrl.getDelegationToken(url, authToken, renewer);
++        // 'actualUGI' is the UGI of the user creating the client 
++        // It is possible that the creator of the KMSClientProvier
++        // calls this method on behalf of a proxyUser (the doAsUser).
++        // In which case this call has to be made as the proxy user.
++        UserGroupInformation currentUgi = UserGroupInformation.getCurrentUser();
++        final String doAsUser = (currentUgi.getAuthenticationMethod() ==
++            UserGroupInformation.AuthenticationMethod.PROXY)
++                                ? currentUgi.getShortUserName() : null;
++
++        token = actualUgi.doAs(new PrivilegedExceptionAction<Token<?>>() {
++          @Override
++          public Token<?> run() throws Exception {
++            // Not using the cached token here.. Creating a new token here
++            // everytime.
++            return authUrl.getDelegationToken(url,
++                new DelegationTokenAuthenticatedURL.Token(), renewer, doAsUser);
++          }
++        });
+         if (token != null) {
+           credentials.addToken(token.getService(), token);
+           tokens = new Token<?>[] { token };
+         } else {
+           throw new IOException("Got NULL as delegation token");
+         }
+-      } catch (AuthenticationException ex) {
+-        throw new IOException(ex);
++      } catch (InterruptedException e) {
++        Thread.currentThread().interrupt();
++      } catch (Exception e) {
++        throw new IOException(e);
+       }
+     }
+     return tokens;
+diff --git a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+index f487e98..70ba95f 100644
+--- a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
++++ b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+@@ -284,6 +284,7 @@ public void testStartStop(final boolean ssl, final boolean kerberos)
+       password = null;
+     }
+ 
++    conf.set("hadoop.kms.authentication.token.validity", "1");
+     if (kerberos) {
+       conf.set("hadoop.kms.authentication.type", "kerberos");
+       conf.set("hadoop.kms.authentication.kerberos.keytab",
+@@ -337,6 +338,11 @@ public Void run() throws Exception {
+                 final KeyProvider kp = new KMSClientProvider(uri, conf);
+                 // getKeys() empty
+                 Assert.assertTrue(kp.getKeys().isEmpty());
++
++                Thread.sleep(4000);
++                Token<?>[] tokens = ((KMSClientProvider)kp).addDelegationTokens("myuser", new Credentials());
++                Assert.assertEquals(1, tokens.length);
++                Assert.assertEquals("kms-dt", tokens[0].getKind().toString());
+                 return null;
+               }
+             });
+@@ -346,6 +352,7 @@ public Void run() throws Exception {
+           // getKeys() empty
+           Assert.assertTrue(kp.getKeys().isEmpty());
+ 
++          Thread.sleep(4000);
+           Token<?>[] tokens = ((KMSClientProvider)kp).addDelegationTokens("myuser", new Credentials());
+           Assert.assertEquals(1, tokens.length);
+           Assert.assertEquals("kms-dt", tokens[0].getKind().toString());
+-- 
+1.7.9.5
+

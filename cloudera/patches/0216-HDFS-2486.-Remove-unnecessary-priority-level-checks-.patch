@@ -1,0 +1,50 @@
+From 8ee533e7ba64cf1b57de77a89e35e8bfb15405b6 Mon Sep 17 00:00:00 2001
+From: Tsz-wo Sze <szetszwo@apache.org>
+Date: Fri, 10 Feb 2012 02:05:38 +0000
+Subject: [PATCH 216/596] HDFS-2486. Remove unnecessary priority level checks
+ in UnderReplicatedBlocks.  Contributed by Uma
+ Maheswara Rao G
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/trunk@1242636 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit dc847b39fdee85b45ef26e8e7380d722ffb89e4e)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/UnderReplicatedBlocks.java
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+
+(cherry picked from commit 4cd6f7463444bafa64e54c1a350a2679c4aec104)
+---
+ .../blockmanagement/UnderReplicatedBlocks.java     |    6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/UnderReplicatedBlocks.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/UnderReplicatedBlocks.java
+index 0920afc..8d20016 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/UnderReplicatedBlocks.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/UnderReplicatedBlocks.java
+@@ -190,7 +190,7 @@ synchronized boolean add(Block block,
+     assert curReplicas >= 0 : "Negative replicas!";
+     int priLevel = getPriority(block, curReplicas, decomissionedReplicas,
+                                expectedReplicas);
+-    if(priLevel != LEVEL && priorityQueues.get(priLevel).add(block)) {
++    if(priorityQueues.get(priLevel).add(block)) {
+       if(NameNode.blockStateChangeLog.isDebugEnabled()) {
+         NameNode.blockStateChangeLog.debug(
+           "BLOCK* NameSystem.UnderReplicationBlock.add:"
+@@ -293,10 +293,10 @@ synchronized void update(Block block, int curReplicas,
+         " curPri  " + curPri +
+         " oldPri  " + oldPri);
+     }
+-    if(oldPri != LEVEL && oldPri != curPri) {
++    if(oldPri != curPri) {
+       remove(block, oldPri);
+     }
+-    if(curPri != LEVEL && priorityQueues.get(curPri).add(block)) {
++    if(priorityQueues.get(curPri).add(block)) {
+       if(NameNode.blockStateChangeLog.isDebugEnabled()) {
+         NameNode.blockStateChangeLog.debug(
+           "BLOCK* NameSystem.UnderReplicationBlock.update:"
+-- 
+1.7.9.5
+

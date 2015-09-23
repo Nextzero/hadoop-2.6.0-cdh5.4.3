@@ -1,0 +1,32 @@
+From bd7fcdf1e4eabbd38f41d5acb3c0c2fb7bd05f92 Mon Sep 17 00:00:00 2001
+From: Suresh Srinivas <suresh@apache.org>
+Date: Fri, 19 Oct 2012 22:05:30 +0000
+Subject: [PATCH 461/596] MAPREDUCE-4736. Remove obsolete option [-rootDir]
+ from TestDFSIO. Contributed by Brandon Li.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/trunk@1400313 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit c195ce4d67aae7e6746be53972a760731e3018c8)
+
+Conflicts:
+	hadoop-mapreduce-project/CHANGES.txt
+---
+ .../test/java/org/apache/hadoop/fs/TestDFSIO.java  |    3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/fs/TestDFSIO.java b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/fs/TestDFSIO.java
+index 2384ff1..1022d4e 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/fs/TestDFSIO.java
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-jobclient/src/test/java/org/apache/hadoop/fs/TestDFSIO.java
+@@ -102,8 +102,7 @@
+                     " [-compression codecClassName]" +
+                     " [-nrFiles N]" +
+                     " [-size Size[B|KB|MB|GB|TB]]" +
+-                    " [-resFile resultFileName] [-bufferSize Bytes]" +
+-                    " [-rootDir]";
++                    " [-resFile resultFileName] [-bufferSize Bytes]";
+ 
+   private Configuration config;
+ 
+-- 
+1.7.9.5
+

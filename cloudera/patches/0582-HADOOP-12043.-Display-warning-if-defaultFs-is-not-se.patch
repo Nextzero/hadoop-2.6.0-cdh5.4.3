@@ -1,0 +1,198 @@
+From 0e0d8606748bdb8a41f4549f0201e5baac353a60 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Fri, 29 May 2015 17:15:58 -0700
+Subject: [PATCH 582/596] HADOOP-12043. Display warning if defaultFs is not
+ set when running fs commands. Contributed by Eddy
+ Xu.
+
+(cherry picked from commit 374ddd9f9ea43b0e730a7baab3e51e6893d40420)
+(cherry picked from commit 600f5f52324071c9a05e420b593984fea4c06f22)
+---
+ .../hadoop/fs/CommonConfigurationKeysPublic.java   |    6 ++
+ .../java/org/apache/hadoop/fs/shell/FsCommand.java |   30 +++++++++-
+ .../main/java/org/apache/hadoop/fs/shell/Ls.java   |    8 +++
+ .../src/main/resources/core-default.xml            |    8 +++
+ .../java/org/apache/hadoop/fs/shell/TestLs.java    |   58 ++++++++++++++++++++
+ 5 files changed, 109 insertions(+), 1 deletion(-)
+ create mode 100644 hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/fs/shell/TestLs.java
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/CommonConfigurationKeysPublic.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/CommonConfigurationKeysPublic.java
+index b39d4d2..c0da29a 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/CommonConfigurationKeysPublic.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/CommonConfigurationKeysPublic.java
+@@ -367,5 +367,11 @@
+     "hadoop.security.random.device.file.path";
+   public static final String HADOOP_SECURITY_SECURE_RANDOM_DEVICE_FILE_PATH_DEFAULT = 
+     "/dev/urandom";
++
++  /** See <a href="{@docRoot}/../core-default.html">core-default.xml</a> */
++  public static final String HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_KEY =
++      "hadoop.shell.missing.defaultFs.warning";
++  public static final boolean HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_DEFAULT =
++      false;
+ }
+ 
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/FsCommand.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/FsCommand.java
+index 3372809..08cc71d 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/FsCommand.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/FsCommand.java
+@@ -19,6 +19,7 @@
+ package org.apache.hadoop.fs.shell;
+ 
+ import java.io.IOException;
++import java.util.LinkedList;
+ 
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.classification.InterfaceStability;
+@@ -26,8 +27,13 @@
+ import org.apache.hadoop.fs.FsShellPermissions;
+ import org.apache.hadoop.fs.Path;
+ 
++import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_DEFAULT_NAME_DEFAULT;
++import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.FS_DEFAULT_NAME_KEY;
++import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_DEFAULT;
++import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_KEY;
++
+ /**
+- * Base class for all "hadoop fs" commands
++ * Base class for all "hadoop fs" commands.
+  */
+ 
+ @InterfaceAudience.Private
+@@ -87,4 +93,26 @@ protected void run(Path path) throws IOException {
+   public int runAll() {
+     return run(args);
+   }
++
++  @Override
++  protected void processRawArguments(LinkedList<String> args)
++      throws IOException {
++    LinkedList<PathData> expendedArgs = expandArguments(args);
++    // If "fs.defaultFs" is not set appropriately, it warns the user that the
++    // command is not running against HDFS.
++    final boolean displayWarnings = getConf().getBoolean(
++        HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_KEY,
++        HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_DEFAULT);
++    if (displayWarnings) {
++      final String defaultFs = getConf().get(FS_DEFAULT_NAME_KEY);
++      final boolean missingDefaultFs =
++          defaultFs == null || defaultFs.equals(FS_DEFAULT_NAME_DEFAULT);
++      if (missingDefaultFs) {
++        err.printf(
++            "Warning: fs.defaultFs is not set when running \"%s\" command.%n",
++            getCommandName());
++      }
++    }
++    processArguments(expendedArgs);
++  }
+ }
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/Ls.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/Ls.java
+index 6024d88..e5b54c5 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/Ls.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/shell/Ls.java
+@@ -22,6 +22,8 @@
+ import java.text.SimpleDateFormat;
+ import java.util.Date;
+ import java.util.LinkedList;
++
++import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.util.StringUtils;
+ 
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -66,6 +68,12 @@ public static void registerCommands(CommandFactory factory) {
+ 
+   protected boolean humanReadable = false;
+ 
++  protected Ls() {}
++
++  protected Ls(Configuration conf) {
++    super(conf);
++  }
++
+   protected String formatSize(long size) {
+     return humanReadable
+       ? StringUtils.TraditionalBinaryPrefix.long2String(size, "", 1)
+diff --git a/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml b/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml
+index a94ca32..6d96845 100644
+--- a/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml
++++ b/hadoop-common-project/hadoop-common/src/main/resources/core-default.xml
+@@ -1735,4 +1735,12 @@ for ldap providers in the same way as above does.
+   </description>
+ </property>
+ 
++  <property>
++    <description>
++      Enable hdfs shell commands to display warnings if (fs.defaultFS) property
++      is not set.
++    </description>
++    <name>hadoop.shell.missing.defaultFs.warning</name>
++    <value>false</value>
++  </property>
+ </configuration>
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/fs/shell/TestLs.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/fs/shell/TestLs.java
+new file mode 100644
+index 0000000..b0d879a
+--- /dev/null
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/fs/shell/TestLs.java
+@@ -0,0 +1,58 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.fs.shell;
++
++import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_KEY;
++import static org.junit.Assert.*;
++
++import java.io.ByteArrayOutputStream;
++import java.io.IOException;
++import java.io.PrintStream;
++
++import org.apache.hadoop.conf.Configuration;
++import org.junit.Test;
++
++/**
++ * JUnit test class for {@link org.apache.hadoop.fs.shell.Ls}
++ *
++ */
++public class TestLs {
++
++  private static void displayWarningOnLocalFileSystem(boolean shouldDisplay)
++      throws IOException {
++    Configuration conf = new Configuration();
++    conf.setBoolean(
++        HADOOP_SHELL_MISSING_DEFAULT_FS_WARNING_KEY, shouldDisplay);
++
++    ByteArrayOutputStream buf = new ByteArrayOutputStream();
++    PrintStream err = new PrintStream(buf, true);
++    Ls ls = new Ls(conf);
++    ls.err = err;
++    ls.run("file:///.");
++    assertEquals(shouldDisplay, buf.toString().contains(
++        "Warning: fs.defaultFs is not set when running \"ls\" command."));
++  }
++
++  @Test
++  public void displayWarningsOnLocalFileSystem() throws IOException {
++    // Display warnings.
++    displayWarningOnLocalFileSystem(true);
++    // Does not display warnings.
++    displayWarningOnLocalFileSystem(false);
++  }
++}
+-- 
+1.7.9.5
+

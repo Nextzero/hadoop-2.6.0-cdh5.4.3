@@ -1,0 +1,55 @@
+From c11488ef5f9cb1270f00620a607279c0b30bcab2 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Fri, 15 Mar 2013 11:10:42 -0700
+Subject: [PATCH 166/596] CLOUDERA-BUILD. add safety check to Hadoop build
+ build to ensure the right JDK is being used (cherry
+ picked from commit
+ 3d9e98821e6bbc6e351b5e0997a3766fa4b8fb58)
+
+Conflicts:
+	pom.xml
+
+(cherry picked from commit 4e7483098ff30a9f9ed9554b73076a3c5ea0179e)
+
+Conflicts:
+	pom.xml
+
+(cherry picked from commit e9237b71efa28dec5395aa780977a93368eb983c)
+(cherry picked from commit ce8df473333dac2e928ff49f5212243ed24b52e9)
+(cherry picked from commit bd6fe9ae845153385d503d12499a88e0ab7a2e5f)
+---
+ pom.xml |   11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/pom.xml b/pom.xml
+index 344bd68..f16f3c4 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -109,6 +109,7 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
+     <distMgmtStagingId>apache.staging.https</distMgmtStagingId>
+     <distMgmtStagingName>Apache Release Distribution Repository</distMgmtStagingName>
+     <distMgmtStagingUrl>https://repository.apache.org/service/local/staging/deploy/maven2</distMgmtStagingUrl>
++    <javaVersion>1.6</javaVersion>
+ 
+     <!-- platform encoding override -->
+     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+@@ -208,6 +209,16 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
+         <groupId>org.apache.maven.plugins</groupId>
+         <artifactId>maven-enforcer-plugin</artifactId>
+         <inherited>false</inherited>
++        <configuration>
++          <rules>
++            <requireMavenVersion>
++              <version>[3.0.2,)</version>
++            </requireMavenVersion>
++            <requireJavaVersion>
++              <version>[${javaVersion}.0,${javaVersion}.1000}]</version>
++            </requireJavaVersion>
++          </rules>
++        </configuration>
+         <executions>
+           <execution>
+             <id>clean</id>
+-- 
+1.7.9.5
+

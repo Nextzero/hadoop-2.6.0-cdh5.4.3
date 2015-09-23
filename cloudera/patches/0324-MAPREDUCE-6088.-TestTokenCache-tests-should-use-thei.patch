@@ -1,0 +1,34 @@
+From 4d8d481d617d81b89a6d8f4451b3e306274d7492 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Fri, 19 Sep 2014 11:58:57 -0700
+Subject: [PATCH 324/596] MAPREDUCE-6088. TestTokenCache tests should use
+ their own JobConf instances. (Zhihai Xu via kasha)
+
+(cherry picked from commit c7926058050bb679ab8891110e874df54c989e9a)
+
+Conflicts:
+	CHANGES.txt
+	src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
+
+(cherry picked from commit e59d621d8497aa54d2a4265670f909099896d7fb)
+---
+ .../hadoop/mapreduce/security/TestTokenCache.java  |    3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
+index 13c1f5e..a5a7a04 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapreduce/security/TestTokenCache.java
+@@ -285,7 +285,8 @@ public void testTokenCache() throws IOException {
+   @Test
+   public void testLocalJobTokenCache() throws NoSuchAlgorithmException, IOException {
+     // this is local job
+-    String[] args = {"-m", "1", "-r", "1", "-mt", "1", "-rt", "1"}; 
++    jConf = mrCluster.createJobConf();
++    String[] args = {"-m", "1", "-r", "1", "-mt", "1", "-rt", "1"};
+     jConf.set("mapreduce.job.credentials.json", jsonTokenFile.toString());
+ 
+     int res = -1;
+-- 
+1.7.9.5
+

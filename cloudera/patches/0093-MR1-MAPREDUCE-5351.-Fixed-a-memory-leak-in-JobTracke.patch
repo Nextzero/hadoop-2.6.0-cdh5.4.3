@@ -1,0 +1,194 @@
+From 162040d7c508382d6bd8ee080135811b3853e894 Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Thu, 11 Jul 2013 15:28:15 -0700
+Subject: [PATCH 093/596] MR1: MAPREDUCE-5351. Fixed a memory leak in
+ JobTracker due to stable FS objects in FSCache.
+ Contributed by Sandy Ryza.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1499904 13f79535-47bb-0310-9956-ffa450edef68
+
+Includes both original commits and addendum
+
+Ref: CDH-12811
+Author: Sandy
+Reason: Reported on userlist
+(cherry picked from commit feafc6e0faf81c1dc3e39ac0377522e9736a25c8)
+(cherry picked from commit 96d71f616e1d184a4982e62e1990ead817e05298)
+(cherry picked from commit f2138630174c8bddf335967e543ed13e0baa9b28)
+(cherry picked from commit 5a9997ed0a79fe21c901f96b9f456cc470be25e0)
+---
+ .../org/apache/hadoop/mapred/CleanupQueue.java     |   14 +++-
+ .../org/apache/hadoop/mapred/JobInProgress.java    |   19 +++--
+ .../org/apache/hadoop/mapred/TestCleanupQueue.java |   84 ++++++++++++++++++++
+ 3 files changed, 108 insertions(+), 9 deletions(-)
+ create mode 100644 hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestCleanupQueue.java
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java
+index 489b324..f70e877 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/CleanupQueue.java
+@@ -26,6 +26,7 @@
+ import org.apache.commons.logging.LogFactory;
+ 
+ import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.FileSystem;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.mapreduce.security.token.DelegationTokenRenewal;
+ import org.apache.hadoop.security.UserGroupInformation;
+@@ -105,8 +106,17 @@ protected void deletePath() throws IOException, InterruptedException {
+       (ugi == null ? UserGroupInformation.getLoginUser() : ugi).doAs(
+           new PrivilegedExceptionAction<Object>() {
+             public Object run() throws IOException {
+-             p.getFileSystem(conf).delete(p, true);
+-             return null;
++              FileSystem fs = p.getFileSystem(conf);
++              try {
++                fs.delete(p, true);
++                return null;
++              } finally {
++                // So that we don't leave an entry in the FileSystem cache for
++                // every UGI that a job is submitted with.
++                if (ugi != null) {
++                  fs.close();
++                }
++              }
+             }
+           });
+       
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+index 5b62373..08c5106 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobInProgress.java
+@@ -3134,6 +3134,7 @@ public void failedTask(TaskInProgress tip, TaskAttemptID taskid, String reason,
+    * from the various tables.
+    */
+   void garbageCollect() {
++    FileSystem tempDirFs = null;
+     synchronized(this) {
+       // Cancel task tracker reservation
+       cancelReservedSlots();
+@@ -3165,6 +3166,7 @@ void garbageCollect() {
+         if (jobTempDir != null && conf.getKeepTaskFilesPattern() == null &&
+             !conf.getKeepFailedTaskFiles()) {
+           Path jobTempDirPath = new Path(jobTempDir);
++          tempDirFs = jobTempDirPath.getFileSystem(conf);
+           CleanupQueue.getInstance().addToQueue(
+               new PathDeletionContext(jobTempDirPath, conf, userUGI, jobId));
+         }
+@@ -3181,13 +3183,16 @@ void garbageCollect() {
+       this.nonRunningReduces = null;
+       this.runningReduces = null;
+     }
+-    
+-    //close the user's FS
+-    try {
+-      FileSystem.closeAllForUGI(userUGI);
+-    } catch (IOException ie) {
+-      LOG.warn("Ignoring exception " + StringUtils.stringifyException(ie) + 
+-          " while closing FileSystem for " + userUGI);
++
++    // Close the user's FS.  Or don't, in the common case of FS being the same
++    // FS as the temp directory FS, as it will be closed by the CleanupQueue.
++    if (tempDirFs != fs) {
++      try {
++        fs.close();
++      } catch (IOException ie) {
++        LOG.warn("Ignoring exception " + StringUtils.stringifyException(ie) + 
++            " while closing FileSystem for " + userUGI);
++      }
+     }
+   }
+ 
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestCleanupQueue.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestCleanupQueue.java
+new file mode 100644
+index 0000000..a84160f
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestCleanupQueue.java
+@@ -0,0 +1,84 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.mapred;
++
++import java.io.File;
++import java.io.IOException;
++import java.lang.reflect.Field;
++import java.util.Map;
++
++import junit.framework.Assert;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.mapred.CleanupQueue.PathDeletionContext;
++import org.apache.hadoop.security.UserGroupInformation;
++import org.junit.Test;
++
++public class TestCleanupQueue {
++  @Test (timeout = 2000)
++  public void testCleanupQueueClosesFilesystem() throws IOException,
++      InterruptedException, NoSuchFieldException, IllegalAccessException {
++    Configuration conf = new Configuration();
++    File file = new File("afile.txt");
++    file.createNewFile();
++    Path path = new Path(file.getAbsoluteFile().toURI());
++    
++    FileSystem.get(conf);
++    Assert.assertEquals(1, getFileSystemCacheSize());
++    
++    // With UGI, should close FileSystem
++    CleanupQueue cleanupQueue = new CleanupQueue();
++    PathDeletionContext context = new PathDeletionContext(path, conf,
++        UserGroupInformation.getLoginUser());
++    cleanupQueue.addToQueue(context);
++    
++    while (getFileSystemCacheSize() > 0) {
++      Thread.sleep(100);
++    }
++    
++    file.createNewFile();
++    FileSystem.get(conf);
++    Assert.assertEquals(1, getFileSystemCacheSize());
++    
++    // Without UGI, should not close FileSystem
++    context = new PathDeletionContext(path, conf);
++    cleanupQueue.addToQueue(context);
++    
++    while (file.exists()) {
++      Thread.sleep(100);
++    }
++    Assert.assertEquals(1, getFileSystemCacheSize());
++  }
++
++  /**
++   * Different than upstream because we don't want to FileSystem#getCacheSize
++   * in Hadoop 2
++   */
++  private int getFileSystemCacheSize() throws NoSuchFieldException,
++      IllegalAccessException {
++    Field f = FileSystem.class.getDeclaredField("CACHE"); 
++    f.setAccessible(true);
++    Object cache = f.get(FileSystem.class);
++    f = cache.getClass().getDeclaredField("map");
++    f.setAccessible(true);
++    Map<?, ?> map = (Map<?, ?>) f.get(cache);
++    return map.size();
++  }
++}
+-- 
+1.7.9.5
+

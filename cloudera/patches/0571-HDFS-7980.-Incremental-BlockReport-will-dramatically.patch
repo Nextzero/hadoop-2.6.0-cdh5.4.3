@@ -1,0 +1,61 @@
+From 8bfcae79cecb128bc71f0a21120299b1ace05ca4 Mon Sep 17 00:00:00 2001
+From: Tsz-Wo Nicholas Sze <szetszwo@hortonworks.com>
+Date: Thu, 7 May 2015 11:36:35 -0700
+Subject: [PATCH 571/596] HDFS-7980. Incremental BlockReport will dramatically
+ slow down namenode startup.  Contributed by Walter
+ Su
+
+(cherry picked from commit 74bd9666d1860067940a7c8b8ff673acc01e78e1)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+        hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockManager.java
+
+(cherry picked from commit 187f55a486019c6290137bb8232882bef235fabf)
+---
+ .../hdfs/server/blockmanagement/BlockManager.java  |    8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index f857f9b..14cc2c5 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -1794,7 +1794,7 @@ public boolean processReport(final DatanodeID nodeID,
+         return !node.hasStaleStorages();
+       }
+ 
+-      if (storageInfo.numBlocks() == 0) {
++      if (storageInfo.getBlockReportCount() == 0) {
+         // The first block report can be processed a lot more efficiently than
+         // ordinary block reports.  This shortens restart times.
+         processFirstBlockReport(storageInfo, newReport);
+@@ -2008,7 +2008,7 @@ private void processFirstBlockReport(
+       final BlockListAsLongs report) throws IOException {
+     if (report == null) return;
+     assert (namesystem.hasWriteLock());
+-    assert (storageInfo.numBlocks() == 0);
++    assert (storageInfo.getBlockReportCount() == 0);
+     BlockReportIterator itBR = report.getBlockReportIterator();
+ 
+     while(itBR.hasNext()) {
+@@ -2422,14 +2422,14 @@ private void addStoredBlockImmediate(BlockInfo storedBlock,
+     }
+ 
+     // just add it
+-    storageInfo.addBlock(storedBlock);
++    AddBlockResult result = storageInfo.addBlock(storedBlock);
+ 
+     // Now check for completion of blocks and safe block count
+     int numCurrentReplica = countLiveNodes(storedBlock);
+     if (storedBlock.getBlockUCState() == BlockUCState.COMMITTED
+         && numCurrentReplica >= minReplication) {
+       completeBlock(storedBlock.getBlockCollection(), storedBlock, false);
+-    } else if (storedBlock.isComplete()) {
++    } else if (storedBlock.isComplete() && result == AddBlockResult.ADDED) {
+       // check whether safe replication is reached for the block
+       // only complete blocks are counted towards that.
+       // In the case that the block just became complete above, completeBlock()
+-- 
+1.7.9.5
+

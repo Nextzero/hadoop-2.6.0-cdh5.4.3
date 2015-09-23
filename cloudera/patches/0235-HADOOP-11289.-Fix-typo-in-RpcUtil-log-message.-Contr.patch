@@ -1,0 +1,28 @@
+From ac2cf4a3d7755a90da1dc3a51521944ddfc44a46 Mon Sep 17 00:00:00 2001
+From: Haohui Mai <wheat9@apache.org>
+Date: Mon, 10 Nov 2014 11:04:41 -0800
+Subject: [PATCH 235/596] HADOOP-11289. Fix typo in RpcUtil log message.
+ Contributed by Charles Lamb. (cherry picked from
+ commit ebb0636c9dcab7970aff970186e257bbba7f263a)
+
+(cherry picked from commit cda5d9d539214f9b31dda3586dd132c924405340)
+---
+ .../java/org/apache/hadoop/oncrpc/RpcUtil.java     |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-common-project/hadoop-nfs/src/main/java/org/apache/hadoop/oncrpc/RpcUtil.java b/hadoop-common-project/hadoop-nfs/src/main/java/org/apache/hadoop/oncrpc/RpcUtil.java
+index e9878b7..cbc9943 100644
+--- a/hadoop-common-project/hadoop-nfs/src/main/java/org/apache/hadoop/oncrpc/RpcUtil.java
++++ b/hadoop-common-project/hadoop-nfs/src/main/java/org/apache/hadoop/oncrpc/RpcUtil.java
+@@ -125,7 +125,7 @@ public void messageReceived(ChannelHandlerContext ctx, MessageEvent e)
+         info = new RpcInfo(callHeader, dataBuffer, ctx, e.getChannel(),
+             e.getRemoteAddress());
+       } catch (Exception exc) {
+-        LOG.info("Malfromed RPC request from " + e.getRemoteAddress());
++        LOG.info("Malformed RPC request from " + e.getRemoteAddress());
+       }
+ 
+       if (info != null) {
+-- 
+1.7.9.5
+

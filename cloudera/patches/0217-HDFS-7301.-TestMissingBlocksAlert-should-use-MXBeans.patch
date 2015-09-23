@@ -1,0 +1,100 @@
+From 3e1a374dcb5c7d28807619a00891338e309fef45 Mon Sep 17 00:00:00 2001
+From: Haohui Mai <wheat9@apache.org>
+Date: Tue, 28 Oct 2014 16:27:28 -0700
+Subject: [PATCH 217/596] HDFS-7301. TestMissingBlocksAlert should use MXBeans
+ instead of old web UI. Contributed by Zhe Zhang.
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+
+(cherry picked from commit ab7fef2180d0ff6742d32a42d8719cfcf8271c8d)
+---
+ .../apache/hadoop/hdfs/TestMissingBlocksAlert.java |   42 ++++++++++----------
+ 1 file changed, 20 insertions(+), 22 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestMissingBlocksAlert.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestMissingBlocksAlert.java
+index 65a69b3..099d547 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestMissingBlocksAlert.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestMissingBlocksAlert.java
+@@ -17,13 +17,6 @@
+  */
+ package org.apache.hadoop.hdfs;
+ 
+-import static org.junit.Assert.assertEquals;
+-import static org.junit.Assert.assertFalse;
+-import static org.junit.Assert.assertTrue;
+-
+-import java.io.IOException;
+-import java.net.URL;
+-
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+@@ -32,8 +25,16 @@
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
+ import org.apache.hadoop.hdfs.server.blockmanagement.BlockManager;
++import org.junit.Assert;
+ import org.junit.Test;
+ 
++import javax.management.*;
++import java.io.IOException;
++import java.lang.management.ManagementFactory;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertTrue;
++
+ /**
+  * The test makes sure that NameNode detects presense blocks that do not have
+  * any valid replicas. In addition, it verifies that HDFS front page displays
+@@ -45,8 +46,11 @@
+                            LogFactory.getLog(TestMissingBlocksAlert.class);
+   
+   @Test
+-  public void testMissingBlocksAlert() throws IOException, 
+-                                       InterruptedException {
++  public void testMissingBlocksAlert()
++          throws IOException, InterruptedException,
++                 MalformedObjectNameException, AttributeNotFoundException,
++                 MBeanException, ReflectionException,
++                 InstanceNotFoundException {
+     
+     MiniDFSCluster cluster = null;
+     
+@@ -95,14 +99,11 @@ public void testMissingBlocksAlert() throws IOException,
+       assertEquals(4, dfs.getUnderReplicatedBlocksCount());
+       assertEquals(3, bm.getUnderReplicatedNotMissingBlocks());
+ 
+-
+-      // Now verify that it shows up on webui
+-      URL url = new URL("http://" + conf.get(DFSConfigKeys.DFS_NAMENODE_HTTP_ADDRESS_KEY) + 
+-                        "/dfshealth.jsp");
+-      String dfsFrontPage = DFSTestUtil.urlGet(url);
+-      String warnStr = "WARNING : There are ";
+-      assertTrue("HDFS Front page does not contain expected warning", 
+-                 dfsFrontPage.contains(warnStr + "1 missing blocks"));
++      MBeanServer mbs = ManagementFactory.getPlatformMBeanServer();
++      ObjectName mxbeanName = new ObjectName(
++              "Hadoop:service=NameNode,name=NameNodeInfo");
++      Assert.assertEquals(1, (long)(Long) mbs.getAttribute(mxbeanName,
++                      "NumberOfMissingBlocks"));
+ 
+       // now do the reverse : remove the file expect the number of missing 
+       // blocks to go to zero
+@@ -117,11 +118,8 @@ public void testMissingBlocksAlert() throws IOException,
+       assertEquals(2, dfs.getUnderReplicatedBlocksCount());
+       assertEquals(2, bm.getUnderReplicatedNotMissingBlocks());
+ 
+-      // and make sure WARNING disappears
+-      // Now verify that it shows up on webui
+-      dfsFrontPage = DFSTestUtil.urlGet(url);
+-      assertFalse("HDFS Front page contains unexpected warning", 
+-                  dfsFrontPage.contains(warnStr));
++      Assert.assertEquals(0, (long)(Long) mbs.getAttribute(mxbeanName,
++              "NumberOfMissingBlocks"));
+     } finally {
+       if (cluster != null) {
+         cluster.shutdown();
+-- 
+1.7.9.5
+

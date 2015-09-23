@@ -1,0 +1,2859 @@
+From 0913eb8eb233a01dec817ec4ddaf6e6c8d720778 Mon Sep 17 00:00:00 2001
+From: "Aaron T. Myers" <atm@apache.org>
+Date: Wed, 24 Sep 2014 18:22:40 -0700
+Subject: [PATCH 195/596] CLOUDERA-BUILD. EXPERIMENTAL. Commit version 7.6 of
+ HDFS-6826.
+
+(cherry picked from commit d0aad37f60c18c2ce136bfaa0b559f40d5cdf8a4)
+---
+ .../java/org/apache/hadoop/hdfs/DFSConfigKeys.java |    1 +
+ ...ientNamenodeProtocolServerSideTranslatorPB.java |    3 +-
+ .../server/namenode/AuthorizationProvider.java     |  413 ++++++++
+ .../AuthorizationProviderProxyClientProtocol.java  |  991 ++++++++++++++++++++
+ .../namenode/DefaultAuthorizationProvider.java     |  390 ++++++++
+ .../hadoop/hdfs/server/namenode/FSNamesystem.java  |   15 +
+ .../hdfs/server/namenode/FSPermissionChecker.java  |  239 +----
+ .../apache/hadoop/hdfs/server/namenode/INode.java  |   17 +-
+ .../hdfs/server/namenode/INodeReference.java       |    2 +-
+ .../server/namenode/INodeWithAdditionalFields.java |   51 +-
+ .../server/namenode/snapshot/SnapshotManager.java  |   20 +
+ .../server/namenode/TestAuthorizationProvider.java |  353 +++++++
+ .../hadoop/hdfs/server/namenode/TestEditLog.java   |   24 +-
+ 13 files changed, 2236 insertions(+), 283 deletions(-)
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProvider.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProviderProxyClientProtocol.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DefaultAuthorizationProvider.java
+ create mode 100644 hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestAuthorizationProvider.java
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+index fd313bb..f8836af 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSConfigKeys.java
+@@ -389,6 +389,7 @@
+   public static final boolean DFS_NAMENODE_AUDIT_LOG_TOKEN_TRACKING_ID_DEFAULT = false;
+   public static final String  DFS_NAMENODE_AUDIT_LOG_ASYNC_KEY = "dfs.namenode.audit.log.async";
+   public static final boolean DFS_NAMENODE_AUDIT_LOG_ASYNC_DEFAULT = false;
++  public static final String DFS_NAMENODE_AUTHORIZATION_PROVIDER_KEY = "dfs.namenode.authorization.provider.class";
+ 
+   // Much code in hdfs is not yet updated to use these keys.
+   public static final String  DFS_CLIENT_BLOCK_WRITE_LOCATEFOLLOWINGBLOCK_RETRIES_KEY = "dfs.client.block.write.locateFollowingBlock.retries";
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientNamenodeProtocolServerSideTranslatorPB.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientNamenodeProtocolServerSideTranslatorPB.java
+index a92d455..aab68d6 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientNamenodeProtocolServerSideTranslatorPB.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/protocolPB/ClientNamenodeProtocolServerSideTranslatorPB.java
+@@ -205,6 +205,7 @@
+ import org.apache.hadoop.hdfs.protocol.proto.XAttrProtos.SetXAttrResponseProto;
+ import org.apache.hadoop.hdfs.security.token.block.DataEncryptionKey;
+ import org.apache.hadoop.hdfs.security.token.delegation.DelegationTokenIdentifier;
++import org.apache.hadoop.hdfs.server.namenode.AuthorizationProviderProxyClientProtocol;
+ import org.apache.hadoop.hdfs.server.namenode.INodeId;
+ import org.apache.hadoop.io.Text;
+ import org.apache.hadoop.security.proto.SecurityProtos.CancelDelegationTokenRequestProto;
+@@ -351,7 +352,7 @@
+    */
+   public ClientNamenodeProtocolServerSideTranslatorPB(ClientProtocol server)
+       throws IOException {
+-    this.server = server;
++    this.server = new AuthorizationProviderProxyClientProtocol(server);
+   }
+ 
+   @Override
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProvider.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProvider.java
+new file mode 100644
+index 0000000..9078ddd
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProvider.java
+@@ -0,0 +1,413 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.server.namenode;
++
++import org.apache.hadoop.classification.InterfaceAudience;
++import org.apache.hadoop.classification.InterfaceStability;
++import org.apache.hadoop.fs.UnresolvedLinkException;
++import org.apache.hadoop.fs.permission.FsAction;
++import org.apache.hadoop.fs.permission.FsPermission;
++import org.apache.hadoop.hdfs.server.namenode.snapshot.Snapshot;
++import org.apache.hadoop.security.AccessControlException;
++
++import java.io.IOException;
++import java.util.Map;
++import java.util.Set;
++
++/**
++ * Implementations of this interface are called from within an 
++ * <code>inode</code> to set or return authorization related information.
++ * <p/>
++ * The HDFS default implementation, {@link DefaultAuthorizationProvider} uses
++ * the <code>inode</code> itself to retrieve and store information.
++ * <p/>
++ * A custom implementation may use a different authorization store and enforce
++ * the permission check using alternate logic.
++ * <p/>
++ * It is expected that an implementation of the provider will not call external 
++ * systems or realize expensive computations on any of the methods defined by 
++ * the provider interface as they are typically invoked within remote client 
++ * filesystem operations.
++ * <p/>
++ * If calls to external systems are required, they should be done 
++ * asynchronously from the provider methods.
++ */
++@InterfaceAudience.Public
++@InterfaceStability.Unstable
++public abstract class AuthorizationProvider {
++
++  private static final ThreadLocal<Boolean> CLIENT_OP_TL =
++      new ThreadLocal<Boolean>() {
++        @Override
++        protected Boolean initialValue() {
++          return Boolean.FALSE;
++        }
++      };
++
++  static void beginClientOp() {
++    CLIENT_OP_TL.set(Boolean.TRUE);
++  }
++
++  static void endClientOp() {
++    CLIENT_OP_TL.set(Boolean.FALSE);
++  }
++
++  private static AuthorizationProvider provider = 
++      new DefaultAuthorizationProvider();
++
++  /**
++   * Return the authorization provider singleton for the NameNode.
++   * 
++   * @return the authorization provider
++   */
++  public static AuthorizationProvider get() {
++    return provider;  
++  }
++
++  /**
++   * Set the authorization provider singleton for the NameNode. The 
++   * provider must be started (before being set) and stopped by the setter.
++   * 
++   * @param authzProvider the authorization provider
++   */
++  static void set(AuthorizationProvider authzProvider) {
++    provider = (authzProvider != null) ? authzProvider 
++                                       : new DefaultAuthorizationProvider();
++  }
++
++  /**
++   * Constant that indicates current state (as opposed to a particular snapshot 
++   * ID) when retrieving authorization information from the provider.
++   */
++  public static final int CURRENT_STATE_ID = Snapshot.CURRENT_STATE_ID;
++
++  /**
++   * This interface exposes INode read-only information relevant for 
++   * authorization decisions.
++   * 
++   * @see AuthorizationProvider
++   */
++  @InterfaceAudience.Public
++  @InterfaceStability.Unstable
++  public interface INodeAuthorizationInfo {
++
++    /**
++     * Return the inode unique ID. This value never changes.
++     * 
++     * @return the inode unique ID.
++     */
++    public long getId();
++
++    /**
++     * Return the inode path element name. This value may change.
++     * @return the inode path element name.
++     */
++    public String getLocalName();
++
++    /**
++     * Return the parent inode. This value may change.
++     * 
++     * @return the parent inode.
++     */
++    public INodeAuthorizationInfo getParent();
++
++    /**
++     * Return the inode full path. This value may change.
++     *
++     * @return the inode full path
++     */
++    public String getFullPathName();
++
++    /**
++     * Return if the inode is a directory or not.
++     *
++     * @return <code>TRUE</code> if the inode is a directory, 
++     * <code>FALSE</code> otherwise.
++     */
++    public boolean isDirectory();
++
++    /**
++     * Return the inode user for the specified snapshot.
++     * 
++     * @param snapshotId a snapshot ID or {@link #CURRENT_STATE_ID} for latest 
++     * value.
++     * @return the inode user for the specified snapshot.
++     */
++    public String getUserName(int snapshotId);
++
++    /**
++     * Return the inode group for the specified snapshot.
++     *
++     * @param snapshotId a snapshot ID or {@link #CURRENT_STATE_ID} for latest
++     * value.
++     * @return the inode group for the specified snapshot.
++     */
++    public String getGroupName(int snapshotId);
++
++    /**
++     * Return the inode permission for the specified snapshot.
++     *
++     * @param snapshotId a snapshot ID or {@link #CURRENT_STATE_ID} for latest
++     * value.
++     * @return the inode permission for the specified snapshot.
++     */
++    public FsPermission getFsPermission(int snapshotId);
++
++    /**
++     * Return the inode ACL feature for the specified snapshot.
++     *
++     * @param snapshotId a snapshot ID or {@link #CURRENT_STATE_ID} for latest
++     * value.
++     * @return the inode ACL feature for the specified snapshot.
++     */
++    public AclFeature getAclFeature(int snapshotId);
++    
++  }
++
++  /**
++   * Indicates if the current provider method invocation is part of a client 
++   * operation or it is an internal NameNode call (i.e. a FS image or an edit 
++   * log  operation).
++   * 
++   * @return <code>TRUE</code> if the provider method invocation is being 
++   * done as part of a client operation, <code>FALSE</code> otherwise.
++   */
++  protected final boolean isClientOp() {
++    return CLIENT_OP_TL.get() == Boolean.TRUE;
++  }
++
++  /**
++   * Initialize the provider. This method is called at NameNode startup 
++   * time.
++   */
++  public void start() {    
++  }
++
++  /**
++   * Shutdown the provider. This method is called at NameNode shutdown time.
++   */
++  public void stop() {    
++  }
++
++  /**
++   * Set all currently snapshot-able directories and their corresponding last 
++   * snapshot ID. This method is called at NameNode startup.
++   * <p/>
++   * A provider implementation that keeps authorization information on per 
++   * snapshot basis can use this call to initialize/re-sync its information with
++   * the NameNode snapshot-able directories information.
++   * 
++   * @param snapshotableDirs a map with all the currently snapshot-able 
++   * directories and their corresponding last snapshot ID
++   */
++  public void setSnaphottableDirs(Map<INodeAuthorizationInfo, Integer> 
++      snapshotableDirs) {
++  }
++
++  /**
++   * Add a directory as snapshot-able.
++   * <p/>
++   * A provider implementation that keeps authorization information on per 
++   * snapshot basis can use this call to prepare itself for snapshots on the
++   * specified directory.
++   * 
++   * @param dir snapshot-able directory to add
++   */
++  public void addSnapshottable(INodeAuthorizationInfo dir) {
++  }
++
++  /**
++   * Remove a directory as snapshot-able.
++   * <p/>
++   * A provider implementation that keeps authorization information on per 
++   * snapshot basis can use this call to clean up any snapshot on the
++   * specified directory.
++   *
++   * @param dir snapshot-able directory to remove
++   */
++  public void removeSnapshottable(INodeAuthorizationInfo dir) {
++  }
++
++  /**
++   * Create a snapshot for snapshot-able directory.
++   * <p/>
++   * A provider implementation that keeps authorization information on per
++   * snapshot basis can use this call to perform any snapshot related 
++   * bookkeeping on the specified directory because of the snapshot creation.
++   *
++   * @param dir directory to make a snapshot of
++   * @param snapshotId the snapshot ID to create
++   */
++  public void createSnapshot(INodeAuthorizationInfo dir, int snapshotId)
++      throws IOException {    
++  }
++  
++  /**
++   * Remove a snapshot for snapshot-able directory.
++   * <p/>
++   * A provider implementation that keeps authorization information on per
++   * snapshot basis can use this call to perform any snapshot related
++   * bookkeeping on the specified directory because of the snapshot removal.
++   *
++   * @param dir directory to remove a snapshot from
++   * @param snapshotId the snapshot ID to remove
++   */
++  public void removeSnapshot(INodeAuthorizationInfo dir, int snapshotId)
++      throws IOException {
++  }
++  
++  /**
++   * Set the user for an inode.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   * 
++   * @param node inode
++   * @param user user name
++   */
++  public abstract void setUser(INodeAuthorizationInfo node, String user);
++
++  /**
++   * Get the user of an inode.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   * 
++   * @param node inode
++   * @param snapshotId snapshot ID of the inode to get the user from
++   * @return the user of the inode
++   */
++  public abstract String getUser(INodeAuthorizationInfo node, int snapshotId);
++
++  /**
++   * Set teh group of an inode.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   * 
++   * @param node inode
++   * @param group group name
++   */
++  public abstract void setGroup(INodeAuthorizationInfo node, String group);
++
++  /**
++   * Get the group of an inode.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   *
++   * @param node inode
++   * @param snapshotId snapshot ID of the inode to get the group from
++   * @return the group of the inode
++   */
++  public abstract String getGroup(INodeAuthorizationInfo node, int snapshotId);
++
++  /**
++   * Set the permission of an inode.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   * 
++   * @param node inode
++   * @param permission the permission to set
++   */
++  public abstract void setPermission(INodeAuthorizationInfo node, 
++      FsPermission permission);
++
++  /**
++   * Get the permission of an inode.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   * 
++   * @param node inode
++   * @param snapshotId snapshot ID of the inode to get the permission from
++   * @return the permission of the inode
++   */
++  public abstract FsPermission getFsPermission(INodeAuthorizationInfo node, 
++      int snapshotId);
++
++  /**
++   * Get the ACLs of an inode.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   * 
++   * @param node inode
++   * @param snapshotId snapshot ID of the inode to get the ACLs from
++   * @return the ACLs of the inode
++   */
++  public abstract AclFeature getAclFeature(INodeAuthorizationInfo node, 
++      int snapshotId);
++
++  /**
++   * Remove the ACLs of an inode.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   * 
++   * @param node inode
++   */
++  public abstract void removeAclFeature(INodeAuthorizationInfo node);
++
++  /**
++   * Add ACLs to an inode.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   * 
++   * @param node inode
++   * @param f the ACLs of the inode
++   */
++  public abstract void addAclFeature(INodeAuthorizationInfo node, AclFeature f);
++
++  /**
++   * Check whether current user have permissions to access the path.
++   * Traverse is always checked.
++   * <p/>
++   * This method is always call within a Filesystem LOCK.
++   * <p/>
++   * Parent path means the parent directory for the path.
++   * Ancestor path means the last (the closest) existing ancestor directory
++   * of the path.
++   * <p/>
++   * Note that if the parent path exists,
++   * then the parent path and the ancestor path are the same.
++   * <p/>
++   * For example, suppose the path is "/foo/bar/baz".
++   * No matter baz is a file or a directory,
++   * the parent path is "/foo/bar".
++   * If bar exists, then the ancestor path is also "/foo/bar".
++   * If bar does not exist and foo exists,
++   * then the ancestor path is "/foo".
++   * Further, if both foo and bar do not exist,
++   * then the ancestor path is "/".
++   *
++   * @param user user ot check permissions against
++   * @param groups groups of the user to check permissions against
++   * @param inodes inodes of the path to check permissions
++   * @param snapshotId snapshot ID to check permissions
++   * @param doCheckOwner Require user to be the owner of the path?
++   * @param ancestorAccess The access required by the ancestor of the path.
++   * @param parentAccess The access required by the parent of the path.
++   * @param access The access required by the path.
++   * @param subAccess If path is a directory,
++   * it is the access required of the path and all the sub-directories.
++   * If path is not a directory, there is no effect.
++   * @param ignoreEmptyDir Ignore permission checking for empty directory?
++   * @throws AccessControlException
++   * @throws UnresolvedLinkException
++   */
++  public abstract void checkPermission(String user, Set<String> groups,
++      INodeAuthorizationInfo[] inodes, int snapshotId,
++      boolean doCheckOwner, FsAction ancestorAccess, FsAction parentAccess,
++      FsAction access, FsAction subAccess, boolean ignoreEmptyDir)
++      throws AccessControlException, UnresolvedLinkException;
++
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProviderProxyClientProtocol.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProviderProxyClientProtocol.java
+new file mode 100644
+index 0000000..9350714
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/AuthorizationProviderProxyClientProtocol.java
+@@ -0,0 +1,991 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.server.namenode;
++
++import org.apache.hadoop.crypto.CipherSuite;
++import org.apache.hadoop.fs.BatchedRemoteIterator;
++import org.apache.hadoop.fs.CacheFlag;
++import org.apache.hadoop.fs.ContentSummary;
++import org.apache.hadoop.fs.CreateFlag;
++import org.apache.hadoop.fs.FileAlreadyExistsException;
++import org.apache.hadoop.fs.FsServerDefaults;
++import org.apache.hadoop.fs.Options;
++import org.apache.hadoop.fs.ParentNotDirectoryException;
++import org.apache.hadoop.fs.UnresolvedLinkException;
++import org.apache.hadoop.fs.XAttr;
++import org.apache.hadoop.fs.XAttrSetFlag;
++import org.apache.hadoop.fs.permission.AclEntry;
++import org.apache.hadoop.fs.permission.AclStatus;
++import org.apache.hadoop.fs.permission.FsAction;
++import org.apache.hadoop.fs.permission.FsPermission;
++import org.apache.hadoop.hdfs.inotify.EventsList;
++import org.apache.hadoop.hdfs.protocol.AlreadyBeingCreatedException;
++import org.apache.hadoop.hdfs.protocol.CacheDirectiveEntry;
++import org.apache.hadoop.hdfs.protocol.CacheDirectiveInfo;
++import org.apache.hadoop.hdfs.protocol.CachePoolEntry;
++import org.apache.hadoop.hdfs.protocol.CachePoolInfo;
++import org.apache.hadoop.hdfs.protocol.ClientProtocol;
++import org.apache.hadoop.hdfs.protocol.CorruptFileBlocks;
++import org.apache.hadoop.hdfs.protocol.DSQuotaExceededException;
++import org.apache.hadoop.hdfs.protocol.DatanodeID;
++import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
++import org.apache.hadoop.hdfs.protocol.DirectoryListing;
++import org.apache.hadoop.hdfs.protocol.EncryptionZone;
++import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
++import org.apache.hadoop.hdfs.protocol.HdfsConstants;
++import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
++import org.apache.hadoop.hdfs.protocol.LocatedBlock;
++import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
++import org.apache.hadoop.hdfs.protocol.NSQuotaExceededException;
++import org.apache.hadoop.hdfs.protocol.RollingUpgradeInfo;
++import org.apache.hadoop.hdfs.protocol.SnapshotAccessControlException;
++import org.apache.hadoop.hdfs.protocol.SnapshotDiffReport;
++import org.apache.hadoop.hdfs.protocol.SnapshottableDirectoryStatus;
++import org.apache.hadoop.hdfs.security.token.block.DataEncryptionKey;
++import org.apache.hadoop.hdfs.security.token.delegation.DelegationTokenIdentifier;
++import org.apache.hadoop.hdfs.server.protocol.DatanodeStorageReport;
++import org.apache.hadoop.io.EnumSetWritable;
++import org.apache.hadoop.io.Text;
++import org.apache.hadoop.security.AccessControlException;
++import org.apache.hadoop.security.token.Token;
++
++import java.io.FileNotFoundException;
++import java.io.IOException;
++import java.util.EnumSet;
++import java.util.List;
++
++public class AuthorizationProviderProxyClientProtocol implements ClientProtocol {
++  private ClientProtocol server;
++  
++  public AuthorizationProviderProxyClientProtocol(ClientProtocol server) {
++    this.server = server;
++  }
++
++  @Override
++  public LocatedBlocks getBlockLocations(String src, long offset, long length)
++      throws AccessControlException, FileNotFoundException,
++             UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getBlockLocations(src, offset, length);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public FsServerDefaults getServerDefaults() throws IOException {
++    return server.getServerDefaults();
++  }
++
++  @Override
++  public HdfsFileStatus create(String src, FsPermission masked,
++      String clientName, EnumSetWritable<CreateFlag> flag, boolean createParent,
++      short replication, long blockSize, List<CipherSuite> cipherSuites)
++      throws AccessControlException, AlreadyBeingCreatedException,
++             DSQuotaExceededException, FileAlreadyExistsException,
++             FileNotFoundException, NSQuotaExceededException,
++             ParentNotDirectoryException, SafeModeException,
++             UnresolvedLinkException, SnapshotAccessControlException,
++             IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.create(src, masked, clientName, flag, createParent,
++          replication, blockSize, cipherSuites);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public LocatedBlock append(String src, String clientName)
++      throws AccessControlException, DSQuotaExceededException,
++             FileNotFoundException, SafeModeException, UnresolvedLinkException,
++             SnapshotAccessControlException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.append(src, clientName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public boolean setReplication(String src, short replication)
++      throws AccessControlException, DSQuotaExceededException,
++             FileNotFoundException, SafeModeException, UnresolvedLinkException,
++             SnapshotAccessControlException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.setReplication(src, replication);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void setPermission(String src, FsPermission permission)
++      throws AccessControlException, FileNotFoundException, SafeModeException,
++             UnresolvedLinkException, SnapshotAccessControlException,
++             IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.setPermission(src, permission);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void setOwner(String src, String username, String groupname)
++      throws AccessControlException, FileNotFoundException, SafeModeException,
++             UnresolvedLinkException, SnapshotAccessControlException,
++             IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.setOwner(src, username, groupname);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void abandonBlock(ExtendedBlock b, long fileId, String src,
++      String holder) throws AccessControlException, FileNotFoundException,
++                            UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.abandonBlock(b, fileId, src, holder);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public LocatedBlock addBlock(String src, String clientName,
++      ExtendedBlock previous, DatanodeInfo[] excludeNodes, long fileId,
++      String[] favoredNodes)
++      throws AccessControlException, FileNotFoundException,
++             NotReplicatedYetException, SafeModeException,
++             UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.addBlock(src, clientName, previous, excludeNodes, fileId, 
++          favoredNodes);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public LocatedBlock getAdditionalDatanode(String src, long fileId,
++      ExtendedBlock blk, DatanodeInfo[] existings,
++      String[] existingStorageIDs, DatanodeInfo[] excludes,
++      int numAdditionalNodes, String clientName)
++      throws AccessControlException, FileNotFoundException, SafeModeException,
++             UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getAdditionalDatanode(src, fileId, blk, existings, 
++          existingStorageIDs, excludes, numAdditionalNodes, clientName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++
++  }
++
++  @Override
++  public boolean complete(String src, String clientName, ExtendedBlock last,
++      long fileId)
++      throws AccessControlException, FileNotFoundException, SafeModeException,
++             UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.complete(src, clientName, last, fileId);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++
++  }
++
++  @Override
++  public void reportBadBlocks(LocatedBlock[] blocks) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.reportBadBlocks(blocks);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public boolean rename(String src, String dst)
++      throws UnresolvedLinkException, SnapshotAccessControlException,
++             IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.rename(src, dst);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void concat(String trg, String[] srcs)
++      throws IOException, UnresolvedLinkException,
++             SnapshotAccessControlException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.concat(trg, srcs);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void rename2(String src, String dst, Options.Rename... options)
++      throws AccessControlException, DSQuotaExceededException,
++             FileAlreadyExistsException, FileNotFoundException,
++             NSQuotaExceededException, ParentNotDirectoryException,
++             SafeModeException, UnresolvedLinkException,
++             SnapshotAccessControlException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.rename2(src, dst, options);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public boolean delete(String src, boolean recursive)
++      throws AccessControlException, FileNotFoundException, SafeModeException,
++             UnresolvedLinkException, SnapshotAccessControlException,
++             IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.delete(src, recursive);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public boolean mkdirs(String src, FsPermission masked, boolean createParent)
++      throws AccessControlException, FileAlreadyExistsException,
++             FileNotFoundException, NSQuotaExceededException,
++             ParentNotDirectoryException, SafeModeException,
++             UnresolvedLinkException, SnapshotAccessControlException,
++             IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.mkdirs(src, masked, createParent);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public DirectoryListing getListing(String src, byte[] startAfter,
++      boolean needLocation)
++      throws AccessControlException, FileNotFoundException,
++             UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getListing(src, startAfter, needLocation);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public SnapshottableDirectoryStatus[] getSnapshottableDirListing()
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getSnapshottableDirListing();
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void renewLease(String clientName)
++      throws AccessControlException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.renewLease(clientName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public boolean recoverLease(String src, String clientName)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.recoverLease(src, clientName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public long[] getStats() throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getStats();
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public DatanodeInfo[] getDatanodeReport(HdfsConstants.DatanodeReportType type)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getDatanodeReport(type);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public DatanodeStorageReport[] getDatanodeStorageReport(
++      HdfsConstants.DatanodeReportType type) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getDatanodeStorageReport(type);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public long getPreferredBlockSize(String filename)
++      throws IOException, UnresolvedLinkException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getPreferredBlockSize(filename);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public boolean setSafeMode(HdfsConstants.SafeModeAction action,
++      boolean isChecked) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.setSafeMode(action, isChecked);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void saveNamespace() throws AccessControlException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.saveNamespace();
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public long rollEdits() throws AccessControlException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.rollEdits();
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public boolean restoreFailedStorage(String arg)
++      throws AccessControlException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.restoreFailedStorage(arg);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void refreshNodes() throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.refreshNodes();
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void finalizeUpgrade() throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.finalizeUpgrade();
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public RollingUpgradeInfo rollingUpgrade(
++      HdfsConstants.RollingUpgradeAction action) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.rollingUpgrade(action);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public CorruptFileBlocks listCorruptFileBlocks(String path, String cookie)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.listCorruptFileBlocks(path, cookie);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void metaSave(String filename) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.metaSave(filename);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void setBalancerBandwidth(long bandwidth) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.setBalancerBandwidth(bandwidth);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public HdfsFileStatus getFileInfo(String src)
++      throws AccessControlException, FileNotFoundException,
++             UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getFileInfo(src);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public boolean isFileClosed(String src)
++      throws AccessControlException, FileNotFoundException,
++             UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.isFileClosed(src);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public HdfsFileStatus getFileLinkInfo(String src)
++      throws AccessControlException, UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getFileLinkInfo(src);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public ContentSummary getContentSummary(String path)
++      throws AccessControlException, FileNotFoundException,
++             UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getContentSummary(path);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void setQuota(String path, long namespaceQuota, long diskspaceQuota)
++      throws AccessControlException, FileNotFoundException,
++             UnresolvedLinkException, SnapshotAccessControlException,
++             IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.setQuota(path, namespaceQuota, diskspaceQuota);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void fsync(String src, long inodeId, String client,
++      long lastBlockLength)
++      throws AccessControlException, FileNotFoundException,
++             UnresolvedLinkException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.fsync(src, inodeId, client, lastBlockLength);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void setTimes(String src, long mtime, long atime)
++      throws AccessControlException, FileNotFoundException,
++             UnresolvedLinkException, SnapshotAccessControlException,
++             IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.setTimes(src, mtime, atime);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void createSymlink(String target, String link, FsPermission dirPerm,
++      boolean createParent)
++      throws AccessControlException, FileAlreadyExistsException,
++             FileNotFoundException, ParentNotDirectoryException,
++             SafeModeException, UnresolvedLinkException,
++             SnapshotAccessControlException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.createSymlink(target, link, dirPerm, createParent);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public String getLinkTarget(String path)
++      throws AccessControlException, FileNotFoundException, IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getLinkTarget(path);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public LocatedBlock updateBlockForPipeline(ExtendedBlock block,
++      String clientName) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.updateBlockForPipeline(block, clientName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void updatePipeline(String clientName, ExtendedBlock oldBlock,
++      ExtendedBlock newBlock, DatanodeID[] newNodes, String[] newStorageIDs)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.updatePipeline(clientName, oldBlock, newBlock, newNodes, 
++          newStorageIDs);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public Token<DelegationTokenIdentifier> getDelegationToken(Text renewer)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getDelegationToken(renewer);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public long renewDelegationToken(Token<DelegationTokenIdentifier> token)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.renewDelegationToken(token);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void cancelDelegationToken(Token<DelegationTokenIdentifier> token)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.cancelDelegationToken(token);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public DataEncryptionKey getDataEncryptionKey() throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getDataEncryptionKey();
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public String createSnapshot(String snapshotRoot, String snapshotName)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.createSnapshot(snapshotRoot, snapshotName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void deleteSnapshot(String snapshotRoot, String snapshotName)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.deleteSnapshot(snapshotRoot, snapshotName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void renameSnapshot(String snapshotRoot, String snapshotOldName,
++      String snapshotNewName) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.renameSnapshot(snapshotRoot, snapshotOldName, snapshotNewName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void allowSnapshot(String snapshotRoot) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.allowSnapshot(snapshotRoot);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void disallowSnapshot(String snapshotRoot) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.disallowSnapshot(snapshotRoot);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public SnapshotDiffReport getSnapshotDiffReport(String snapshotRoot,
++      String fromSnapshot, String toSnapshot) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getSnapshotDiffReport(snapshotRoot, fromSnapshot, 
++          toSnapshot);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public long addCacheDirective(CacheDirectiveInfo directive,
++      EnumSet<CacheFlag> flags) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.addCacheDirective(directive, flags);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void modifyCacheDirective(CacheDirectiveInfo directive,
++      EnumSet<CacheFlag> flags) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.modifyCacheDirective(directive, flags);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void removeCacheDirective(long id) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.removeCacheDirective(id);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public BatchedRemoteIterator.BatchedEntries<CacheDirectiveEntry> 
++      listCacheDirectives(long prevId, CacheDirectiveInfo filter) 
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.listCacheDirectives(prevId, filter);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void addCachePool(CachePoolInfo info) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.addCachePool(info);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void modifyCachePool(CachePoolInfo req) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.modifyCachePool(req);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void removeCachePool(String pool) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.removeCachePool(pool);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public BatchedRemoteIterator.BatchedEntries<CachePoolEntry> listCachePools(
++      String prevPool) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.listCachePools(prevPool);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void modifyAclEntries(String src, List<AclEntry> aclSpec)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.modifyAclEntries(src, aclSpec);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void removeAclEntries(String src, List<AclEntry> aclSpec)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.removeAclEntries(src, aclSpec);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void removeDefaultAcl(String src) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.removeDefaultAcl(src);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void removeAcl(String src) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.removeAcl(src);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void setAcl(String src, List<AclEntry> aclSpec) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.setAcl(src, aclSpec);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public AclStatus getAclStatus(String src) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getAclStatus(src);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void createEncryptionZone(String src, String keyName)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.createEncryptionZone(src, keyName);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public EncryptionZone getEZForPath(String src) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getEZForPath(src);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public BatchedRemoteIterator.BatchedEntries<EncryptionZone> 
++      listEncryptionZones(long prevId) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.listEncryptionZones(prevId);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void setXAttr(String src, XAttr xAttr, EnumSet<XAttrSetFlag> flag)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.setXAttr(src, xAttr, flag);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public List<XAttr> getXAttrs(String src, List<XAttr> xAttrs)
++      throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getXAttrs(src, xAttrs);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public List<XAttr> listXAttrs(String src) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.listXAttrs(src);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void removeXAttr(String src, XAttr xAttr) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.removeXAttr(src, xAttr);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public void checkAccess(String path, FsAction mode) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      server.checkAccess(path, mode);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public long getCurrentEditLogTxid() throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getCurrentEditLogTxid();
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++  @Override
++  public EventsList getEditsFromTxid(long txid) throws IOException {
++    try {
++      AuthorizationProvider.beginClientOp();
++      return server.getEditsFromTxid(txid);
++    } finally {
++      AuthorizationProvider.endClientOp();
++    }
++  }
++
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DefaultAuthorizationProvider.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DefaultAuthorizationProvider.java
+new file mode 100644
+index 0000000..b9cd26b
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DefaultAuthorizationProvider.java
+@@ -0,0 +1,390 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.server.namenode;
++
++import com.google.common.base.Preconditions;
++import org.apache.hadoop.classification.InterfaceAudience;
++import org.apache.hadoop.classification.InterfaceStability;
++import org.apache.hadoop.fs.UnresolvedLinkException;
++import org.apache.hadoop.fs.permission.AclEntry;
++import org.apache.hadoop.fs.permission.AclEntryScope;
++import org.apache.hadoop.fs.permission.AclEntryType;
++import org.apache.hadoop.fs.permission.FsAction;
++import org.apache.hadoop.fs.permission.FsPermission;
++import org.apache.hadoop.hdfs.server.namenode.snapshot.Snapshot;
++import org.apache.hadoop.hdfs.util.ReadOnlyList;
++import org.apache.hadoop.security.AccessControlException;
++import org.apache.hadoop.util.StringUtils;
++
++import java.util.List;
++import java.util.Set;
++import java.util.Stack;
++
++@InterfaceAudience.Public
++@InterfaceStability.Unstable
++public class DefaultAuthorizationProvider
++    extends AuthorizationProvider {
++
++  @Override
++  public void setUser(INodeAuthorizationInfo node, String user) {
++    INodeWithAdditionalFields inode = (INodeWithAdditionalFields) node;
++    int n = SerialNumberManager.INSTANCE.getUserSerialNumber(user);
++    inode.updatePermissionStatus(
++        INodeWithAdditionalFields.PermissionStatusFormat.USER, n);
++  }
++
++  @Override
++  public String getUser(INodeAuthorizationInfo node, int snapshotId) {
++    INodeWithAdditionalFields inode = (INodeWithAdditionalFields) node;
++    if (snapshotId != Snapshot.CURRENT_STATE_ID) {
++      return inode.getSnapshotINode(snapshotId).getUserName();
++    }
++    return INodeWithAdditionalFields.PermissionStatusFormat.
++        getUser(inode.getPermissionLong());
++  }
++
++  @Override
++  public void setGroup(INodeAuthorizationInfo node, String group) {
++    INodeWithAdditionalFields inode = (INodeWithAdditionalFields) node;
++    int n = SerialNumberManager.INSTANCE.getGroupSerialNumber(group);
++    inode.updatePermissionStatus(
++        INodeWithAdditionalFields.PermissionStatusFormat.GROUP, n);
++  }
++
++  @Override
++  public String getGroup(INodeAuthorizationInfo node, int snapshotId) {
++    INodeWithAdditionalFields inode = (INodeWithAdditionalFields) node;
++    if (snapshotId != Snapshot.CURRENT_STATE_ID) {
++      return inode.getSnapshotINode(snapshotId).getGroupName();
++    }
++    return INodeWithAdditionalFields.PermissionStatusFormat.
++        getGroup(inode.getPermissionLong());
++  }
++
++  @Override
++  public void setPermission(INodeAuthorizationInfo node, 
++      FsPermission permission) {
++    INodeWithAdditionalFields inode = (INodeWithAdditionalFields) node;
++    final short mode = permission.toShort();
++    inode.updatePermissionStatus(INodeWithAdditionalFields.
++        PermissionStatusFormat.MODE, mode);
++  }
++
++  @Override
++  public FsPermission getFsPermission(INodeAuthorizationInfo node, 
++      int snapshotId) {
++    INodeWithAdditionalFields inode = (INodeWithAdditionalFields) node;
++    if (snapshotId != Snapshot.CURRENT_STATE_ID) {
++      return inode.getSnapshotINode(snapshotId).getFsPermission();
++    }
++    return new FsPermission(inode.getFsPermissionShort());
++  }
++
++  @Override
++  public AclFeature getAclFeature(INodeAuthorizationInfo node,
++      int snapshotId) {
++    INodeWithAdditionalFields inode = (INodeWithAdditionalFields) node;
++    if (snapshotId != Snapshot.CURRENT_STATE_ID) {
++      return inode.getSnapshotINode(snapshotId).getAclFeature();
++    }
++    return inode.getFeature(AclFeature.class);
++  }
++
++  @Override
++  public void removeAclFeature(INodeAuthorizationInfo node) {
++    INodeWithAdditionalFields inode = (INodeWithAdditionalFields) node;
++    AclFeature f = inode.getAclFeature();
++    Preconditions.checkNotNull(f);
++    inode.removeFeature(f);
++  }
++
++  @Override
++  public void addAclFeature(INodeAuthorizationInfo node, AclFeature f) {
++    INodeWithAdditionalFields inode = (INodeWithAdditionalFields) node;
++    AclFeature f1 = inode.getAclFeature();
++    if (f1 != null) {
++      throw new IllegalStateException("Duplicated ACLFeature");
++    }
++    inode.addFeature(f);
++  }
++
++  @Override
++  public void checkPermission(String user, Set<String> groups,
++      INodeAuthorizationInfo[] nodes, int snapshotId,
++      boolean doCheckOwner, FsAction ancestorAccess, FsAction parentAccess,
++      FsAction access, FsAction subAccess, boolean ignoreEmptyDir)
++      throws AccessControlException, UnresolvedLinkException {
++    INode[] inodes = (INode[]) nodes;
++    int ancestorIndex = inodes.length - 2;
++    for (; ancestorIndex >= 0 && inodes[ancestorIndex] == null;
++         ancestorIndex--)
++      ;
++    checkTraverse(user, groups, inodes, ancestorIndex, snapshotId);
++
++    final INode last = inodes[inodes.length - 1];
++    if (parentAccess != null && parentAccess.implies(FsAction.WRITE)
++        && inodes.length > 1 && last != null) {
++      checkStickyBit(user, inodes[inodes.length - 2], last, snapshotId);
++    }
++    if (ancestorAccess != null && inodes.length > 1) {
++      check(user, groups, inodes, ancestorIndex, snapshotId, ancestorAccess);
++    }
++    if (parentAccess != null && inodes.length > 1) {
++      check(user, groups, inodes, inodes.length - 2, snapshotId, parentAccess);
++    }
++    if (access != null) {
++      check(user, groups, last, snapshotId, access);
++    }
++    if (subAccess != null) {
++      checkSubAccess(user, groups, last, snapshotId, subAccess, ignoreEmptyDir);
++    }
++    if (doCheckOwner) {
++      checkOwner(user, last, snapshotId);
++    }
++  }
++
++  /**
++   * Guarded by {@link FSNamesystem#readLock()}
++   */
++  private void checkOwner(String user, INode inode, int snapshotId
++  ) throws AccessControlException {
++    if (inode != null && user.equals(inode.getUserName(snapshotId))) {
++      return;
++    }
++    throw new AccessControlException("Permission denied");
++  }
++
++  /**
++   * Guarded by {@link FSNamesystem#readLock()}
++   */
++  private void checkTraverse(String user, Set<String> groups, INode[] inodes,
++      int last, int snapshotId) throws AccessControlException {
++    for (int j = 0; j <= last; j++) {
++      check(user, groups, inodes[j], snapshotId, FsAction.EXECUTE);
++    }
++  }
++
++  /**
++   * Guarded by {@link FSNamesystem#readLock()}
++   */
++  private void checkSubAccess(String user, Set<String> groups, INode inode,
++      int snapshotId, FsAction access, boolean ignoreEmptyDir)
++      throws AccessControlException {
++    if (inode == null || !inode.isDirectory()) {
++      return;
++    }
++
++    Stack<INodeDirectory> directories = new Stack<INodeDirectory>();
++    for (directories.push(inode.asDirectory()); !directories.isEmpty(); ) {
++      INodeDirectory d = directories.pop();
++      ReadOnlyList<INode> cList = d.getChildrenList(snapshotId);
++      if (!(cList.isEmpty() && ignoreEmptyDir)) {
++        check(user, groups, d, snapshotId, access);
++      }
++
++      for (INode child : cList) {
++        if (child.isDirectory()) {
++          directories.push(child.asDirectory());
++        }
++      }
++    }
++  }
++
++  /**
++   * Guarded by {@link FSNamesystem#readLock()}
++   */
++  private void check(String user, Set<String> groups, INode[] inodes, int i,
++      int snapshotId, FsAction access
++  ) throws AccessControlException {
++    check(user, groups, i >= 0 ? inodes[i] : null, snapshotId, access);
++  }
++
++  /**
++   * Guarded by {@link FSNamesystem#readLock()}
++   */
++  private void check(String user, Set<String> groups, INode inode,
++      int snapshotId, FsAction access) throws AccessControlException {
++    if (inode == null) {
++      return;
++    }
++    FsPermission mode = inode.getFsPermission(snapshotId);
++    AclFeature aclFeature = inode.getAclFeature(snapshotId);
++    if (aclFeature != null) {
++      List<AclEntry> featureEntries = aclFeature.getEntries();
++      // It's possible that the inode has a default ACL but no access ACL.
++      if (featureEntries.get(0).getScope() == AclEntryScope.ACCESS) {
++        checkAccessAcl(user, groups, inode, snapshotId, access, mode,
++            featureEntries);
++        return;
++      }
++    }
++    checkFsPermission(user, groups, inode, snapshotId, access, mode);
++  }
++
++  private void checkFsPermission(String user, Set<String> groups, INode inode,
++      int snapshotId, FsAction access, FsPermission mode)
++      throws AccessControlException {
++    if (user.equals(inode.getUserName(snapshotId))) { //user class
++      if (mode.getUserAction().implies(access)) {
++        return;
++      }
++    } else if (groups.contains(inode.getGroupName(snapshotId))) { //group class
++      if (mode.getGroupAction().implies(access)) {
++        return;
++      }
++    } else { //other class
++      if (mode.getOtherAction().implies(access)) {
++        return;
++      }
++    }
++    throw new AccessControlException(
++        toAccessControlString(user, inode, snapshotId, access, mode));
++  }
++
++  /**
++   * Checks requested access against an Access Control List.  This method relies
++   * on finding the ACL data in the relevant portions of {@link FsPermission} 
++   * and {@link AclFeature} as implemented in the logic of {@link AclStorage}. 
++   * This method also relies on receiving the ACL entries in sorted order.  This
++   * is assumed to be true, because the ACL modification methods in
++   * {@link AclTransformation} sort the resulting entries.
++   * <p/>
++   * More specifically, this method depends on these invariants in an ACL:
++   * - The list must be sorted.
++   * - Each entry in the list must be unique by scope + type + name.
++   * - There is exactly one each of the unnamed user/group/other entries.
++   * - The mask entry must not have a name.
++   * - The other entry must not have a name.
++   * - Default entries may be present, but they are ignored during enforcement.
++   *
++   * @param inode INode accessed inode
++   * @param snapshotId int snapshot ID
++   * @param access FsAction requested permission
++   * @param mode FsPermission mode from inode
++   * @param featureEntries List<AclEntry> ACL entries from AclFeature of inode
++   * @throws AccessControlException if the ACL denies permission
++   */
++  private void checkAccessAcl(String user, Set<String> groups, INode inode,
++      int snapshotId,  FsAction access, FsPermission mode,
++      List<AclEntry> featureEntries) throws AccessControlException {
++    boolean foundMatch = false;
++
++    // Use owner entry from permission bits if user is owner.
++    if (user.equals(inode.getUserName(snapshotId))) {
++      if (mode.getUserAction().implies(access)) {
++        return;
++      }
++      foundMatch = true;
++    }
++
++    // Check named user and group entries if user was not denied by owner entry.
++    if (!foundMatch) {
++      for (AclEntry entry : featureEntries) {
++        if (entry.getScope() == AclEntryScope.DEFAULT) {
++          break;
++        }
++        AclEntryType type = entry.getType();
++        String name = entry.getName();
++        if (type == AclEntryType.USER) {
++          // Use named user entry with mask from permission bits applied if user
++          // matches name.
++          if (user.equals(name)) {
++            FsAction masked = entry.getPermission().and(mode.getGroupAction());
++            if (masked.implies(access)) {
++              return;
++            }
++            foundMatch = true;
++          }
++        } else if (type == AclEntryType.GROUP) {
++          // Use group entry (unnamed or named) with mask from permission bits
++          // applied if user is a member and entry grants access.  If user is a
++          // member of multiple groups that have entries that grant access, then
++          // it doesn't matter which is chosen, so exit early after first match.
++          String group = name == null ? inode.getGroupName(snapshotId) : name;
++          if (groups.contains(group)) {
++            FsAction masked = entry.getPermission().and(mode.getGroupAction());
++            if (masked.implies(access)) {
++              return;
++            }
++            foundMatch = true;
++          }
++        }
++      }
++    }
++
++    // Use other entry if user was not denied by an earlier match.
++    if (!foundMatch && mode.getOtherAction().implies(access)) {
++      return;
++    }
++
++    throw new AccessControlException(
++        toAccessControlString(user, inode, snapshotId, access, mode,
++            featureEntries));
++  }
++
++  /**
++   * Guarded by {@link FSNamesystem#readLock()}
++   */
++  private void checkStickyBit(String user, INode parent, INode inode,
++      int snapshotId) throws AccessControlException {
++    if (!parent.getFsPermission(snapshotId).getStickyBit()) {
++      return;
++    }
++
++    // If this user is the directory owner, return
++    if (parent.getUserName(snapshotId).equals(user)) {
++      return;
++    }
++
++    // if this user is the file owner, return
++    if (inode.getUserName(snapshotId).equals(user)) {
++      return;
++    }
++
++    throw new AccessControlException("Permission denied by sticky bit setting:" 
++        + " user=" + user + ", inode=" + inode);
++  }
++
++  /**
++   * @return a string for throwing {@link AccessControlException}
++   */
++  private String toAccessControlString(String user, INode inode, int snapshotId,
++      FsAction access, FsPermission mode) {
++    return toAccessControlString(user, inode, snapshotId, access, mode, null);
++  }
++
++  /**
++   * @return a string for throwing {@link AccessControlException}
++   */
++  private String toAccessControlString(String user, INode inode, int snapshotId,
++      FsAction access, FsPermission mode, List<AclEntry> featureEntries) {
++    StringBuilder sb = new StringBuilder("Permission denied: ")
++        .append("user=").append(user).append(", ")
++        .append("access=").append(access).append(", ")
++        .append("inode=\"").append(inode.getFullPathName()).append("\":")
++        .append(inode.getUserName(snapshotId)).append(':')
++        .append(inode.getGroupName(snapshotId)).append(':')
++        .append(inode.isDirectory() ? 'd' : '-')
++        .append(mode);
++    if (featureEntries != null) {
++      sb.append(':').append(StringUtils.join(",", featureEntries));
++    }
++    return sb.toString();
++  }
++
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index ad5e52b..89c5fc1 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -41,6 +41,7 @@
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_AUDIT_LOG_ASYNC_KEY;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_AUDIT_LOG_TOKEN_TRACKING_ID_DEFAULT;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_AUDIT_LOG_TOKEN_TRACKING_ID_KEY;
++import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_AUTHORIZATION_PROVIDER_KEY;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_CHECKPOINT_TXNS_DEFAULT;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_CHECKPOINT_TXNS_KEY;
+ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_DEFAULT_AUDIT_LOGGER_NAME;
+@@ -282,6 +283,7 @@
+ import org.apache.hadoop.security.token.delegation.DelegationKey;
+ import org.apache.hadoop.util.Daemon;
+ import org.apache.hadoop.util.DataChecksum;
++import org.apache.hadoop.util.ReflectionUtils;
+ import org.apache.hadoop.util.StringUtils;
+ import org.apache.hadoop.util.Time;
+ import org.apache.hadoop.util.VersionInfo;
+@@ -589,6 +591,8 @@ protected void setImageLoaded(boolean flag) {
+     imageLoaded = flag;
+   }
+ 
++  private AuthorizationProvider authzProvider;
++
+   /**
+    * Block until the object is imageLoaded to be used.
+    */
+@@ -1116,6 +1120,13 @@ void startCommonServices(Configuration conf, HAContext haContext) throws IOExcep
+     registerMXBean();
+     DefaultMetricsSystem.instance().register(this);
+     snapshotManager.registerMXBean();
++    authzProvider = ReflectionUtils.newInstance(conf.getClass(
++        DFS_NAMENODE_AUTHORIZATION_PROVIDER_KEY,
++        DefaultAuthorizationProvider.class,
++        AuthorizationProvider.class), conf);
++    authzProvider.start();
++    AuthorizationProvider.set(authzProvider);
++    snapshotManager.initAuthorizationProvider();
+   }
+   
+   /** 
+@@ -1123,6 +1134,10 @@ void startCommonServices(Configuration conf, HAContext haContext) throws IOExcep
+    */
+   void stopCommonServices() {
+     writeLock();
++    if (authzProvider != null) {
++      // format does not start common services
++      authzProvider.stop();
++    }
+     try {
+       if (blockManager != null) blockManager.close();
+     } finally {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSPermissionChecker.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSPermissionChecker.java
+index 5b7804b..75f4b7a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSPermissionChecker.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSPermissionChecker.java
+@@ -20,22 +20,15 @@
+ import java.util.Arrays;
+ import java.util.Collections;
+ import java.util.HashSet;
+-import java.util.List;
+ import java.util.Set;
+-import java.util.Stack;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.fs.UnresolvedLinkException;
+-import org.apache.hadoop.fs.permission.AclEntry;
+-import org.apache.hadoop.fs.permission.AclEntryScope;
+-import org.apache.hadoop.fs.permission.AclEntryType;
+ import org.apache.hadoop.fs.permission.FsAction;
+ import org.apache.hadoop.fs.permission.FsPermission;
+-import org.apache.hadoop.hdfs.util.ReadOnlyList;
+ import org.apache.hadoop.security.AccessControlException;
+ import org.apache.hadoop.security.UserGroupInformation;
+-import org.apache.hadoop.util.StringUtils;
+ 
+ /** 
+  * Class that helps in checking file system permission.
+@@ -47,29 +40,6 @@
+ class FSPermissionChecker {
+   static final Log LOG = LogFactory.getLog(UserGroupInformation.class);
+ 
+-  /** @return a string for throwing {@link AccessControlException} */
+-  private String toAccessControlString(INode inode, int snapshotId,
+-      FsAction access, FsPermission mode) {
+-    return toAccessControlString(inode, snapshotId, access, mode, null);
+-  }
+-
+-  /** @return a string for throwing {@link AccessControlException} */
+-  private String toAccessControlString(INode inode, int snapshotId,
+-      FsAction access, FsPermission mode, List<AclEntry> featureEntries) {
+-    StringBuilder sb = new StringBuilder("Permission denied: ")
+-      .append("user=").append(user).append(", ")
+-      .append("access=").append(access).append(", ")
+-      .append("inode=\"").append(inode.getFullPathName()).append("\":")
+-      .append(inode.getUserName(snapshotId)).append(':')
+-      .append(inode.getGroupName(snapshotId)).append(':')
+-      .append(inode.isDirectory() ? 'd' : '-')
+-      .append(mode);
+-    if (featureEntries != null) {
+-      sb.append(':').append(StringUtils.join(",", featureEntries));
+-    }
+-    return sb.toString();
+-  }
+-
+   private final UserGroupInformation ugi;
+   private final String user;  
+   /** A set with group namess. Not synchronized since it is unmodifiable */
+@@ -165,212 +135,9 @@ void checkPermission(String path, FSDirectory dir, boolean doCheckOwner,
+     final INodesInPath inodesInPath = dir.getINodesInPath(path, resolveLink);
+     final int snapshotId = inodesInPath.getPathSnapshotId();
+     final INode[] inodes = inodesInPath.getINodes();
+-    int ancestorIndex = inodes.length - 2;
+-    for(; ancestorIndex >= 0 && inodes[ancestorIndex] == null;
+-        ancestorIndex--);
+-    checkTraverse(inodes, ancestorIndex, snapshotId);
+-
+-    final INode last = inodes[inodes.length - 1];
+-    if (parentAccess != null && parentAccess.implies(FsAction.WRITE)
+-        && inodes.length > 1 && last != null) {
+-      checkStickyBit(inodes[inodes.length - 2], last, snapshotId);
+-    }
+-    if (ancestorAccess != null && inodes.length > 1) {
+-      check(inodes, ancestorIndex, snapshotId, ancestorAccess);
+-    }
+-    if (parentAccess != null && inodes.length > 1) {
+-      check(inodes, inodes.length - 2, snapshotId, parentAccess);
+-    }
+-    if (access != null) {
+-      check(last, snapshotId, access);
+-    }
+-    if (subAccess != null) {
+-      checkSubAccess(last, snapshotId, subAccess, ignoreEmptyDir);
+-    }
+-    if (doCheckOwner) {
+-      checkOwner(last, snapshotId);
+-    }
+-  }
+-
+-  /** Guarded by {@link FSNamesystem#readLock()} */
+-  private void checkOwner(INode inode, int snapshotId
+-      ) throws AccessControlException {
+-    if (inode != null && user.equals(inode.getUserName(snapshotId))) {
+-      return;
+-    }
+-    throw new AccessControlException("Permission denied");
+-  }
+-
+-  /** Guarded by {@link FSNamesystem#readLock()} */
+-  private void checkTraverse(INode[] inodes, int last, int snapshotId
+-      ) throws AccessControlException {
+-    for(int j = 0; j <= last; j++) {
+-      check(inodes[j], snapshotId, FsAction.EXECUTE);
+-    }
+-  }
+-
+-  /** Guarded by {@link FSNamesystem#readLock()} */
+-  private void checkSubAccess(INode inode, int snapshotId, FsAction access,
+-      boolean ignoreEmptyDir) throws AccessControlException {
+-    if (inode == null || !inode.isDirectory()) {
+-      return;
+-    }
+-
+-    Stack<INodeDirectory> directories = new Stack<INodeDirectory>();
+-    for(directories.push(inode.asDirectory()); !directories.isEmpty(); ) {
+-      INodeDirectory d = directories.pop();
+-      ReadOnlyList<INode> cList = d.getChildrenList(snapshotId);
+-      if (!(cList.isEmpty() && ignoreEmptyDir)) {
+-        check(d, snapshotId, access);
+-      }
+-
+-      for(INode child : cList) {
+-        if (child.isDirectory()) {
+-          directories.push(child.asDirectory());
+-        }
+-      }
+-    }
+-  }
+-
+-  /** Guarded by {@link FSNamesystem#readLock()} */
+-  private void check(INode[] inodes, int i, int snapshotId, FsAction access
+-      ) throws AccessControlException {
+-    check(i >= 0? inodes[i]: null, snapshotId, access);
+-  }
+-
+-  /** Guarded by {@link FSNamesystem#readLock()} */
+-  private void check(INode inode, int snapshotId, FsAction access
+-      ) throws AccessControlException {
+-    if (inode == null) {
+-      return;
+-    }
+-    FsPermission mode = inode.getFsPermission(snapshotId);
+-    AclFeature aclFeature = inode.getAclFeature(snapshotId);
+-    if (aclFeature != null) {
+-      List<AclEntry> featureEntries = aclFeature.getEntries();
+-      // It's possible that the inode has a default ACL but no access ACL.
+-      if (featureEntries.get(0).getScope() == AclEntryScope.ACCESS) {
+-        checkAccessAcl(inode, snapshotId, access, mode, featureEntries);
+-        return;
+-      }
+-    }
+-    checkFsPermission(inode, snapshotId, access, mode);
+-  }
+-
+-  private void checkFsPermission(INode inode, int snapshotId, FsAction access,
+-      FsPermission mode) throws AccessControlException {
+-    if (user.equals(inode.getUserName(snapshotId))) { //user class
+-      if (mode.getUserAction().implies(access)) { return; }
+-    }
+-    else if (groups.contains(inode.getGroupName(snapshotId))) { //group class
+-      if (mode.getGroupAction().implies(access)) { return; }
+-    }
+-    else { //other class
+-      if (mode.getOtherAction().implies(access)) { return; }
+-    }
+-    throw new AccessControlException(
+-      toAccessControlString(inode, snapshotId, access, mode));
+-  }
+-
+-  /**
+-   * Checks requested access against an Access Control List.  This method relies
+-   * on finding the ACL data in the relevant portions of {@link FsPermission} and
+-   * {@link AclFeature} as implemented in the logic of {@link AclStorage}.  This
+-   * method also relies on receiving the ACL entries in sorted order.  This is
+-   * assumed to be true, because the ACL modification methods in
+-   * {@link AclTransformation} sort the resulting entries.
+-   *
+-   * More specifically, this method depends on these invariants in an ACL:
+-   * - The list must be sorted.
+-   * - Each entry in the list must be unique by scope + type + name.
+-   * - There is exactly one each of the unnamed user/group/other entries.
+-   * - The mask entry must not have a name.
+-   * - The other entry must not have a name.
+-   * - Default entries may be present, but they are ignored during enforcement.
+-   *
+-   * @param inode INode accessed inode
+-   * @param snapshotId int snapshot ID
+-   * @param access FsAction requested permission
+-   * @param mode FsPermission mode from inode
+-   * @param featureEntries List<AclEntry> ACL entries from AclFeature of inode
+-   * @throws AccessControlException if the ACL denies permission
+-   */
+-  private void checkAccessAcl(INode inode, int snapshotId, FsAction access,
+-      FsPermission mode, List<AclEntry> featureEntries)
+-      throws AccessControlException {
+-    boolean foundMatch = false;
+-
+-    // Use owner entry from permission bits if user is owner.
+-    if (user.equals(inode.getUserName(snapshotId))) {
+-      if (mode.getUserAction().implies(access)) {
+-        return;
+-      }
+-      foundMatch = true;
+-    }
+-
+-    // Check named user and group entries if user was not denied by owner entry.
+-    if (!foundMatch) {
+-      for (AclEntry entry: featureEntries) {
+-        if (entry.getScope() == AclEntryScope.DEFAULT) {
+-          break;
+-        }
+-        AclEntryType type = entry.getType();
+-        String name = entry.getName();
+-        if (type == AclEntryType.USER) {
+-          // Use named user entry with mask from permission bits applied if user
+-          // matches name.
+-          if (user.equals(name)) {
+-            FsAction masked = entry.getPermission().and(mode.getGroupAction());
+-            if (masked.implies(access)) {
+-              return;
+-            }
+-            foundMatch = true;
+-          }
+-        } else if (type == AclEntryType.GROUP) {
+-          // Use group entry (unnamed or named) with mask from permission bits
+-          // applied if user is a member and entry grants access.  If user is a
+-          // member of multiple groups that have entries that grant access, then
+-          // it doesn't matter which is chosen, so exit early after first match.
+-          String group = name == null ? inode.getGroupName(snapshotId) : name;
+-          if (groups.contains(group)) {
+-            FsAction masked = entry.getPermission().and(mode.getGroupAction());
+-            if (masked.implies(access)) {
+-              return;
+-            }
+-            foundMatch = true;
+-          }
+-        }
+-      }
+-    }
+-
+-    // Use other entry if user was not denied by an earlier match.
+-    if (!foundMatch && mode.getOtherAction().implies(access)) {
+-      return;
+-    }
+-
+-    throw new AccessControlException(
+-      toAccessControlString(inode, snapshotId, access, mode, featureEntries));
+-  }
+-
+-  /** Guarded by {@link FSNamesystem#readLock()} */
+-  private void checkStickyBit(INode parent, INode inode, int snapshotId
+-      ) throws AccessControlException {
+-    if(!parent.getFsPermission(snapshotId).getStickyBit()) {
+-      return;
+-    }
+-
+-    // If this user is the directory owner, return
+-    if(parent.getUserName(snapshotId).equals(user)) {
+-      return;
+-    }
+-
+-    // if this user is the file owner, return
+-    if(inode.getUserName(snapshotId).equals(user)) {
+-      return;
+-    }
+-
+-    throw new AccessControlException("Permission denied by sticky bit setting:" +
+-      " user=" + user + ", inode=" + inode);
++    AuthorizationProvider.get().checkPermission(user, groups, inodes, 
++        snapshotId, doCheckOwner, ancestorAccess, parentAccess, access, 
++        subAccess, ignoreEmptyDir);
+   }
+ 
+   /**
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INode.java
+index 4454930..d652c9a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INode.java
+@@ -49,7 +49,8 @@
+  * directory inodes.
+  */
+ @InterfaceAudience.Private
+-public abstract class INode implements INodeAttributes, Diff.Element<byte[]> {
++public abstract class INode implements INodeAttributes, Diff.Element<byte[]>, 
++    AuthorizationProvider.INodeAuthorizationInfo {
+   public static final Log LOG = LogFactory.getLog(INode.class);
+ 
+   /** parent is either an {@link INodeDirectory} or an {@link INodeReference}.*/
+@@ -84,7 +85,8 @@ final PermissionStatus getPermissionStatus() {
+    *          current inode.
+    * @return user name
+    */
+-  abstract String getUserName(int snapshotId);
++  @Override
++  public abstract String getUserName(int snapshotId);
+ 
+   /** The same as getUserName(Snapshot.CURRENT_STATE_ID). */
+   @Override
+@@ -109,7 +111,8 @@ final INode setUser(String user, int latestSnapshotId)
+    *          current inode.
+    * @return group name
+    */
+-  abstract String getGroupName(int snapshotId);
++  @Override
++  public abstract String getGroupName(int snapshotId);
+ 
+   /** The same as getGroupName(Snapshot.CURRENT_STATE_ID). */
+   @Override
+@@ -135,7 +138,8 @@ final INode setGroup(String group, int latestSnapshotId)
+    *          current inode.
+    * @return permission.
+    */
+-  abstract FsPermission getFsPermission(int snapshotId);
++  @Override
++  public abstract FsPermission getFsPermission(int snapshotId);
+   
+   /** The same as getFsPermission(Snapshot.CURRENT_STATE_ID). */
+   @Override
+@@ -154,7 +158,8 @@ INode setPermission(FsPermission permission, int latestSnapshotId)
+     return this;
+   }
+ 
+-  abstract AclFeature getAclFeature(int snapshotId);
++  @Override
++  public abstract AclFeature getAclFeature(int snapshotId);
+ 
+   @Override
+   public final AclFeature getAclFeature() {
+@@ -330,6 +335,7 @@ public INodeFile asFile() {
+   /**
+    * Check whether it's a directory
+    */
++  @Override
+   public boolean isDirectory() {
+     return false;
+   }
+@@ -559,6 +565,7 @@ public final String getLocalName() {
+    */
+   public abstract void setLocalName(byte[] name);
+ 
++  @Override
+   public String getFullPathName() {
+     // Get the full path name of this inode.
+     return FSDirectory.getFullPathName(this);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeReference.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeReference.java
+index a4766d1..3124baa 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeReference.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeReference.java
+@@ -215,7 +215,7 @@ public final FsPermission getFsPermission(int snapshotId) {
+   }
+ 
+   @Override
+-  final AclFeature getAclFeature(int snapshotId) {
++  public final AclFeature getAclFeature(int snapshotId) {
+     return referred.getAclFeature(snapshotId);
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeWithAdditionalFields.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeWithAdditionalFields.java
+index 93da052..26fbcf6 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeWithAdditionalFields.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/INodeWithAdditionalFields.java
+@@ -162,45 +162,33 @@ final PermissionStatus getPermissionStatus(int snapshotId) {
+         getFsPermission(snapshotId));
+   }
+ 
+-  private final void updatePermissionStatus(PermissionStatusFormat f, long n) {
++  final void updatePermissionStatus(PermissionStatusFormat f, long n) {
+     this.permission = f.BITS.combine(n, permission);
+   }
+ 
+   @Override
+-  final String getUserName(int snapshotId) {
+-    if (snapshotId != Snapshot.CURRENT_STATE_ID) {
+-      return getSnapshotINode(snapshotId).getUserName();
+-    }
+-    return PermissionStatusFormat.getUser(permission);
++  public final String getUserName(int snapshotId) {
++    return AuthorizationProvider.get().getUser(this, snapshotId);
+   }
+ 
+   @Override
+   final void setUser(String user) {
+-    int n = SerialNumberManager.INSTANCE.getUserSerialNumber(user);
+-    updatePermissionStatus(PermissionStatusFormat.USER, n);
++    AuthorizationProvider.get().setUser(this, user);
+   }
+ 
+   @Override
+-  final String getGroupName(int snapshotId) {
+-    if (snapshotId != Snapshot.CURRENT_STATE_ID) {
+-      return getSnapshotINode(snapshotId).getGroupName();
+-    }
+-    return PermissionStatusFormat.getGroup(permission);
++  public final String getGroupName(int snapshotId) {
++    return AuthorizationProvider.get().getGroup(this, snapshotId);
+   }
+ 
+   @Override
+   final void setGroup(String group) {
+-    int n = SerialNumberManager.INSTANCE.getGroupSerialNumber(group);
+-    updatePermissionStatus(PermissionStatusFormat.GROUP, n);
++    AuthorizationProvider.get().setGroup(this, group);
+   }
+ 
+   @Override
+-  final FsPermission getFsPermission(int snapshotId) {
+-    if (snapshotId != Snapshot.CURRENT_STATE_ID) {
+-      return getSnapshotINode(snapshotId).getFsPermission();
+-    }
+-
+-    return new FsPermission(getFsPermissionShort());
++  public final FsPermission getFsPermission(int snapshotId) {
++    return AuthorizationProvider.get().getFsPermission(this, snapshotId);
+   }
+ 
+   @Override
+@@ -209,8 +197,7 @@ public final short getFsPermissionShort() {
+   }
+   @Override
+   void setPermission(FsPermission permission) {
+-    final short mode = permission.toShort();
+-    updatePermissionStatus(PermissionStatusFormat.MODE, mode);
++    AuthorizationProvider.get().setPermission(this, permission);
+   }
+ 
+   @Override
+@@ -219,12 +206,8 @@ public long getPermissionLong() {
+   }
+ 
+   @Override
+-  final AclFeature getAclFeature(int snapshotId) {
+-    if (snapshotId != Snapshot.CURRENT_STATE_ID) {
+-      return getSnapshotINode(snapshotId).getAclFeature();
+-    }
+-
+-    return getFeature(AclFeature.class);
++  public final AclFeature getAclFeature(int snapshotId) {
++    return AuthorizationProvider.get().getAclFeature(this, snapshotId);
+   }
+ 
+   @Override
+@@ -327,17 +310,11 @@ protected void removeFeature(Feature f) {
+   }
+ 
+   public void removeAclFeature() {
+-    AclFeature f = getAclFeature();
+-    Preconditions.checkNotNull(f);
+-    removeFeature(f);
++    AuthorizationProvider.get().removeAclFeature(this);
+   }
+ 
+   public void addAclFeature(AclFeature f) {
+-    AclFeature f1 = getAclFeature();
+-    if (f1 != null)
+-      throw new IllegalStateException("Duplicated ACLFeature");
+-
+-    addFeature(f);
++    AuthorizationProvider.get().addAclFeature(this, f);
+   }
+   
+   @Override
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/snapshot/SnapshotManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/snapshot/SnapshotManager.java
+index a808013..d3e2c13 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/snapshot/SnapshotManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/snapshot/SnapshotManager.java
+@@ -35,6 +35,7 @@
+ import org.apache.hadoop.hdfs.protocol.SnapshotInfo;
+ import org.apache.hadoop.hdfs.protocol.SnapshottableDirectoryStatus;
+ import org.apache.hadoop.hdfs.protocol.SnapshotDiffReport.DiffReportEntry;
++import org.apache.hadoop.hdfs.server.namenode.AuthorizationProvider;
+ import org.apache.hadoop.hdfs.server.namenode.FSDirectory;
+ import org.apache.hadoop.hdfs.server.namenode.FSImageFormat;
+ import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+@@ -75,6 +76,21 @@ public SnapshotManager(final FSDirectory fsdir) {
+     this.fsdir = fsdir;
+   }
+ 
++  public void initAuthorizationProvider() {
++      Map<AuthorizationProvider.INodeAuthorizationInfo, Integer> map =
++          new HashMap<AuthorizationProvider.INodeAuthorizationInfo, Integer>();
++      for (INodeDirectory dir : getSnapshottableDirs()) {
++        int currentSnapshot = Snapshot.CURRENT_STATE_ID;
++        DirectorySnapshottableFeature sf = 
++            dir.getDirectorySnapshottableFeature();
++        if (sf != null) {
++          currentSnapshot = sf.getLastSnapshotId();
++        }
++        map.put(dir, currentSnapshot);
++      }
++    AuthorizationProvider.get().setSnaphottableDirs(map);
++  }
++  
+   /** Used in tests only */
+   void setAllowNestedSnapshots(boolean allowNestedSnapshots) {
+     this.allowNestedSnapshots = allowNestedSnapshots;
+@@ -126,11 +142,13 @@ public void setSnapshottable(final String path, boolean checkNestedSnapshottable
+   /** Add the given snapshottable directory to {@link #snapshottables}. */
+   public void addSnapshottable(INodeDirectory dir) {
+     Preconditions.checkArgument(dir.isSnapshottable());
++    AuthorizationProvider.get().addSnapshottable(dir);
+     snapshottables.put(dir.getId(), dir);
+   }
+ 
+   /** Remove the given snapshottable directory from {@link #snapshottables}. */
+   private void removeSnapshottable(INodeDirectory s) {
++    AuthorizationProvider.get().removeSnapshottable(s);
+     snapshottables.remove(s.getId());
+   }
+   
+@@ -218,6 +236,7 @@ public String createSnapshot(final String path, String snapshotName
+           "snapshot IDs and ID rollover is not supported.");
+     }
+ 
++    AuthorizationProvider.get().createSnapshot(srcRoot, snapshotCounter);
+     srcRoot.addSnapshot(snapshotCounter, snapshotName);
+       
+     //create success, update id
+@@ -240,6 +259,7 @@ public void deleteSnapshot(final String path, final String snapshotName,
+     // the INodeDirectorySnapshottable#valueOf method will throw Exception 
+     // if the path is not for a snapshottable directory
+     INodeDirectory srcRoot = getSnapshottableRoot(path);
++    AuthorizationProvider.get().removeSnapshot(srcRoot, snapshotCounter);
+     srcRoot.removeSnapshot(snapshotName, collectedBlocks, removedINodes);
+     numSnapshots.getAndDecrement();
+   }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestAuthorizationProvider.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestAuthorizationProvider.java
+new file mode 100644
+index 0000000..763fad6
+--- /dev/null
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestAuthorizationProvider.java
+@@ -0,0 +1,353 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.hdfs.server.namenode;
++
++import com.google.common.collect.ImmutableList;
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.FileStatus;
++import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.fs.UnresolvedLinkException;
++import org.apache.hadoop.fs.permission.AclEntry;
++import org.apache.hadoop.fs.permission.AclEntryType;
++import org.apache.hadoop.fs.permission.FsAction;
++import org.apache.hadoop.fs.permission.FsPermission;
++import org.apache.hadoop.hdfs.DFSConfigKeys;
++import org.apache.hadoop.hdfs.DistributedFileSystem;
++import org.apache.hadoop.hdfs.HdfsConfiguration;
++import org.apache.hadoop.hdfs.MiniDFSCluster;
++import org.apache.hadoop.security.AccessControlException;
++import org.apache.hadoop.security.UserGroupInformation;
++import org.junit.After;
++import org.junit.Assert;
++import org.junit.Before;
++import org.junit.Test;
++
++import java.io.IOException;
++import java.security.PrivilegedExceptionAction;
++import java.util.Arrays;
++import java.util.HashSet;
++import java.util.Map;
++import java.util.Set;
++
++public class TestAuthorizationProvider {
++  private MiniDFSCluster miniDFS;
++  private static final Set<String> CALLED = new HashSet<String>();
++  
++  public static class MyAuthorizationProvider extends AuthorizationProvider {
++    private AuthorizationProvider defaultProvider;
++
++    @Override
++    public void start() {
++      CALLED.add("start");
++      CALLED.add("isClientOp=" + isClientOp());
++      defaultProvider = new DefaultAuthorizationProvider();
++      defaultProvider.start();
++    }
++
++    @Override
++    public void stop() {
++      CALLED.add("stop");
++      CALLED.add("isClientOp=" + isClientOp());
++      defaultProvider.stop();
++      defaultProvider = null;
++    }
++
++    @Override
++    public void setSnaphottableDirs(
++        Map<INodeAuthorizationInfo, Integer> snapshotableDirs) {
++      CALLED.add("setSnaphottableDirs");
++      CALLED.add("isClientOp=" + isClientOp());
++      defaultProvider.setSnaphottableDirs(snapshotableDirs);
++    }
++
++    @Override
++    public void addSnapshottable(INodeAuthorizationInfo dir) {
++      CALLED.add("addSnapshottable");
++      CALLED.add("isClientOp=" + isClientOp());
++      defaultProvider.addSnapshottable(dir);
++    }
++
++    @Override
++    public void removeSnapshottable(INodeAuthorizationInfo dir) {
++      CALLED.add("removeSnapshottable");
++      CALLED.add("isClientOp=" + isClientOp());
++      defaultProvider.removeSnapshottable(dir);
++    }
++
++    @Override
++    public void createSnapshot(INodeAuthorizationInfo dir, int snapshotId) 
++        throws IOException {
++      CALLED.add("createSnapshot");
++      CALLED.add("isClientOp=" + isClientOp());
++      defaultProvider.createSnapshot(dir, snapshotId);
++    }
++
++    @Override
++    public void removeSnapshot(INodeAuthorizationInfo dir, int snapshotId)
++        throws IOException {
++      CALLED.add("removeSnapshot");
++      CALLED.add("isClientOp=" + isClientOp());
++      defaultProvider.removeSnapshot(dir, snapshotId);
++    }
++
++    public void checkPermission(String user, Set<String> groups,
++        INodeAuthorizationInfo[] inodes, int snapshotId,
++        boolean doCheckOwner, FsAction ancestorAccess, FsAction parentAccess,
++        FsAction access, FsAction subAccess, boolean ignoreEmptyDir)
++        throws AccessControlException, UnresolvedLinkException {
++      CALLED.add("checkPermission");
++      CALLED.add("isClientOp=" + isClientOp());
++      defaultProvider.checkPermission(user, groups, inodes, snapshotId,
++          doCheckOwner, ancestorAccess, parentAccess, access, subAccess,
++          ignoreEmptyDir);
++    }
++
++    private boolean useDefault(INodeAuthorizationInfo iNode) {
++      return !iNode.getFullPathName().startsWith("/user/authz");
++    }
++
++    @Override
++    public void setUser(INodeAuthorizationInfo node, String user) {
++      CALLED.add("setUser");
++      CALLED.add("isClientOp=" + isClientOp());
++      if (useDefault(node)) {
++        defaultProvider.setUser(node, user);
++      }
++    }
++
++    @Override
++    public String getUser(INodeAuthorizationInfo node, int snapshotId) {
++      CALLED.add("getUser");
++      CALLED.add("isClientOp=" + isClientOp());
++      String user;
++      if (useDefault(node)) {
++        user = defaultProvider.getUser(node, snapshotId);
++      } else {
++        user = "foo";
++      }
++      return user;
++    }
++
++    @Override
++    public void setGroup(INodeAuthorizationInfo node, String group) {
++      CALLED.add("setGroup");
++      CALLED.add("isClientOp=" + isClientOp());
++      if (useDefault(node)) {
++        defaultProvider.setGroup(node, group);
++      }
++    }
++
++    @Override
++    public String getGroup(INodeAuthorizationInfo node, int snapshotId) {
++      CALLED.add("getGroup");
++      CALLED.add("isClientOp=" + isClientOp());
++      String group;
++      if (useDefault(node)) {
++        group = defaultProvider.getGroup(node, snapshotId);
++      } else {
++        group = "bar";
++      }
++      return group;
++    }
++
++    @Override
++    public void setPermission(INodeAuthorizationInfo node,
++        FsPermission permission) {
++      CALLED.add("setPermission");
++      CALLED.add("isClientOp=" + isClientOp());
++      if (useDefault(node)) {
++        defaultProvider.setPermission(node, permission);
++      }
++    }
++
++    @Override
++    public FsPermission getFsPermission(
++        INodeAuthorizationInfo node, int snapshotId) {
++      CALLED.add("getFsPermission");
++      CALLED.add("isClientOp=" + isClientOp());
++      FsPermission permission;
++      if (useDefault(node)) {
++        permission = defaultProvider.getFsPermission(node, snapshotId);
++      } else {
++        permission = new FsPermission((short)0770);
++      }
++      return permission;
++    }
++
++    @Override
++    public AclFeature getAclFeature(INodeAuthorizationInfo node,
++        int snapshotId) {
++      CALLED.add("getAclFeature");
++      CALLED.add("isClientOp=" + isClientOp());
++      AclFeature f;
++      if (useDefault(node)) {
++        f = defaultProvider.getAclFeature(node, snapshotId);
++      } else {
++        AclEntry acl = new AclEntry.Builder().setType(AclEntryType.GROUP).
++            setPermission(FsAction.ALL).setName("xxx").build();
++        f = new AclFeature(ImmutableList.of(acl));
++      }
++      return f;
++    }
++
++    @Override
++    public void removeAclFeature(INodeAuthorizationInfo node) {
++      CALLED.add("removeAclFeature");
++      CALLED.add("isClientOp=" + isClientOp());
++      if (useDefault(node)) {
++        defaultProvider.removeAclFeature(node);
++      }
++    }
++
++    @Override
++    public void addAclFeature(INodeAuthorizationInfo node, AclFeature f) {
++      CALLED.add("addAclFeature");
++      CALLED.add("isClientOp=" + isClientOp());
++      if (useDefault(node)) {
++        defaultProvider.addAclFeature(node, f);
++      }
++    }
++  }
++
++  @Before
++  public void setUp() throws IOException {
++    AuthorizationProvider.set(null);
++    CALLED.clear();
++    Configuration conf = new HdfsConfiguration();
++    conf.set(DFSConfigKeys.DFS_NAMENODE_AUTHORIZATION_PROVIDER_KEY, 
++        MyAuthorizationProvider.class.getName());
++    conf.setBoolean(DFSConfigKeys.DFS_NAMENODE_ACLS_ENABLED_KEY, true);
++    EditLogFileOutputStream.setShouldSkipFsyncForTesting(true);
++    miniDFS = new MiniDFSCluster.Builder(conf).build();
++  }
++
++  @After
++  public void cleanUp() throws IOException {
++    CALLED.clear();
++    if (miniDFS != null) {
++      miniDFS.shutdown();
++    }
++    Assert.assertTrue(CALLED.contains("stop"));
++    Assert.assertFalse(CALLED.contains("isClientOp=true"));
++    Assert.assertTrue(CALLED.contains("isClientOp=false"));
++    AuthorizationProvider.set(null);
++  }
++
++  @Test
++  public void testDelegationToProvider() throws Exception {
++    Assert.assertTrue(CALLED.contains("start"));
++    Assert.assertTrue(CALLED.contains("setSnaphottableDirs"));
++    Assert.assertFalse(CALLED.contains("isClientOp=true"));
++    Assert.assertTrue(CALLED.contains("isClientOp=false"));
++    FileSystem fs = FileSystem.get(miniDFS.getConfiguration(0));
++    fs.mkdirs(new Path("/tmp"));
++    fs.setPermission(new Path("/tmp"), new FsPermission((short) 0777));
++    UserGroupInformation ugi = UserGroupInformation.createUserForTesting("u1", 
++        new String[]{"g1"});
++    ugi.doAs(new PrivilegedExceptionAction<Void>() {
++      @Override
++      public Void run() throws Exception {
++        FileSystem fs = FileSystem.get(miniDFS.getConfiguration(0));
++        CALLED.clear();
++        fs.mkdirs(new Path("/tmp/foo"));
++        Assert.assertTrue(CALLED.contains("checkPermission"));
++        Assert.assertTrue(CALLED.contains("isClientOp=true"));
++        Assert.assertFalse(CALLED.contains("isClientOp=false"));
++        CALLED.clear();
++        fs.listStatus(new Path("/tmp/foo"));
++        Assert.assertTrue(CALLED.contains("getUser"));
++        Assert.assertTrue(CALLED.contains("getGroup"));
++        Assert.assertTrue(CALLED.contains("getFsPermission"));
++        Assert.assertTrue(CALLED.contains("isClientOp=true"));
++        Assert.assertFalse(CALLED.contains("isClientOp=false"));
++        CALLED.clear();
++        fs.setPermission(new Path("/tmp/foo"), new FsPermission((short) 0700));
++        Assert.assertTrue(CALLED.contains("setPermission"));
++        Assert.assertTrue(CALLED.contains("isClientOp=true"));
++        Assert.assertFalse(CALLED.contains("isClientOp=false"));
++        CALLED.clear();
++        fs.getAclStatus(new Path("/tmp/foo"));
++        Assert.assertTrue(CALLED.contains("getAclFeature"));
++        Assert.assertTrue(CALLED.contains("isClientOp=true"));
++        Assert.assertFalse(CALLED.contains("isClientOp=false"));
++        CALLED.clear();
++        fs.modifyAclEntries(new Path("/tmp/foo"), 
++            Arrays.asList(new AclEntry.Builder().
++            setName("u3").setType(AclEntryType.USER).
++            setPermission(FsAction.ALL).build()));
++        Assert.assertTrue(CALLED.contains("addAclFeature"));
++        Assert.assertTrue(CALLED.contains("isClientOp=true"));
++        Assert.assertFalse(CALLED.contains("isClientOp=false"));
++        CALLED.clear();
++        fs.removeAcl(new Path("/tmp/foo"));
++        Assert.assertTrue(CALLED.contains("removeAclFeature"));
++        Assert.assertTrue(CALLED.contains("isClientOp=true"));
++        Assert.assertFalse(CALLED.contains("isClientOp=false"));
++        return null;
++      }
++    });
++    CALLED.clear();
++    fs.setOwner(new Path("/tmp/foo"), "u2", "g2");
++    Assert.assertTrue(CALLED.contains("setUser"));
++    Assert.assertTrue(CALLED.contains("setGroup"));
++    Assert.assertTrue(CALLED.contains("isClientOp=true"));
++    Assert.assertFalse(CALLED.contains("isClientOp=false"));
++
++    CALLED.clear();
++    ((DistributedFileSystem)fs).allowSnapshot(new Path("/tmp/foo"));
++    Assert.assertTrue(CALLED.contains("addSnapshottable"));
++    Assert.assertTrue(CALLED.contains("isClientOp=true"));
++    Assert.assertFalse(CALLED.contains("isClientOp=false"));
++
++    CALLED.clear();
++    fs.createSnapshot(new Path("/tmp/foo"), "foo");
++    Assert.assertTrue(CALLED.contains("createSnapshot"));
++    Assert.assertTrue(CALLED.contains("isClientOp=true"));
++    Assert.assertFalse(CALLED.contains("isClientOp=false"));
++
++    CALLED.clear();
++    fs.deleteSnapshot(new Path("/tmp/foo"), "foo");
++    Assert.assertTrue(CALLED.contains("removeSnapshot"));
++    Assert.assertTrue(CALLED.contains("isClientOp=true"));
++    Assert.assertFalse(CALLED.contains("isClientOp=false"));
++
++    CALLED.clear();
++    ((DistributedFileSystem) fs).disallowSnapshot(new Path("/tmp/foo"));
++    Assert.assertTrue(CALLED.contains("removeSnapshottable"));
++    Assert.assertTrue(CALLED.contains("isClientOp=true"));
++    Assert.assertFalse(CALLED.contains("isClientOp=false"));
++
++  }
++
++  @Test
++  public void testCustomProvider() throws Exception {
++    FileSystem fs = FileSystem.get(miniDFS.getConfiguration(0));
++    fs.mkdirs(new Path("/user/xxx"));
++    FileStatus status = fs.getFileStatus(new Path("/user/xxx"));
++    Assert.assertEquals(System.getProperty("user.name"), status.getOwner());
++    Assert.assertEquals("supergroup", status.getGroup());
++    Assert.assertEquals(new FsPermission((short)0755), status.getPermission());
++    fs.mkdirs(new Path("/user/authz"));
++    status = fs.getFileStatus(new Path("/user/authz"));
++    Assert.assertEquals("foo", status.getOwner());
++    Assert.assertEquals("bar", status.getGroup());
++    Assert.assertEquals(new FsPermission((short) 0770), status.getPermission());
++  }
++
++}
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestEditLog.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestEditLog.java
+index 60dad67..8575df1 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestEditLog.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestEditLog.java
+@@ -83,6 +83,7 @@
+ import org.apache.hadoop.util.StringUtils;
+ import org.apache.hadoop.util.Time;
+ import org.apache.log4j.Level;
++import org.junit.Assert;
+ import org.junit.Test;
+ import org.mockito.Mockito;
+ import org.xml.sax.ContentHandler;
+@@ -312,14 +313,31 @@ public void testSimpleEditLog() throws IOException {
+     }
+   }
+ 
++  private static class AssertingEditLogAuthorizationProvider 
++      extends DefaultAuthorizationProvider {
++
++    @Override
++    public String getUser(INodeAuthorizationInfo node, int snapshotId) {
++      Assert.assertFalse(isClientOp());
++      return super.getUser(node, snapshotId);
++    }
++
++  }
++  
+   /**
+    * Tests transaction logging in dfs.
+    */
+   @Test
+   public void testMultiThreadedEditLog() throws IOException {
+-    testEditLog(2048);
+-    // force edit buffer to automatically sync on each log of edit log entry
+-    testEditLog(1);
++    try {
++      AuthorizationProvider.set(new AssertingEditLogAuthorizationProvider());
++      testEditLog(2048);
++      // force edit buffer to automatically sync on each log of edit log entry
++      testEditLog(1);
++    } finally {
++      AuthorizationProvider.set(null);
++      
++    }
+   }
+   
+   
+-- 
+1.7.9.5
+

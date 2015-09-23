@@ -1,0 +1,119 @@
+From 88aa2d3631a8173e4949481a4f68d485c4f3283b Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Wed, 4 Feb 2015 11:59:18 -0800
+Subject: [PATCH 443/596] HDFS-7719. BlockPoolSliceStorage#removeVolumes fails
+ to remove some in-memory state associated with
+ volumes. (Lei (Eddy) Xu via Colin P. McCabe)
+
+(cherry picked from commit 40a415799b1ff3602fbb461765f8b36f1133bda2)
+(cherry picked from commit 76c0757c6e95c187911c71e80943a8023b9b0695)
+---
+ .../server/datanode/BlockPoolSliceStorage.java     |   12 ++++---
+ .../hadoop/hdfs/server/datanode/DataStorage.java   |   14 +++++---
+ .../datanode/TestDataNodeHotSwapVolumes.java       |   34 ++++++++++++++++++++
+ 3 files changed, 52 insertions(+), 8 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockPoolSliceStorage.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockPoolSliceStorage.java
+index 8c819a7..4076a8b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockPoolSliceStorage.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/BlockPoolSliceStorage.java
+@@ -275,15 +275,19 @@ private void format(StorageDirectory bpSdir, NamespaceInfo nsInfo) throws IOExce
+   }
+ 
+   /**
+-   * Remove storage directories.
+-   * @param storageDirs a set of storage directories to be removed.
++   * Remove block pool level storage directory.
++   * @param absPathToRemove the absolute path of the root for the block pool
++   *                        level storage to remove.
+    */
+-  void removeVolumes(Set<File> storageDirs) {
++  void remove(File absPathToRemove) {
++    Preconditions.checkArgument(absPathToRemove.isAbsolute());
++    LOG.info("Removing block level storage: " + absPathToRemove);
+     for (Iterator<StorageDirectory> it = this.storageDirs.iterator();
+          it.hasNext(); ) {
+       StorageDirectory sd = it.next();
+-      if (storageDirs.contains(sd.getRoot())) {
++      if (sd.getRoot().getAbsoluteFile().equals(absPathToRemove)) {
+         it.remove();
++        break;
+       }
+     }
+   }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java
+index 8863724..58d9fc8 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java
+@@ -413,15 +413,21 @@ synchronized void removeVolumes(Collection<StorageLocation> locations)
+       dataDirs.add(sl.getFile());
+     }
+ 
+-    for (BlockPoolSliceStorage bpsStorage : this.bpStorageMap.values()) {
+-      bpsStorage.removeVolumes(dataDirs);
+-    }
+-
+     StringBuilder errorMsgBuilder = new StringBuilder();
+     for (Iterator<StorageDirectory> it = this.storageDirs.iterator();
+          it.hasNext(); ) {
+       StorageDirectory sd = it.next();
+       if (dataDirs.contains(sd.getRoot())) {
++        // Remove the block pool level storage first.
++        for (Map.Entry<String, BlockPoolSliceStorage> entry :
++            this.bpStorageMap.entrySet()) {
++          String bpid = entry.getKey();
++          BlockPoolSliceStorage bpsStorage = entry.getValue();
++          File bpRoot =
++              BlockPoolSliceStorage.getBpRoot(bpid, sd.getCurrentDir());
++          bpsStorage.remove(bpRoot.getAbsoluteFile());
++        }
++
+         it.remove();
+         try {
+           sd.unlock();
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
+index dfcbb6d..3d0bccc 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
+@@ -638,4 +638,38 @@ public void run() {
+       throw new IOException(exceptions.get(0).getCause());
+     }
+   }
++
++  @Test(timeout=60000)
++  public void testAddBackRemovedVolume()
++      throws IOException, TimeoutException, InterruptedException,
++      ReconfigurationException {
++    startDFSCluster(1, 2);
++    // Create some data on every volume.
++    createFile(new Path("/test"), 32);
++
++    DataNode dn = cluster.getDataNodes().get(0);
++    Configuration conf = dn.getConf();
++    String oldDataDir = conf.get(DFS_DATANODE_DATA_DIR_KEY);
++    String keepDataDir = oldDataDir.split(",")[0];
++    String removeDataDir = oldDataDir.split(",")[1];
++
++    dn.reconfigurePropertyImpl(DFS_DATANODE_DATA_DIR_KEY, keepDataDir);
++    for (int i = 0; i < cluster.getNumNameNodes(); i++) {
++      String bpid = cluster.getNamesystem(i).getBlockPoolId();
++      BlockPoolSliceStorage bpsStorage =
++          dn.getStorage().getBPStorage(bpid);
++      // Make sure that there is no block pool level storage under removeDataDir.
++      for (int j = 0; j < bpsStorage.getNumStorageDirs(); j++) {
++        Storage.StorageDirectory sd = bpsStorage.getStorageDir(j);
++        assertFalse(sd.getRoot().getAbsolutePath().startsWith(
++            new File(removeDataDir).getAbsolutePath()
++        ));
++      }
++      assertEquals(dn.getStorage().getBPStorage(bpid).getNumStorageDirs(), 1);
++    }
++
++    // Bring the removed directory back. It only successes if all metadata about
++    // this directory were removed from the previous step.
++    dn.reconfigurePropertyImpl(DFS_DATANODE_DATA_DIR_KEY, oldDataDir);
++  }
+ }
+-- 
+1.7.9.5
+

@@ -1,0 +1,109 @@
+From 5779eb6305b799875a19d8dc42c6a7b411856d73 Mon Sep 17 00:00:00 2001
+From: cnauroth <cnauroth@apache.org>
+Date: Tue, 11 Nov 2014 13:29:55 -0800
+Subject: [PATCH 446/596] HDFS-7389. Named user ACL cannot stop the user from
+ accessing the FS entity. Contributed by Vinayakumar
+ B.
+
+(cherry picked from commit 163bb55067bde71246b4030a08256ba9a8182dc8)
+(cherry picked from commit 7e1e0cbbb81f8ad9bea2c1cbec53001f23d94ed8)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSPermissionChecker.java
+---
+ .../namenode/DefaultAuthorizationProvider.java     |    1 +
+ .../hadoop/hdfs/server/namenode/FSAclBaseTest.java |   37 ++++++++++++++++++--
+ 2 files changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DefaultAuthorizationProvider.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DefaultAuthorizationProvider.java
+index 4f8b543..d03cf4f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DefaultAuthorizationProvider.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/DefaultAuthorizationProvider.java
+@@ -311,6 +311,7 @@ private void checkAccessAcl(String user, Set<String> groups, INode inode,
+               return;
+             }
+             foundMatch = true;
++            break;
+           }
+         } else if (type == AclEntryType.GROUP) {
+           // Use group entry (unnamed or named) with mask from permission bits
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/FSAclBaseTest.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/FSAclBaseTest.java
+index e77effa7..d95a4bd 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/FSAclBaseTest.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/FSAclBaseTest.java
+@@ -65,6 +65,9 @@
+   private static final UserGroupInformation SUPERGROUP_MEMBER =
+     UserGroupInformation.createUserForTesting("super", new String[] {
+       DFSConfigKeys.DFS_PERMISSIONS_SUPERUSERGROUP_DEFAULT });
++  // group member
++  private static final UserGroupInformation BOB = UserGroupInformation
++      .createUserForTesting("bob", new String[] { "groupY", "groupZ" });
+ 
+   protected static MiniDFSCluster cluster;
+   protected static Configuration conf;
+@@ -74,7 +77,7 @@
+   @Rule
+   public ExpectedException exception = ExpectedException.none();
+ 
+-  private FileSystem fs, fsAsBruce, fsAsDiana, fsAsSupergroupMember;
++  private FileSystem fs, fsAsBruce, fsAsDiana, fsAsSupergroupMember, fsAsBob;
+ 
+   @AfterClass
+   public static void shutdown() {
+@@ -93,7 +96,7 @@ public void setUp() throws Exception {
+   @After
+   public void destroyFileSystems() {
+     IOUtils.cleanup(null, fs, fsAsBruce, fsAsDiana, fsAsSupergroupMember);
+-    fs = fsAsBruce = fsAsDiana = fsAsSupergroupMember = null;
++    fs = fsAsBruce = fsAsDiana = fsAsSupergroupMember = fsAsBob = null;
+   }
+ 
+   @Test
+@@ -1306,6 +1309,35 @@ public void testAccess() throws IOException, InterruptedException {
+     } catch (FileNotFoundException e) {
+       // expected
+     }
++
++    // Add a named group entry with only READ access
++    fsAsBruce.modifyAclEntries(p1, Lists.newArrayList(
++        aclEntry(ACCESS, GROUP, "groupY", READ)));
++    // Now bob should have read access, but not write
++    fsAsBob.access(p1, READ);
++    try {
++      fsAsBob.access(p1, WRITE);
++      fail("The access call should have failed.");
++    } catch (AccessControlException e) {
++      // expected;
++    }
++
++    // Add another named group entry with WRITE access
++    fsAsBruce.modifyAclEntries(p1, Lists.newArrayList(
++        aclEntry(ACCESS, GROUP, "groupZ", WRITE)));
++    // Now bob should have write access
++    fsAsBob.access(p1, WRITE);
++
++    // Add a named user entry to deny bob
++    fsAsBruce.modifyAclEntries(p1,
++        Lists.newArrayList(aclEntry(ACCESS, USER, "bob", NONE)));
++
++    try {
++      fsAsBob.access(p1, READ);
++      fail("The access call should have failed.");
++    } catch (AccessControlException e) {
++      // expected;
++    }
+   }
+ 
+   /**
+@@ -1339,6 +1371,7 @@ private void initFileSystems() throws Exception {
+     fs = createFileSystem();
+     fsAsBruce = createFileSystem(BRUCE);
+     fsAsDiana = createFileSystem(DIANA);
++    fsAsBob = createFileSystem(BOB);
+     fsAsSupergroupMember = createFileSystem(SUPERGROUP_MEMBER);
+   }
+ 
+-- 
+1.7.9.5
+

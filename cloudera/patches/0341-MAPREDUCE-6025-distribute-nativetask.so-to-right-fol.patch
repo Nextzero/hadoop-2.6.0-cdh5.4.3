@@ -1,0 +1,68 @@
+From f17670afd626103c04c19a1501d2cb9042b1807b Mon Sep 17 00:00:00 2001
+From: Sean Zhong <seanzhong@apache.org>
+Date: Fri, 15 Aug 2014 08:55:49 +0000
+Subject: [PATCH 341/596] MAPREDUCE-6025: distribute nativetask.so to right
+ folder (Manu Zhang)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/MR-2841@1618120 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 6d39367f6a95383b634d79b6df35a278e0d89fe0)
+(cherry picked from commit f6d3cf21108629b3d9c90b6f7865659e29ce4d8e)
+---
+ hadoop-dist/pom.xml              |    1 -
+ hadoop-mapreduce-project/pom.xml |   28 ++++++++++++++++++++++++++++
+ 2 files changed, 28 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-dist/pom.xml b/hadoop-dist/pom.xml
+index b3f3a8b..decf48f 100644
+--- a/hadoop-dist/pom.xml
++++ b/hadoop-dist/pom.xml
+@@ -125,7 +125,6 @@
+                       run cp -r $ROOT/hadoop-hdfs-project/hadoop-hdfs-nfs/target/hadoop-hdfs-nfs-${project.version}/* .
+                       run cp -r $ROOT/hadoop-yarn-project/target/hadoop-yarn-project-${project.version}/* .
+                       run cp -r $ROOT/hadoop-mapreduce-project/target/hadoop-mapreduce-${project.version}/* .
+-                      run cp -r $ROOT/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/target/hadoop-mapreduce-client-nativetask-${project.version}/* .
+                       run cp -r $ROOT/hadoop-tools/hadoop-tools-dist/target/hadoop-tools-dist-${project.version}/* .
+                       echo
+                       echo "Hadoop dist layout available at: ${project.build.directory}/hadoop-${project.version}"
+diff --git a/hadoop-mapreduce-project/pom.xml b/hadoop-mapreduce-project/pom.xml
+index 2b6fcf2..8ea3b07 100644
+--- a/hadoop-mapreduce-project/pom.xml
++++ b/hadoop-mapreduce-project/pom.xml
+@@ -254,6 +254,34 @@
+           </plugin>
+           <plugin>
+             <groupId>org.apache.maven.plugins</groupId>
++            <artifactId>maven-antrun-plugin</artifactId>
++            <executions>
++              <execution>
++                <id>dist</id>
++                <phase>prepare-package</phase>
++                <goals>
++                  <goal>run</goal>
++                </goals>
++                <configuration>
++                  <target>
++                    <echo file="${project.build.directory}/dist-copynativelibs.sh">
++                      LIB_DIR="${mr.basedir}/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/target/native/target/usr/local/lib"
++                      if [ -d $${LIB_DIR} ] ; then
++                        TARGET_DIR="${project.build.directory}/${project.artifactId}-${project.version}/lib/native"
++                        mkdir -p $${TARGET_DIR}
++                        cp -R $${LIB_DIR}/lib* $${TARGET_DIR}
++                      fi
++                    </echo>
++                    <exec executable="sh" dir="${project.build.directory}" failonerror="true">
++                      <arg line="./dist-copynativelibs.sh"/>
++                    </exec>
++                  </target>
++                </configuration>
++              </execution>
++            </executions>
++          </plugin>
++          <plugin>
++            <groupId>org.apache.maven.plugins</groupId>
+             <artifactId>maven-assembly-plugin</artifactId>
+             <dependencies>
+               <dependency>
+-- 
+1.7.9.5
+

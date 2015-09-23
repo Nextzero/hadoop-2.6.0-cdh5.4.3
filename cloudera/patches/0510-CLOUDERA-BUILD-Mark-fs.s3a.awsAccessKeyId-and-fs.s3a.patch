@@ -1,0 +1,54 @@
+From 5f958474c74575fa2ada4c3bdcbdcf1c01e653f0 Mon Sep 17 00:00:00 2001
+From: Lei Xu <lei@cloudera.com>
+Date: Mon, 16 Mar 2015 10:49:37 -0700
+Subject: [PATCH 510/596] CLOUDERA-BUILD: Mark fs.s3a.awsAccessKeyId and
+ fs.s3a.awsSecretAccessKey as deprecated keys and
+ make them alias of fs.s3a.access.key and
+ fs.s3a.secret.key
+
+---
+ .../org/apache/hadoop/fs/s3a/S3AFileSystem.java    |   21 ++++++++++++++++++--
+ 1 file changed, 19 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+index 07875b9..439ea27 100644
+--- a/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
++++ b/hadoop-tools/hadoop-aws/src/main/java/org/apache/hadoop/fs/s3a/S3AFileSystem.java
+@@ -95,6 +95,20 @@
+   private static final int MAX_ENTRIES_TO_DELETE = 1000;
+ 
+   private static final AtomicInteger poolNumber = new AtomicInteger(1);
++
++  // CLOUDERA-BUILD: deprecate access key and secret key introduced in CDH 5.3
++  private static final String DEPRECATED_ACCESS_KEY = "fs.s3a.awsAccessKeyId";
++  private static final String DEPRECATED_SECRET_KEY = "fs.s3a.awsSecretAccessKey";
++
++  static {
++    Configuration.addDeprecation(DEPRECATED_ACCESS_KEY, ACCESS_KEY,
++        String.format("%s is deprecated, use %s instead.",
++            DEPRECATED_ACCESS_KEY, ACCESS_KEY));
++    Configuration.addDeprecation(DEPRECATED_SECRET_KEY, SECRET_KEY,
++        String.format("%s is deprecated, use %s instead.",
++            DEPRECATED_SECRET_KEY, SECRET_KEY));
++  }
++
+   /**
+    * Returns a {@link java.util.concurrent.ThreadFactory} that names each created thread uniquely,
+    * with a common prefix.
+@@ -156,8 +170,11 @@ public void initialize(URI name, Configuration conf) throws IOException {
+         this.getWorkingDirectory());
+ 
+     // Try to get our credentials or just connect anonymously
+-    String accessKey = conf.get(ACCESS_KEY, null);
+-    String secretKey = conf.get(SECRET_KEY, null);
++    // CLOUDERA-BUILD: deprecated keys are alias of supported keys.
++    String accessKey = conf.get(
++        ACCESS_KEY, conf.get(DEPRECATED_ACCESS_KEY, null));
++    String secretKey = conf.get(
++        SECRET_KEY, conf.get(DEPRECATED_SECRET_KEY, null));
+ 
+     String userInfo = name.getUserInfo();
+     if (userInfo != null) {
+-- 
+1.7.9.5
+

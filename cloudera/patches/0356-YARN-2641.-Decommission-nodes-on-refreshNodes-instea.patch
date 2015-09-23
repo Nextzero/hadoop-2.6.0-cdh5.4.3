@@ -1,0 +1,183 @@
+From 12cbb91677e35a4ccacc3358611364200affaee3 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Mon, 13 Oct 2014 16:23:04 -0700
+Subject: [PATCH 356/596] YARN-2641. Decommission nodes on -refreshNodes
+ instead of next NM-RM heartbeat. (Zhihai Xu via
+ kasha)
+
+(cherry picked from commit da709a2eac7110026169ed3fc4d0eaf85488d3ef)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../server/resourcemanager/NodesListManager.java   |   10 +++++++
+ .../resourcemanager/ResourceTrackerService.java    |   30 +++++++++-----------
+ .../TestResourceTrackerService.java                |   14 +++++----
+ 3 files changed, 32 insertions(+), 22 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/NodesListManager.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/NodesListManager.java
+index 90d7b51..786bf8c 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/NodesListManager.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/NodesListManager.java
+@@ -30,6 +30,7 @@
+ import org.apache.hadoop.net.NetUtils;
+ import org.apache.hadoop.service.AbstractService;
+ import org.apache.hadoop.util.HostsFileReader;
++import org.apache.hadoop.yarn.api.records.NodeId;
+ import org.apache.hadoop.yarn.conf.YarnConfiguration;
+ import org.apache.hadoop.yarn.event.EventHandler;
+ import org.apache.hadoop.yarn.exceptions.YarnException;
+@@ -38,6 +39,8 @@
+ import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppNodeUpdateEvent;
+ import org.apache.hadoop.yarn.server.resourcemanager.rmapp.RMAppNodeUpdateEvent.RMAppNodeUpdateType;
+ import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNode;
++import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNodeEvent;
++import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNodeEventType;
+ 
+ import com.google.common.annotations.VisibleForTesting;
+ 
+@@ -123,6 +126,13 @@ public void refreshNodes(Configuration yarnConf) throws IOException,
+                   .getConfigurationInputStream(this.conf, excludesFile));
+       printConfiguredHosts();
+     }
++
++    for (NodeId nodeId: rmContext.getRMNodes().keySet()) {
++      if (!isValidNode(nodeId.getHost())) {
++        this.rmContext.getDispatcher().getEventHandler().handle(
++            new RMNodeEvent(nodeId, RMNodeEventType.DECOMMISSION));
++      }
++    }
+   }
+ 
+   private void setDecomissionedNMsMetrics() {
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/ResourceTrackerService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/ResourceTrackerService.java
+index a21e472..4beb895 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/ResourceTrackerService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/ResourceTrackerService.java
+@@ -352,15 +352,25 @@ public NodeHeartbeatResponse nodeHeartbeat(NodeHeartbeatRequest request)
+     NodeStatus remoteNodeStatus = request.getNodeStatus();
+     /**
+      * Here is the node heartbeat sequence...
+-     * 1. Check if it's a registered node
+-     * 2. Check if it's a valid (i.e. not excluded) node 
+-     * 3. Check if it's a 'fresh' heartbeat i.e. not duplicate heartbeat 
++     * 1. Check if it's a valid (i.e. not excluded) node
++     * 2. Check if it's a registered node
++     * 3. Check if it's a 'fresh' heartbeat i.e. not duplicate heartbeat
+      * 4. Send healthStatus to RMNode
+      */
+ 
+     NodeId nodeId = remoteNodeStatus.getNodeId();
+ 
+-    // 1. Check if it's a registered node
++    // 1. Check if it's a valid (i.e. not excluded) node
++    if (!this.nodesListManager.isValidNode(nodeId.getHost())) {
++      String message =
++          "Disallowed NodeManager nodeId: " + nodeId + " hostname: "
++              + nodeId.getHost();
++      LOG.info(message);
++      shutDown.setDiagnosticsMessage(message);
++      return shutDown;
++    }
++
++    // 2. Check if it's a registered node
+     RMNode rmNode = this.rmContext.getRMNodes().get(nodeId);
+     if (rmNode == null) {
+       /* node does not exist */
+@@ -373,18 +383,6 @@ public NodeHeartbeatResponse nodeHeartbeat(NodeHeartbeatRequest request)
+     // Send ping
+     this.nmLivelinessMonitor.receivedPing(nodeId);
+ 
+-    // 2. Check if it's a valid (i.e. not excluded) node
+-    if (!this.nodesListManager.isValidNode(rmNode.getHostName())) {
+-      String message =
+-          "Disallowed NodeManager nodeId: " + nodeId + " hostname: "
+-              + rmNode.getNodeAddress();
+-      LOG.info(message);
+-      shutDown.setDiagnosticsMessage(message);
+-      this.rmContext.getDispatcher().getEventHandler().handle(
+-          new RMNodeEvent(nodeId, RMNodeEventType.DECOMMISSION));
+-      return shutDown;
+-    }
+-    
+     // 3. Check if it's a 'fresh' heartbeat i.e. not duplicate heartbeat
+     NodeHeartbeatResponse lastNodeHeartbeatResponse = rmNode.getLastNodeHeartBeatResponse();
+     if (remoteNodeStatus.getResponseId() + 1 == lastNodeHeartbeatResponse
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestResourceTrackerService.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestResourceTrackerService.java
+index 009b9f4..7c12848 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestResourceTrackerService.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/TestResourceTrackerService.java
+@@ -130,17 +130,17 @@ public void testDecommissionWithIncludeHosts() throws Exception {
+ 
+     rm.getNodesListManager().refreshNodes(conf);
+ 
++    checkDecommissionedNMCount(rm, ++metricCount);
++
+     nodeHeartbeat = nm1.nodeHeartbeat(true);
+     Assert.assertTrue(NodeAction.NORMAL.equals(nodeHeartbeat.getNodeAction()));
+     Assert
+-        .assertEquals(0, ClusterMetrics.getMetrics().getNumDecommisionedNMs());
++        .assertEquals(1, ClusterMetrics.getMetrics().getNumDecommisionedNMs());
+ 
+     nodeHeartbeat = nm2.nodeHeartbeat(true);
+     Assert.assertTrue("Node is not decommisioned.", NodeAction.SHUTDOWN
+         .equals(nodeHeartbeat.getNodeAction()));
+ 
+-    checkDecommissionedNMCount(rm, ++metricCount);
+-
+     nodeHeartbeat = nm3.nodeHeartbeat(true);
+     Assert.assertTrue(NodeAction.NORMAL.equals(nodeHeartbeat.getNodeAction()));
+     Assert.assertEquals(metricCount, ClusterMetrics.getMetrics()
+@@ -185,6 +185,8 @@ protected Dispatcher createDispatcher() {
+ 
+     rm.getNodesListManager().refreshNodes(conf);
+ 
++    checkDecommissionedNMCount(rm, metricCount + 2);
++
+     nodeHeartbeat = nm1.nodeHeartbeat(true);
+     Assert.assertTrue(NodeAction.NORMAL.equals(nodeHeartbeat.getNodeAction()));
+     nodeHeartbeat = nm2.nodeHeartbeat(true);
+@@ -195,7 +197,7 @@ protected Dispatcher createDispatcher() {
+     Assert.assertTrue("The decommisioned metrics are not updated",
+         NodeAction.SHUTDOWN.equals(nodeHeartbeat.getNodeAction()));
+     dispatcher.await();
+-    checkDecommissionedNMCount(rm, metricCount + 2);
++
+     writeToHostsFile("");
+     rm.getNodesListManager().refreshNodes(conf);
+ 
+@@ -234,6 +236,7 @@ public void testAddNewIncludePathToConfiguration() throws Exception {
+     conf.set(YarnConfiguration.RM_NODES_INCLUDE_FILE_PATH, hostFile
+         .getAbsolutePath());
+     rm.getNodesListManager().refreshNodes(conf);
++    checkDecommissionedNMCount(rm, ++initialMetricCount);
+     nodeHeartbeat = nm1.nodeHeartbeat(true);
+     Assert.assertEquals(
+         "Node should not have been decomissioned.",
+@@ -243,7 +246,6 @@ public void testAddNewIncludePathToConfiguration() throws Exception {
+     Assert.assertEquals("Node should have been decomissioned but is in state" +
+         nodeHeartbeat.getNodeAction(),
+         NodeAction.SHUTDOWN, nodeHeartbeat.getNodeAction());
+-    checkDecommissionedNMCount(rm, ++initialMetricCount);
+   }
+   
+   /**
+@@ -271,6 +273,7 @@ public void testAddNewExcludePathToConfiguration() throws Exception {
+     conf.set(YarnConfiguration.RM_NODES_EXCLUDE_FILE_PATH, hostFile
+         .getAbsolutePath());
+     rm.getNodesListManager().refreshNodes(conf);
++    checkDecommissionedNMCount(rm, ++initialMetricCount);
+     nodeHeartbeat = nm1.nodeHeartbeat(true);
+     Assert.assertEquals(
+         "Node should not have been decomissioned.",
+@@ -280,7 +283,6 @@ public void testAddNewExcludePathToConfiguration() throws Exception {
+     Assert.assertEquals("Node should have been decomissioned but is in state" +
+         nodeHeartbeat.getNodeAction(),
+         NodeAction.SHUTDOWN, nodeHeartbeat.getNodeAction());
+-    checkDecommissionedNMCount(rm, ++initialMetricCount);
+   }
+ 
+   @Test
+-- 
+1.7.9.5
+

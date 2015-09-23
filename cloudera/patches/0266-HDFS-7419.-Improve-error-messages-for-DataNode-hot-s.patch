@@ -1,0 +1,88 @@
+From 08e5e63582ceb077e11dd8dd7f1d0421b6acd8af Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Mon, 24 Nov 2014 10:51:18 -0800
+Subject: [PATCH 266/596] HDFS-7419. Improve error messages for DataNode hot
+ swap drive feature (Lei Xu via Colin P. Mccabe)
+ (cherry picked from commit
+ f636f9d9439742d7ebaaf21f7e22652403572c61) (cherry
+ picked from commit
+ 4435ac9af5667869e3c5a080d07431a569a44085)
+
+(cherry picked from commit b01df278565203ebc58d23e1d3fdc9d72628c682)
+---
+ .../org/apache/hadoop/conf/ReconfigurableBase.java |    2 +-
+ .../apache/hadoop/conf/TestReconfiguration.java    |    5 +++--
+ .../hadoop/hdfs/server/datanode/DataNode.java      |    9 +++++----
+ 3 files changed, 9 insertions(+), 7 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/conf/ReconfigurableBase.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/conf/ReconfigurableBase.java
+index 3248b9a..3664549 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/conf/ReconfigurableBase.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/conf/ReconfigurableBase.java
+@@ -128,7 +128,7 @@ public void run() {
+         try {
+           this.parent.reconfigurePropertyImpl(change.prop, change.newVal);
+         } catch (ReconfigurationException e) {
+-          errorMessage = e.toString();
++          errorMessage = e.getCause().getMessage();
+         }
+         results.put(change, Optional.fromNullable(errorMessage));
+       }
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/conf/TestReconfiguration.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/conf/TestReconfiguration.java
+index 07b26eb..238ebda 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/conf/TestReconfiguration.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/conf/TestReconfiguration.java
+@@ -389,7 +389,8 @@ public void testAsyncReconfigure()
+         .reconfigurePropertyImpl(eq("name1"), anyString());
+     doNothing().when(dummy)
+         .reconfigurePropertyImpl(eq("name2"), anyString());
+-    doThrow(new ReconfigurationException("NAME3", "NEW3", "OLD3"))
++    doThrow(new ReconfigurationException("NAME3", "NEW3", "OLD3",
++        new IOException("io exception")))
+         .when(dummy).reconfigurePropertyImpl(eq("name3"), anyString());
+ 
+     dummy.startReconfigurationTask();
+@@ -406,7 +407,7 @@ public void testAsyncReconfigure()
+         assertThat(result.getValue().get(),
+             containsString("Property name2 is not reconfigurable"));
+       } else if (change.prop.equals("name3")) {
+-        assertThat(result.getValue().get(), containsString("NAME3"));
++        assertThat(result.getValue().get(), containsString("io exception"));
+       } else {
+         fail("Unknown property: " + change.prop);
+       }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index 017529c..d8eef80 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -428,7 +428,7 @@ public void reconfigurePropertyImpl(String property, String newVal)
+       try {
+         LOG.info("Reconfiguring " + property + " to " + newVal);
+         this.refreshVolumes(newVal);
+-      } catch (Exception e) {
++      } catch (IOException e) {
+         throw new ReconfigurationException(property, newVal,
+             getConf().get(property), e);
+       }
+@@ -563,14 +563,15 @@ public IOException call() {
+             IOException ioe = ioExceptionFuture.get();
+             if (ioe != null) {
+               errorMessageBuilder.append(String.format("FAILED TO ADD: %s: %s\n",
+-                  volume.toString(), ioe.getMessage()));
++                  volume, ioe.getMessage()));
++              LOG.error("Failed to add volume: " + volume, ioe);
+             } else {
+               effectiveVolumes.add(volume.toString());
++              LOG.info("Successfully added volume: " + volume);
+             }
+-            LOG.info("Storage directory is loaded: " + volume.toString());
+           } catch (Exception e) {
+             errorMessageBuilder.append(String.format("FAILED to ADD: %s: %s\n",
+-                volume.toString(), e.getMessage()));
++                volume, e.getMessage()));
+           }
+         }
+       }
+-- 
+1.7.9.5
+

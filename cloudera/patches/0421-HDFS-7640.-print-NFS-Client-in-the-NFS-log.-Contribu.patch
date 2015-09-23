@@ -1,0 +1,206 @@
+From 891eb1533993a11019024b0589a450d9eb1af8dc Mon Sep 17 00:00:00 2001
+From: Haohui Mai <wheat9@apache.org>
+Date: Mon, 19 Jan 2015 17:29:46 -0800
+Subject: [PATCH 421/596] HDFS-7640. print NFS Client in the NFS log.
+ Contributed by Brandon Li.
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java       |   53 +++++++++++++-------
+ 1 file changed, 34 insertions(+), 19 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+index 483abfa..f6e28fb 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+@@ -328,8 +328,9 @@ GETATTR3Response getattr(XDR xdr, SecurityHandler securityHandler,
+     }
+ 
+     FileHandle handle = request.getHandle();
+-    if (LOG.isTraceEnabled()) {
+-      LOG.trace("GETATTR for fileId: " + handle.getFileId());
++    if (LOG.isDebugEnabled()) {
++      LOG.debug("GETATTR for fileId: " + handle.getFileId() + " client:"
++          + remoteAddress);
+     }
+ 
+     Nfs3FileAttributes attrs = null;
+@@ -421,7 +422,8 @@ SETATTR3Response setattr(XDR xdr, SecurityHandler securityHandler,
+ 
+     FileHandle handle = request.getHandle();
+     if (LOG.isDebugEnabled()) {
+-      LOG.debug("NFS SETATTR fileId: " + handle.getFileId());
++      LOG.debug("NFS SETATTR fileId: " + handle.getFileId() + " client:"
++          + remoteAddress);
+     }
+ 
+     if (request.getAttr().getUpdateFields().contains(SetAttrField.SIZE)) {
+@@ -507,7 +509,7 @@ LOOKUP3Response lookup(XDR xdr, SecurityHandler securityHandler,
+     String fileName = request.getName();
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS LOOKUP dir fileId: " + dirHandle.getFileId() + " name: "
+-          + fileName);
++          + fileName + " client:" + remoteAddress);
+     }
+ 
+     try {
+@@ -575,7 +577,8 @@ ACCESS3Response access(XDR xdr, SecurityHandler securityHandler,
+     Nfs3FileAttributes attrs;
+ 
+     if (LOG.isDebugEnabled()) {
+-      LOG.debug("NFS ACCESS fileId: " + handle.getFileId());
++      LOG.debug("NFS ACCESS fileId: " + handle.getFileId() + " client:"
++          + remoteAddress);
+     }
+ 
+     try {
+@@ -641,7 +644,8 @@ READLINK3Response readlink(XDR xdr, SecurityHandler securityHandler,
+ 
+     FileHandle handle = request.getHandle();
+     if (LOG.isDebugEnabled()) {
+-      LOG.debug("NFS READLINK fileId: " + handle.getFileId());
++      LOG.debug("NFS READLINK fileId: " + handle.getFileId() + " client:"
++          + remoteAddress);
+     }
+ 
+     String fileIdPath = Nfs3Utils.getFileIdPath(handle);
+@@ -719,7 +723,7 @@ READ3Response read(XDR xdr, SecurityHandler securityHandler,
+     FileHandle handle = request.getHandle();
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS READ fileId: " + handle.getFileId() + " offset: " + offset
+-          + " count: " + count);
++          + " count: " + count + " client:" + remoteAddress);
+     }
+ 
+     Nfs3FileAttributes attrs;
+@@ -861,7 +865,7 @@ WRITE3Response write(XDR xdr, Channel channel, int xid,
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS WRITE fileId: " + handle.getFileId() + " offset: "
+           + offset + " length: " + count + " stableHow: " + stableHow.getValue()
+-          + " xid: " + xid);
++          + " xid: " + xid + " client: " + remoteAddress);
+     }
+ 
+     Nfs3FileAttributes preOpAttr = null;
+@@ -934,7 +938,7 @@ CREATE3Response create(XDR xdr, SecurityHandler securityHandler,
+     String fileName = request.getName();
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS CREATE dir fileId: " + dirHandle.getFileId()
+-          + " filename: " + fileName);
++          + " filename: " + fileName + " client:" + remoteAddress);
+     }
+ 
+     int createMode = request.getMode();
+@@ -1065,6 +1069,10 @@ MKDIR3Response mkdir(XDR xdr, SecurityHandler securityHandler,
+     }
+     FileHandle dirHandle = request.getHandle();
+     String fileName = request.getName();
++    if (LOG.isDebugEnabled()) {
++      LOG.debug("NFS MKDIR dirId: " + dirHandle.getFileId() + " filename: "
++          + fileName + " client:" + remoteAddress);
++    }
+ 
+     if (request.getObjAttr().getUpdateFields().contains(SetAttrField.SIZE)) {
+       LOG.error("Setting file size is not supported when mkdir: " + fileName
+@@ -1163,7 +1171,7 @@ REMOVE3Response remove(XDR xdr, SecurityHandler securityHandler,
+     String fileName = request.getName();
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS REMOVE dir fileId: " + dirHandle.getFileId()
+-          + " fileName: " + fileName);
++          + " fileName: " + fileName + " client:" + remoteAddress);
+     }
+ 
+     String dirFileIdPath = Nfs3Utils.getFileIdPath(dirHandle);
+@@ -1244,7 +1252,7 @@ RMDIR3Response rmdir(XDR xdr, SecurityHandler securityHandler,
+ 
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS RMDIR dir fileId: " + dirHandle.getFileId()
+-          + " fileName: " + fileName);
++          + " fileName: " + fileName + " client:" + remoteAddress);
+     }
+ 
+     String dirFileIdPath = Nfs3Utils.getFileIdPath(dirHandle);
+@@ -1331,7 +1339,8 @@ RENAME3Response rename(XDR xdr, SecurityHandler securityHandler,
+     String toName = request.getToName();
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS RENAME from: " + fromHandle.getFileId() + "/" + fromName
+-          + " to: " + toHandle.getFileId() + "/" + toName);
++          + " to: " + toHandle.getFileId() + "/" + toName + " client:"
++          + remoteAddress);
+     }
+ 
+     String fromDirFileIdPath = Nfs3Utils.getFileIdPath(fromHandle);
+@@ -1429,7 +1438,8 @@ SYMLINK3Response symlink(XDR xdr, SecurityHandler securityHandler,
+     // Don't do any name check to source path, just leave it to HDFS
+     String linkIdPath = linkDirIdPath + "/" + name;
+     if (LOG.isDebugEnabled()) {
+-      LOG.debug("NFS SYMLINK, target: " + symData + " link: " + linkIdPath);
++      LOG.debug("NFS SYMLINK, target: " + symData + " link: " + linkIdPath
++          + " client:" + remoteAddress);
+     }
+ 
+     try {
+@@ -1527,7 +1537,7 @@ public READDIR3Response readdir(XDR xdr, SecurityHandler securityHandler,
+ 
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS READDIR fileId: " + handle.getFileId() + " cookie: "
+-          + cookie + " count: " + count);
++          + cookie + " count: " + count + " client:" + remoteAddress);
+     }
+ 
+     HdfsFileStatus dirStatus;
+@@ -1690,7 +1700,8 @@ READDIRPLUS3Response readdirplus(XDR xdr, SecurityHandler securityHandler,
+ 
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS READDIRPLUS fileId: " + handle.getFileId() + " cookie: "
+-          + cookie + " dirCount: " + dirCount + " maxCount: " + maxCount);
++          + cookie + " dirCount: " + dirCount + " maxCount: " + maxCount
++          + " client:" + remoteAddress);
+     }
+ 
+     HdfsFileStatus dirStatus;
+@@ -1849,7 +1860,8 @@ FSSTAT3Response fsstat(XDR xdr, SecurityHandler securityHandler,
+ 
+     FileHandle handle = request.getHandle();
+     if (LOG.isDebugEnabled()) {
+-      LOG.debug("NFS FSSTAT fileId: " + handle.getFileId());
++      LOG.debug("NFS FSSTAT fileId: " + handle.getFileId() + " client:"
++          + remoteAddress);
+     }
+ 
+     try {
+@@ -1923,7 +1935,8 @@ FSINFO3Response fsinfo(XDR xdr, SecurityHandler securityHandler,
+ 
+     FileHandle handle = request.getHandle();
+     if (LOG.isDebugEnabled()) {
+-      LOG.debug("NFS FSINFO fileId: " + handle.getFileId());
++      LOG.debug("NFS FSINFO fileId: " + handle.getFileId() + " client:"
++          + remoteAddress);
+     }
+ 
+     try {
+@@ -1989,7 +2002,8 @@ PATHCONF3Response pathconf(XDR xdr, SecurityHandler securityHandler,
+     Nfs3FileAttributes attrs;
+ 
+     if (LOG.isDebugEnabled()) {
+-      LOG.debug("NFS PATHCONF fileId: " + handle.getFileId());
++      LOG.debug("NFS PATHCONF fileId: " + handle.getFileId() + " client:"
++          + remoteAddress);
+     }
+ 
+     try {
+@@ -2040,7 +2054,8 @@ COMMIT3Response commit(XDR xdr, Channel channel, int xid,
+     FileHandle handle = request.getHandle();
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS COMMIT fileId: " + handle.getFileId() + " offset="
+-          + request.getOffset() + " count=" + request.getCount());
++          + request.getOffset() + " count=" + request.getCount() + " client:"
++          + remoteAddress);
+     }
+ 
+     String fileIdPath = Nfs3Utils.getFileIdPath(handle);
+-- 
+1.7.9.5
+

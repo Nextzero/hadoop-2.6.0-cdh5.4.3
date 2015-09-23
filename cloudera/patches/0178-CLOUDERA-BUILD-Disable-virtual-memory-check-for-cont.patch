@@ -1,0 +1,43 @@
+From 57f1ff462ace336a3057a27afb07890986f99522 Mon Sep 17 00:00:00 2001
+From: Naren Koneru <naren@cloudera.com>
+Date: Fri, 21 Feb 2014 15:39:36 -0800
+Subject: [PATCH 178/596] CLOUDERA-BUILD Disable virtual memory check for
+ containers. Please look at CDH-17484 for more
+ details.
+
+(cherry picked from commit a48ba7ac066b4d50ee4c8757ff1f2fe2269ccc3e)
+(cherry picked from commit c02e10273577f91f36cd70ed657e4bc3c4c9a875)
+---
+ .../apache/hadoop/yarn/conf/YarnConfiguration.java |    2 +-
+ .../src/main/resources/yarn-default.xml            |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
+index 6b991e7..e819880 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-api/src/main/java/org/apache/hadoop/yarn/conf/YarnConfiguration.java
+@@ -775,7 +775,7 @@ private static void addDeprecatedKeys() {
+   /** Specifies whether physical memory check is enabled. */
+   public static final String NM_VMEM_CHECK_ENABLED = NM_PREFIX
+       + "vmem-check-enabled";
+-  public static final boolean DEFAULT_NM_VMEM_CHECK_ENABLED = true;
++  public static final boolean DEFAULT_NM_VMEM_CHECK_ENABLED = false;
+ 
+   /** Conversion ratio for physical memory to virtual memory. */
+   public static final String NM_VMEM_PMEM_RATIO =
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/resources/yarn-default.xml b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/resources/yarn-default.xml
+index d47ddca..d67c6e6 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/resources/yarn-default.xml
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/resources/yarn-default.xml
+@@ -867,7 +867,7 @@
+     <description>Whether virtual memory limits will be enforced for
+     containers.</description>
+     <name>yarn.nodemanager.vmem-check-enabled</name>
+-    <value>true</value>
++    <value>false</value>
+   </property>
+ 
+   <property>
+-- 
+1.7.9.5
+

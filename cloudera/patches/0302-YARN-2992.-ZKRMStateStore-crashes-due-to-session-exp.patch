@@ -1,0 +1,38 @@
+From f13f7de6d176f975b0a4fefbe9a1f34e8afd2013 Mon Sep 17 00:00:00 2001
+From: Jian He <jianhe@apache.org>
+Date: Fri, 26 Dec 2014 17:59:58 -0800
+Subject: [PATCH 302/596] YARN-2992. ZKRMStateStore crashes due to session
+ expiry. Contributed by Karthik Kambatla (cherry
+ picked from commit
+ 1454efe5d4fe4214ec5ef9142d55dbeca7dab953)
+
+(cherry picked from commit ca0349b87ab1b2d0d2b9dc93de7806d26713165c)
+(cherry picked from commit beacdd6adffa23052dd89275ad4db820bdb315a0)
+---
+ .../resourcemanager/recovery/ZKRMStateStore.java   |    3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java
+index ab048ca..1774b39 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/recovery/ZKRMStateStore.java
+@@ -1081,6 +1081,8 @@ private boolean shouldRetry(Code code) {
+       switch (code) {
+         case CONNECTIONLOSS:
+         case OPERATIONTIMEOUT:
++        case SESSIONEXPIRED:
++        case SESSIONMOVED:
+           return true;
+         default:
+           break;
+@@ -1109,6 +1111,7 @@ T runWithRetries() throws Exception {
+           if (shouldRetry(ke.code()) && ++retry < numRetries) {
+             LOG.info("Retrying operation on ZK. Retry no. " + retry);
+             Thread.sleep(zkRetryInterval);
++            createConnection();
+             continue;
+           }
+           LOG.info("Maxed out ZK retries. Giving up!");
+-- 
+1.7.9.5
+

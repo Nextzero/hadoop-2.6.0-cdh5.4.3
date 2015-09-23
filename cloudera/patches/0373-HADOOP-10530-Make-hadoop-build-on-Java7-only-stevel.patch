@@ -1,0 +1,152 @@
+From 3ca58f453198cf9e76d614142127d40294590a99 Mon Sep 17 00:00:00 2001
+From: Steve Loughran <stevel@apache.org>
+Date: Mon, 8 Dec 2014 15:30:34 +0000
+Subject: [PATCH 373/596] HADOOP-10530 Make hadoop build on Java7+ only
+ (stevel)
+
+(cherry picked from commit 275561d8488fda9a2735b29f5396d8b6140ffa19)
+
+Conflicts:
+	hadoop-project/pom.xml
+---
+ BUILDING.txt                                     |    4 ++--
+ hadoop-assemblies/pom.xml                        |    4 ++--
+ hadoop-common-project/hadoop-annotations/pom.xml |   17 -----------------
+ hadoop-project/pom.xml                           |   17 ++++++++++++++---
+ pom.xml                                          |    4 ++--
+ 5 files changed, 20 insertions(+), 26 deletions(-)
+
+diff --git a/BUILDING.txt b/BUILDING.txt
+index 9ab77e5..9e07356 100644
+--- a/BUILDING.txt
++++ b/BUILDING.txt
+@@ -4,7 +4,7 @@ Build instructions for Hadoop
+ Requirements:
+ 
+ * Unix System
+-* JDK 1.6+
++* JDK 1.7+
+ * Maven 3.0 or later
+ * Findbugs 1.3.9 (if running findbugs)
+ * ProtocolBuffer 2.5.0
+@@ -217,7 +217,7 @@ Building on Windows
+ Requirements:
+ 
+ * Windows System
+-* JDK 1.6+
++* JDK 1.7+
+ * Maven 3.0 or later
+ * Findbugs 1.3.9 (if running findbugs)
+ * ProtocolBuffer 2.5.0
+diff --git a/hadoop-assemblies/pom.xml b/hadoop-assemblies/pom.xml
+index 04366df..2a44236 100644
+--- a/hadoop-assemblies/pom.xml
++++ b/hadoop-assemblies/pom.xml
+@@ -45,10 +45,10 @@
+         <configuration>
+           <rules>
+             <requireMavenVersion>
+-              <version>[3.0.0,)</version>
++              <version>${enforced.maven.version}</version>
+             </requireMavenVersion>
+             <requireJavaVersion>
+-              <version>1.6</version>
++              <version>${enforced.java.version}</version>
+             </requireJavaVersion>
+           </rules>
+         </configuration>
+diff --git a/hadoop-common-project/hadoop-annotations/pom.xml b/hadoop-common-project/hadoop-annotations/pom.xml
+index 41ca503..69ad7fa 100644
+--- a/hadoop-common-project/hadoop-annotations/pom.xml
++++ b/hadoop-common-project/hadoop-annotations/pom.xml
+@@ -40,23 +40,6 @@
+ 
+   <profiles>
+     <profile>
+-      <id>os.linux</id>
+-      <activation>
+-        <os>
+-          <family>!Mac</family>
+-        </os>
+-      </activation>
+-      <dependencies>
+-        <dependency>
+-          <groupId>jdk.tools</groupId>
+-          <artifactId>jdk.tools</artifactId>
+-          <version>1.6</version>
+-          <scope>system</scope>
+-          <systemPath>${java.home}/../lib/tools.jar</systemPath>
+-        </dependency>
+-      </dependencies>
+-    </profile>
+-    <profile>
+       <id>jdk1.7</id>
+       <activation>
+         <jdk>1.7</jdk>
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index 9315ade..2148d99 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -73,6 +73,17 @@
+     <zookeeper.version>3.4.6</zookeeper.version>
+ 
+     <tomcat.version>6.0.41</tomcat.version>
++
++    <!-- define the Java language version used by the compiler -->
++    <javac.version>${javaVersion}</javac.version>
++
++    <!-- The java version enforced by the maven enforcer -->
++    <!-- more complex patterns can be used here, such as
++       [${javac.version})
++    for an open-ended enforcement
++    -->
++    <enforced.java.version>[${javac.version},)</enforced.java.version>
++    <enforced.maven.version>[3.0.2,)</enforced.maven.version>
+   </properties>
+ 
+   <dependencyManagement>
+@@ -955,7 +966,7 @@
+           <artifactId>maven-compiler-plugin</artifactId>
+           <version>2.5.1</version>
+           <configuration>
+-            <source>1.6</source>
++            <source>${javac.version}</source>
+             <target>${targetJavaVersion}</target>
+           </configuration>
+         </plugin>
+@@ -1258,8 +1269,8 @@
+             <artifactId>maven-compiler-plugin</artifactId>
+             <configuration>
+               <fork>true</fork>
+-              <source>1.6</source>
+-              <target>1.6</target>
++              <source>${javac.version}</source>
++              <target>${targetJavaVersion}</target>
+               <compilerArguments>
+                 <Xlint/>
+                 <Xmaxwarns>9999</Xmaxwarns>
+diff --git a/pom.xml b/pom.xml
+index 204c39f..7b2e9cf 100644
+--- a/pom.xml
++++ b/pom.xml
+@@ -105,7 +105,7 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
+     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+ 
+     <javaVersion>1.7</javaVersion>
+-    <targetJavaVersion>1.6</targetJavaVersion>
++    <targetJavaVersion>1.7</targetJavaVersion>
+   </properties>
+ 
+   <modules>
+@@ -141,7 +141,7 @@ xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xs
+                 <version>[3.0.2,)</version>
+               </requireMavenVersion>
+               <requireJavaVersion>
+-                <version>1.6</version>
++                <version>[1.7,)</version>
+               </requireJavaVersion>
+             </rules>
+           </configuration>
+-- 
+1.7.9.5
+

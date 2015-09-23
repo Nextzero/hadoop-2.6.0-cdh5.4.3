@@ -1,0 +1,109 @@
+From d035af77f746049d5cc123c4f3e2cba9341d3a8f Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@apache.org>
+Date: Thu, 9 May 2013 21:22:50 +0000
+Subject: [PATCH 060/596] MR1: MAPREDUCE-5218. Annotate (comment) internal
+ classes as Private. (kkambatl via tucu)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1480779 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 2b331d8e2242e862fec2017f073d7e9db521e592)
+
+Conflicts:
+	src/mapred/org/apache/hadoop/mapred/MapReducePolicyProvider.java
+	src/mapred/org/apache/hadoop/mapred/TaskInProgress.java
+
+Reason: API Compatibility
+Ref: CDH-9121/9128/9129/9130
+(cherry picked from commit 6d132a80a4dfb843cfc46fef1babfef389b2ccaf)
+(cherry picked from commit be8e5b0d33feb83e8b6e433eff7c317b7770ae9b)
+(cherry picked from commit 05dda52916b5da742e3ab7b8866a09f3a34f9984)
+(cherry picked from commit 10f16c9c515448a86266c2e7cd59d2ba4de4c2b2)
+---
+ .../hadoop/mapred/MapReducePolicyProvider.java     |    2 ++
+ .../org/apache/hadoop/mapred/TaskInProgress.java   |    2 ++
+ .../hadoop/mapred/TaskUmbilicalProtocol.java       |    2 ++
+ .../org/apache/hadoop/mapred/tools/MRAdmin.java    |    2 ++
+ 4 files changed, 8 insertions(+)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/MapReducePolicyProvider.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/MapReducePolicyProvider.java
+index 307543d..0f74173 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/MapReducePolicyProvider.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/MapReducePolicyProvider.java
+@@ -17,6 +17,7 @@
+  */
+ package org.apache.hadoop.mapred;
+ 
++import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.fs.CommonConfigurationKeys;
+ import org.apache.hadoop.ha.HAServiceProtocol;
+ import org.apache.hadoop.ha.ZKFCProtocol;
+@@ -29,6 +30,7 @@
+ /**
+  * {@link PolicyProvider} for Map-Reduce protocols.
+  */
++@Private
+ public class MapReducePolicyProvider extends PolicyProvider {
+   private static final Service[] mapReduceServices = 
+     new Service[] {
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskInProgress.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskInProgress.java
+index fd90373..74f0b99 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskInProgress.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskInProgress.java
+@@ -30,6 +30,7 @@
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
++import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.mapred.SortedRanges.Range;
+ import org.apache.hadoop.mapreduce.split.JobSplit.TaskSplitMetaInfo;
+ import org.apache.hadoop.mapreduce.TaskType;
+@@ -50,6 +51,7 @@
+  * ever have to handle.  Once those are up, the TIP is dead.
+  * **************************************************************
+  */
++@Private
+ public class TaskInProgress {
+   static final int MAX_TASK_EXECS = 1;
+   int maxTaskAttempts = 4;    
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskUmbilicalProtocol.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskUmbilicalProtocol.java
+index 82c446b..591defe 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskUmbilicalProtocol.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskUmbilicalProtocol.java
+@@ -20,6 +20,7 @@
+ 
+ import java.io.IOException;
+ 
++import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.ipc.VersionedProtocol;
+ import org.apache.hadoop.mapred.JvmTask;
+ import org.apache.hadoop.mapreduce.security.token.JobTokenSelector;
+@@ -29,6 +30,7 @@
+  * parent is a daemon which which polls the central master for a new map or
+  * reduce task and runs it as a child process.  All communication between child
+  * and parent is via this protocol. */
++@Private
+ @TokenInfo(JobTokenSelector.class)
+ public interface TaskUmbilicalProtocol extends VersionedProtocol {
+ 
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/tools/MRAdmin.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/tools/MRAdmin.java
+index ed445e1..6726cbe 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/tools/MRAdmin.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/tools/MRAdmin.java
+@@ -19,6 +19,7 @@
+ 
+ import java.io.IOException;
+ 
++import org.apache.hadoop.classification.InterfaceAudience.Private;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.conf.Configured;
+ import org.apache.hadoop.fs.CommonConfigurationKeys;
+@@ -42,6 +43,7 @@
+  * and 1) refresh the service-level authorization policy, 2) refresh queue acl
+  * properties.
+  */
++@Private
+ public class MRAdmin extends Configured implements Tool {
+ 
+   public MRAdmin() {
+-- 
+1.7.9.5
+

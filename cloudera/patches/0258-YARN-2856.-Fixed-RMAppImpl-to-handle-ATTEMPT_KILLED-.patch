@@ -1,0 +1,66 @@
+From 16edd4aa54991dbea94b9ab541d7f4ca12a0fdcc Mon Sep 17 00:00:00 2001
+From: Jian He <jianhe@apache.org>
+Date: Thu, 13 Nov 2014 15:33:20 -0800
+Subject: [PATCH 258/596] YARN-2856. Fixed RMAppImpl to handle ATTEMPT_KILLED
+ event at ACCEPTED state on app recovery.
+ Contributed by Rohith Sharmaks (cherry picked from
+ commit d005404ef7211fe96ce1801ed267a249568540fd)
+
+(cherry picked from commit beb184ac580b0d89351a3f3a7201da34a26db1c1)
+(cherry picked from commit 64c0f924158cb28f53b71a6aca9d1e2cef0cdfd8)
+---
+ .../server/resourcemanager/rmapp/RMAppImpl.java    |    3 +++
+ .../rmapp/TestRMAppTransitions.java                |   23 ++++++++++++++++++++
+ 2 files changed, 26 insertions(+)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java
+index aeb2cda..751dbe4 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/RMAppImpl.java
+@@ -229,6 +229,9 @@
+         new FinalSavingTransition(FINISHED_TRANSITION, RMAppState.FINISHED))
+     .addTransition(RMAppState.ACCEPTED, RMAppState.KILLING,
+         RMAppEventType.KILL, new KillAttemptTransition())
++    .addTransition(RMAppState.ACCEPTED, RMAppState.FINAL_SAVING,
++        RMAppEventType.ATTEMPT_KILLED,
++        new FinalSavingTransition(new AppKilledTransition(), RMAppState.KILLED))
+     .addTransition(RMAppState.ACCEPTED, RMAppState.ACCEPTED, 
+         RMAppEventType.APP_RUNNING_ON_NODE,
+         new AppRunningOnNodeTransition())
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java
+index e68d074..0a2f0d4 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/rmapp/TestRMAppTransitions.java
+@@ -714,6 +714,29 @@ public void testAppAcceptedKill() throws IOException, InterruptedException {
+     verifyApplicationFinished(RMAppState.KILLED);
+     verifyAppRemovedSchedulerEvent(RMAppState.KILLED);
+   }
++  
++  @Test
++  public void testAppAcceptedAttemptKilled() throws IOException,
++      InterruptedException {
++    LOG.info("--- START: testAppAcceptedAttemptKilled ---");
++    RMApp application = testCreateAppAccepted(null);
++
++    // ACCEPTED => FINAL_SAVING event RMAppEventType.ATTEMPT_KILLED
++    // When application recovery happens for attempt is KILLED but app is
++    // RUNNING.
++    RMAppEvent event =
++        new RMAppEvent(application.getApplicationId(),
++            RMAppEventType.ATTEMPT_KILLED);
++    application.handle(event);
++    rmDispatcher.await();
++
++    assertAppState(RMAppState.FINAL_SAVING, application);
++    sendAppUpdateSavedEvent(application);
++    assertKilled(application);
++    assertAppFinalStateSaved(application);
++    verifyApplicationFinished(RMAppState.KILLED);
++    verifyAppRemovedSchedulerEvent(RMAppState.KILLED);
++  }
+ 
+   @Test
+   public void testAppRunningKill() throws IOException {
+-- 
+1.7.9.5
+

@@ -1,0 +1,238 @@
+From 52ca8636f88343ca8721227b28b360bd5424324b Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Wed, 13 May 2015 14:29:05 -0700
+Subject: [PATCH 572/596] HDFS-8380. Always call addStoredBlock on blocks
+ which have been shifted from one storage to another
+ (cmccabe)
+
+(cherry picked from commit 281d47a96937bc329b1b4051ffcb8f5fcac98354)
+(cherry picked from commit 52da75180a949f671db4ea394e380b2e55df3854)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfoContiguous.java
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+	hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestNameNodePrunesMissingStorages.java
+
+(cherry picked from commit 6ce71533aa3e408763357301d077dbe1ff855b8e)
+---
+ .../hdfs/server/blockmanagement/BlockInfo.java     |   17 ---
+ .../hdfs/server/blockmanagement/BlockManager.java  |   10 +-
+ .../TestNameNodePrunesMissingStorages.java         |  110 ++++++++++++++++++++
+ 3 files changed, 119 insertions(+), 18 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfo.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfo.java
+index 00ae5c1..34e06fb 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfo.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfo.java
+@@ -228,23 +228,6 @@ assert getPrevious(dnIndex) == null && getNext(dnIndex) == null :
+   }
+ 
+   /**
+-   * Find specified DatanodeDescriptor.
+-   * @return index or -1 if not found.
+-   */
+-  boolean findDatanode(DatanodeDescriptor dn) {
+-    int len = getCapacity();
+-    for(int idx = 0; idx < len; idx++) {
+-      DatanodeDescriptor cur = getDatanode(idx);
+-      if(cur == dn) {
+-        return true;
+-      }
+-      if(cur == null) {
+-        break;
+-      }
+-    }
+-    return false;
+-  }
+-  /**
+    * Find specified DatanodeStorageInfo.
+    * @return DatanodeStorageInfo or null if not found.
+    */
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index 14cc2c5..680af1f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -1797,6 +1797,9 @@ public boolean processReport(final DatanodeID nodeID,
+       if (storageInfo.getBlockReportCount() == 0) {
+         // The first block report can be processed a lot more efficiently than
+         // ordinary block reports.  This shortens restart times.
++        LOG.info("Processing first storage report for " +
++            storageInfo.getStorageID() + " from datanode " +
++            nodeID.getDatanodeUuid());
+         processFirstBlockReport(storageInfo, newReport);
+       } else {
+         invalidatedBlocks = processReport(storageInfo, newReport);
+@@ -2015,6 +2018,11 @@ private void processFirstBlockReport(
+       Block iblk = itBR.next();
+       ReplicaState reportedState = itBR.getCurrentReplicaState();
+       
++      if (LOG.isDebugEnabled()) {
++        LOG.debug("Initial report of block " + iblk.getBlockName()
++            + " on " + storageInfo.getDatanodeDescriptor() + " size " +
++            iblk.getNumBytes() + " replicaState = " + reportedState);
++      }
+       if (shouldPostponeBlocksFromFuture &&
+           namesystem.isGenStampInFuture(iblk)) {
+         queueReportedBlock(storageInfo, iblk, reportedState,
+@@ -2394,7 +2402,7 @@ void addStoredBlockUnderConstruction(StatefulBlockInfo ucBlock,
+         storageInfo, ucBlock.reportedBlock, ucBlock.reportedState);
+ 
+     if (ucBlock.reportedState == ReplicaState.FINALIZED &&
+-        !block.findDatanode(storageInfo.getDatanodeDescriptor())) {
++        (block.findStorageInfo(storageInfo) < 0)) {
+       addStoredBlock(block, storageInfo, null, true);
+     }
+   } 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestNameNodePrunesMissingStorages.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestNameNodePrunesMissingStorages.java
+index 3b175c8..05e2959 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestNameNodePrunesMissingStorages.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestNameNodePrunesMissingStorages.java
+@@ -23,29 +23,42 @@
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileUtil;
++import org.apache.hadoop.fs.FSDataOutputStream;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
+ import org.apache.hadoop.hdfs.DFSTestUtil;
+ import org.apache.hadoop.hdfs.DistributedFileSystem;
+ import org.apache.hadoop.hdfs.HdfsConfiguration;
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
++import org.apache.hadoop.hdfs.client.HdfsDataOutputStream;
+ import org.apache.hadoop.hdfs.protocol.DatanodeID;
+ import org.apache.hadoop.hdfs.protocol.ExtendedBlock;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+ import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
++import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsDatasetSpi;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsVolumeSpi;
+ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
++import org.apache.hadoop.hdfs.server.protocol.DatanodeStorage;
+ import org.apache.hadoop.hdfs.server.protocol.StorageReport;
+ import org.apache.hadoop.test.GenericTestUtils;
++import org.apache.log4j.Level;
+ import org.junit.Assert;
+ import org.junit.Test;
+ 
++import java.io.BufferedOutputStream;
++import java.io.BufferedReader;
++import java.io.BufferedWriter;
+ import java.io.File;
+ import java.io.FileOutputStream;
++import java.io.FileReader;
+ import java.io.IOException;
++import java.io.OutputStreamWriter;
++import java.io.Writer;
+ import java.util.Arrays;
++import java.util.EnumSet;
+ import java.util.Iterator;
+ import java.util.List;
++import java.util.UUID;
+ 
+ import static org.hamcrest.core.Is.is;
+ import static org.junit.Assert.assertThat;
+@@ -248,4 +261,101 @@ public Boolean get() {
+       }
+     }
+   }
++
++  private static void rewriteVersionFile(File versionFile,
++                            String newStorageId) throws IOException {
++    BufferedReader in = new BufferedReader(new FileReader(versionFile));
++    File newVersionFile =
++        new File(versionFile.getParent(), UUID.randomUUID().toString());
++    Writer out = new BufferedWriter(new OutputStreamWriter(
++        new FileOutputStream(newVersionFile), "UTF-8"));
++    final String STORAGE_ID = "storageID=";
++    boolean success = false;
++    try {
++      String line;
++      while ((line = in.readLine()) != null) {
++        if (line.startsWith(STORAGE_ID)) {
++          out.write(STORAGE_ID + newStorageId + "\n");
++        } else {
++          out.write(line + "\n");
++        }
++      }
++      in.close();
++      in = null;
++      out.close();
++      out = null;
++      newVersionFile.renameTo(versionFile);
++      success = true;
++    } finally {
++      if (in != null) {
++        in.close();
++      }
++      if (out != null) {
++        out.close();
++      }
++      if (!success) {
++        versionFile.delete();
++      }
++    }
++  }
++
++  @Test(timeout=300000)
++  public void testRenamingStorageIds() throws Exception {
++    Configuration conf = new HdfsConfiguration();
++    conf.setInt(DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_KEY, 0);
++    final MiniDFSCluster cluster = new MiniDFSCluster
++        .Builder(conf).numDataNodes(1)
++        .storagesPerDatanode(1)
++        .build();
++    GenericTestUtils.setLogLevel(BlockManager.LOG, Level.ALL);
++    try {
++      cluster.waitActive();
++      final Path TEST_PATH = new Path("/foo1");
++      DistributedFileSystem fs = cluster.getFileSystem();
++      // Create a file and leave it open
++      DFSTestUtil.createFile(fs, TEST_PATH, 1, (short)1, 0xdeadbeef);
++      // Find the volume within the datanode which holds that first storage.
++      DataNode dn = cluster.getDataNodes().get(0);
++      FsVolumeSpi volume =
++           dn.getFSDataset().getVolumes().get(0);
++      final String newStorageId = DatanodeStorage.generateUuid();
++      File currentDir = new File(volume.getBasePath(), "current");
++      File versionFile = new File(currentDir, "VERSION");
++      rewriteVersionFile(versionFile, newStorageId);
++      final ExtendedBlock block = DFSTestUtil.getFirstBlock(fs, TEST_PATH);
++      cluster.restartDataNodes();
++      GenericTestUtils.waitFor(new Supplier<Boolean>() {
++        @Override
++        public Boolean get() {
++          cluster.getNamesystem().writeLock();
++          try {
++            Iterator<DatanodeStorageInfo> storageInfoIter =
++                cluster.getNamesystem().getBlockManager().
++                    getStorages(block.getLocalBlock()).iterator();
++            if (!storageInfoIter.hasNext()) {
++              LOG.info("Expected to find a storage for " +
++                      block.getBlockName() + ", but nothing was found.  " +
++                      "Continuing to wait.");
++              return false;
++            }
++            DatanodeStorageInfo info = storageInfoIter.next();
++            if (!newStorageId.equals(info.getStorageID())) {
++              LOG.info("Expected " + block.getBlockName() + " to " +
++                  "be in storage id " + newStorageId + ", but it " +
++                  "was in " + info.getStorageID() + ".  Continuing " +
++                  "to wait.");
++              return false;
++            }
++            LOG.info("Successfully found " + block.getBlockName() + " in " +
++                "be in storage id " + newStorageId);
++          } finally {
++            cluster.getNamesystem().writeUnlock();
++          }
++          return true;
++        }
++      }, 20, 100000);
++    } finally {
++      cluster.shutdown();
++    }
++  }
+ }
+-- 
+1.7.9.5
+

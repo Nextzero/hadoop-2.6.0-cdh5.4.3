@@ -1,0 +1,227 @@
+From 88ee2ff95241f2c946a1521f56a824aa5262da9c Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Tue, 18 Nov 2014 22:16:58 -0800
+Subject: [PATCH 244/596] HDFS-7373. Allow decommissioning of dead DataNodes.
+ Contributed by Zhe Zhang.
+
+(cherry picked from commit 5bd048e8378034b496bacc73b470a25d855aceb1)
+(cherry picked from commit fbce4df71122a8e9ccba8edffa4b9ced3be885bb)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+	hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
+
+(cherry picked from commit bc4637f66fb9bcc5d912018a730780c9eb11dd6f)
+---
+ .../server/blockmanagement/DatanodeManager.java    |   28 +++++++++--------
+ .../java/org/apache/hadoop/hdfs/DFSTestUtil.java   |   19 ++++++++++++
+ .../hdfs/server/namenode/TestDeadDatanode.java     |   32 ++------------------
+ .../server/namenode/TestDecommissioningStatus.java |   32 ++++++++++++++++++++
+ 4 files changed, 70 insertions(+), 41 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+index 80965b9..19101ea 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/DatanodeManager.java
+@@ -837,16 +837,21 @@ boolean checkDecommissionState(DatanodeDescriptor node) {
+   @InterfaceAudience.Private
+   @VisibleForTesting
+   public void startDecommission(DatanodeDescriptor node) {
+-    if (!node.isDecommissionInProgress() && !node.isDecommissioned()) {
+-      for (DatanodeStorageInfo storage : node.getStorageInfos()) {
+-        LOG.info("Start Decommissioning " + node + " " + storage
+-            + " with " + storage.numBlocks() + " blocks");
++    if (!node.isDecommissionInProgress()) {
++      if (!node.isAlive) {
++        LOG.info("Dead node " + node + " is decommissioned immediately.");
++        node.setDecommissioned();
++      } else if (!node.isDecommissioned()) {
++        for (DatanodeStorageInfo storage : node.getStorageInfos()) {
++          LOG.info("Start Decommissioning " + node + " " + storage
++              + " with " + storage.numBlocks() + " blocks");
++        }
++        heartbeatManager.startDecommission(node);
++        node.decommissioningStatus.setStartTime(now());
++
++        // all the blocks that reside on this node have to be replicated.
++        checkDecommissionState(node);
+       }
+-      heartbeatManager.startDecommission(node);
+-      node.decommissioningStatus.setStartTime(now());
+-      
+-      // all the blocks that reside on this node have to be replicated.
+-      checkDecommissionState(node);
+     }
+   }
+ 
+@@ -1001,14 +1006,13 @@ nodes with its data cleared (or user can just remove the StorageID
+   
+         // register new datanode
+         addDatanode(nodeDescr);
+-        checkDecommissioning(nodeDescr);
+-        
+         // also treat the registration message as a heartbeat
+         // no need to update its timestamp
+         // because its is done when the descriptor is created
+         heartbeatManager.addDatanode(nodeDescr);
+-        success = true;
+         incrementVersionCount(nodeReg.getSoftwareVersion());
++        checkDecommissioning(nodeDescr);
++        success = true;
+       } finally {
+         if (!success) {
+           removeDatanode(nodeDescr);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
+index c728b2b..f377f5e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/DFSTestUtil.java
+@@ -1636,4 +1636,23 @@ public static void addDataNodeLayoutVersion(final int lv, final String descripti
+     LayoutVersion.updateMap(DataNodeLayoutVersion.FEATURES,
+                             new LayoutVersion.LayoutFeature[] { feature });
+   }
++
++  /**
++   * Wait for datanode to reach alive or dead state for waitTime given in
++   * milliseconds.
++   */
++  public static void waitForDatanodeState(
++      final MiniDFSCluster cluster, final String nodeID,
++      final boolean alive, int waitTime)
++      throws TimeoutException, InterruptedException {
++    GenericTestUtils.waitFor(new Supplier<Boolean>() {
++      @Override
++      public Boolean get() {
++        FSNamesystem namesystem = cluster.getNamesystem();
++        final DatanodeDescriptor dd = BlockManagerTestUtil.getDatanode(
++            namesystem, nodeID);
++        return (dd.isAlive == alive);
++      }
++    }, 100, waitTime);
++  }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDeadDatanode.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDeadDatanode.java
+index 256f30a..4ba3d59 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDeadDatanode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDeadDatanode.java
+@@ -21,17 +21,15 @@
+ import static org.junit.Assert.fail;
+ 
+ import java.io.IOException;
+-import java.util.concurrent.TimeoutException;
+ 
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
++import org.apache.hadoop.hdfs.DFSTestUtil;
+ import org.apache.hadoop.hdfs.HdfsConfiguration;
+ import org.apache.hadoop.hdfs.MiniDFSCluster;
+ import org.apache.hadoop.hdfs.protocol.Block;
+-import org.apache.hadoop.hdfs.server.blockmanagement.BlockManagerTestUtil;
+-import org.apache.hadoop.hdfs.server.blockmanagement.DatanodeDescriptor;
+ import org.apache.hadoop.hdfs.server.datanode.DataNode;
+ import org.apache.hadoop.hdfs.server.datanode.DataNodeTestUtils;
+ import org.apache.hadoop.hdfs.server.protocol.DatanodeCommand;
+@@ -43,7 +41,6 @@
+ import org.apache.hadoop.hdfs.server.protocol.StorageBlockReport;
+ import org.apache.hadoop.hdfs.server.protocol.StorageReceivedDeletedBlocks;
+ import org.apache.hadoop.hdfs.server.protocol.StorageReport;
+-import org.apache.hadoop.util.Time;
+ import org.junit.After;
+ import org.junit.Test;
+ 
+@@ -61,29 +58,6 @@ public void cleanup() {
+   }
+ 
+   /**
+-   * wait for datanode to reach alive or dead state for waitTime given in
+-   * milliseconds.
+-   */
+-  private void waitForDatanodeState(String nodeID, boolean alive, int waitTime)
+-      throws TimeoutException, InterruptedException {
+-    long stopTime = Time.now() + waitTime;
+-    FSNamesystem namesystem = cluster.getNamesystem();
+-    String state = alive ? "alive" : "dead";
+-    while (Time.now() < stopTime) {
+-      final DatanodeDescriptor dd = BlockManagerTestUtil.getDatanode(
+-          namesystem, nodeID);
+-      if (dd.isAlive == alive) {
+-        LOG.info("datanode " + nodeID + " is " + state);
+-        return;
+-      }
+-      LOG.info("Waiting for datanode " + nodeID + " to become " + state);
+-      Thread.sleep(1000);
+-    }
+-    throw new TimeoutException("Timedout waiting for datanode reach state "
+-        + state);
+-  }
+-
+-  /**
+    * Test to ensure namenode rejects request from dead datanode
+    * - Start a cluster
+    * - Shutdown the datanode and wait for it to be marked dead at the namenode
+@@ -104,11 +78,11 @@ public void testDeadDatanode() throws Exception {
+     DatanodeRegistration reg = 
+       DataNodeTestUtils.getDNRegistrationForBP(cluster.getDataNodes().get(0), poolId);
+       
+-    waitForDatanodeState(reg.getDatanodeUuid(), true, 20000);
++    DFSTestUtil.waitForDatanodeState(cluster, reg.getDatanodeUuid(), true, 20000);
+ 
+     // Shutdown and wait for datanode to be marked dead
+     dn.shutdown();
+-    waitForDatanodeState(reg.getDatanodeUuid(), false, 20000);
++    DFSTestUtil.waitForDatanodeState(cluster, reg.getDatanodeUuid(), false, 20000);
+ 
+     DatanodeProtocol dnp = cluster.getNameNodeRpc();
+     
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
+index 6f94b71..c6312c0 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestDecommissioningStatus.java
+@@ -28,6 +28,7 @@
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Random;
++import java.util.concurrent.TimeoutException;
+ 
+ import org.apache.commons.io.output.ByteArrayOutputStream;
+ import org.apache.hadoop.conf.Configuration;
+@@ -372,4 +373,35 @@ public void testDecommissionStatusAfterDNRestart()
+     dm.refreshNodes(conf);
+     cleanupFile(fileSys, f);
+   }
++
++  /**
++   * Verify the support for decommissioning a datanode that is already dead.
++   * Under this scenario the datanode should immediately be marked as
++   * DECOMMISSIONED
++   */
++  @Test(timeout=120000)
++  public void testDecommissionDeadDN()
++      throws IOException, InterruptedException, TimeoutException {
++    DatanodeID dnID = cluster.getDataNodes().get(0).getDatanodeId();
++    String dnName = dnID.getXferAddr();
++    DataNodeProperties stoppedDN = cluster.stopDataNode(0);
++    DFSTestUtil.waitForDatanodeState(cluster, dnID.getDatanodeUuid(),
++        false, 30000);
++    FSNamesystem fsn = cluster.getNamesystem();
++    final DatanodeManager dm = fsn.getBlockManager().getDatanodeManager();
++    DatanodeDescriptor dnDescriptor = dm.getDatanode(dnID);
++    decommissionNode(fsn, localFileSys, dnName);
++    dm.refreshNodes(conf);
++    BlockManagerTestUtil.checkDecommissionState(dm, dnDescriptor);
++    assertTrue(dnDescriptor.isDecommissioned());
++
++    // Add the node back
++    cluster.restartDataNode(stoppedDN, true);
++    cluster.waitActive();
++
++    // Call refreshNodes on FSNamesystem with empty exclude file to remove the
++    // datanode from decommissioning list and make it available again.
++    writeConfigFile(localFileSys, excludeFile, null);
++    dm.refreshNodes(conf);
++  }
+ }
+-- 
+1.7.9.5
+

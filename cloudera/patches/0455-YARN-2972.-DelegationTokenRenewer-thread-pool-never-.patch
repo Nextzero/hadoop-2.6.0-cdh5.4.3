@@ -1,0 +1,32 @@
+From 4adafd6e6d0e3dddc5b79e734aff4e05536e59c6 Mon Sep 17 00:00:00 2001
+From: Junping Du <junping_du@apache.org>
+Date: Wed, 17 Dec 2014 17:40:00 -0800
+Subject: [PATCH 455/596] YARN-2972. DelegationTokenRenewer thread pool never
+ expands. Contributed by Jason Lowe (cherry picked
+ from commit
+ 2b4b0e8847048850206f091c6870a02e08cfe836)
+
+(cherry picked from commit 11e4ec52a1acae56370cb8a20827554a3fb2360e)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../security/DelegationTokenRenewer.java           |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java
+index 5459fda..fd2ab42 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/security/DelegationTokenRenewer.java
+@@ -151,7 +151,7 @@ protected ThreadPoolExecutor createNewThreadPoolService(Configuration conf) {
+         .setNameFormat("DelegationTokenRenewer #%d")
+         .build();
+     ThreadPoolExecutor pool =
+-        new ThreadPoolExecutor((5 < nThreads ? 5 : nThreads), nThreads, 3L,
++        new ThreadPoolExecutor(nThreads, nThreads, 3L,
+             TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
+     pool.setThreadFactory(tf);
+     pool.allowCoreThreadTimeOut(true);
+-- 
+1.7.9.5
+

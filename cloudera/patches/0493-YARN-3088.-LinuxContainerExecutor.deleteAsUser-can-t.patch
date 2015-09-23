@@ -1,0 +1,121 @@
+From 9b5b56780552eb473f19a4d25398001081fa139b Mon Sep 17 00:00:00 2001
+From: Jason Lowe <jlowe@apache.org>
+Date: Mon, 26 Jan 2015 15:40:21 +0000
+Subject: [PATCH 493/596] YARN-3088. LinuxContainerExecutor.deleteAsUser can
+ throw NPE if native executor returns an error.
+ Contributed by Eric Payne (cherry picked from
+ commit 902c6ea7e4d3b49e49d9ce51ae9d12694ecfcf89)
+
+(cherry picked from commit 07fe6a36cb0901b9540c9c278fb2593ffa27427f)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../server/nodemanager/LinuxContainerExecutor.java |    9 +++-
+ .../TestLinuxContainerExecutorWithMocks.java       |   49 +++++++++++++++++++-
+ 2 files changed, 55 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/LinuxContainerExecutor.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/LinuxContainerExecutor.java
+index 60e4713..8f8a200 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/LinuxContainerExecutor.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/LinuxContainerExecutor.java
+@@ -393,18 +393,23 @@ public void deleteAsUser(String user, Path dir, Path... baseDirs) {
+     verifyUsernamePattern(user);
+     String runAsUser = getRunAsUser(user);
+ 
++    String dirString = dir == null ? "" : dir.toUri().getPath();
++
+     List<String> command = new ArrayList<String>(
+         Arrays.asList(containerExecutorExe,
+                     runAsUser,
+                     user,
+                     Integer.toString(Commands.DELETE_AS_USER.getValue()),
+-                    dir == null ? "" : dir.toUri().getPath()));
++                    dirString));
++    List<String> pathsToDelete = new ArrayList<String>();
+     if (baseDirs == null || baseDirs.length == 0) {
+       LOG.info("Deleting absolute path : " + dir);
++      pathsToDelete.add(dirString);
+     } else {
+       for (Path baseDir : baseDirs) {
+         Path del = dir == null ? baseDir : new Path(baseDir, dir);
+         LOG.info("Deleting path : " + del);
++        pathsToDelete.add(del.toString());
+         command.add(baseDir.toUri().getPath());
+       }
+     }
+@@ -420,7 +425,7 @@ public void deleteAsUser(String user, Path dir, Path... baseDirs) {
+       }
+     } catch (IOException e) {
+       int exitCode = shExec.getExitCode();
+-      LOG.error("DeleteAsUser for " + dir.toUri().getPath()
++      LOG.error("DeleteAsUser for " + StringUtils.join(" ", pathsToDelete)
+           + " returned with exit code: " + exitCode, e);
+       LOG.error("Output from LinuxContainerExecutor's deleteAsUser follows:");
+       logOutput(shExec.getOutput());
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/TestLinuxContainerExecutorWithMocks.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/TestLinuxContainerExecutorWithMocks.java
+index 643b7c2..81591ca 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/TestLinuxContainerExecutorWithMocks.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/TestLinuxContainerExecutorWithMocks.java
+@@ -318,10 +318,57 @@ public void testDeleteAsUser() throws IOException {
+     String cmd = String.valueOf(
+         LinuxContainerExecutor.Commands.DELETE_AS_USER.getValue());
+     Path dir = new Path("/tmp/testdir");
+-    
++    Path testFile = new Path("testfile");
++    Path baseDir0 = new Path("/grid/0/BaseDir");
++    Path baseDir1 = new Path("/grid/1/BaseDir");
++
++    mockExec.deleteAsUser(appSubmitter, dir);
++    assertEquals(Arrays.asList(YarnConfiguration.DEFAULT_NM_NONSECURE_MODE_LOCAL_USER,
++        appSubmitter, cmd, "/tmp/testdir"),
++        readMockParams());
++
++    mockExec.deleteAsUser(appSubmitter, null);
++    assertEquals(Arrays.asList(YarnConfiguration.DEFAULT_NM_NONSECURE_MODE_LOCAL_USER,
++        appSubmitter, cmd, ""),
++        readMockParams());
++
++    mockExec.deleteAsUser(appSubmitter, testFile, baseDir0, baseDir1);
++    assertEquals(Arrays.asList(YarnConfiguration.DEFAULT_NM_NONSECURE_MODE_LOCAL_USER,
++        appSubmitter, cmd, testFile.toString(), baseDir0.toString(), baseDir1.toString()),
++        readMockParams());
++
++    mockExec.deleteAsUser(appSubmitter, null, baseDir0, baseDir1);
++    assertEquals(Arrays.asList(YarnConfiguration.DEFAULT_NM_NONSECURE_MODE_LOCAL_USER,
++        appSubmitter, cmd, "", baseDir0.toString(), baseDir1.toString()),
++        readMockParams());
++
++    File f = new File("./src/test/resources/mock-container-executer-with-error");
++    if (!FileUtil.canExecute(f)) {
++      FileUtil.setExecutable(f, true);
++    }
++    String executorPath = f.getAbsolutePath();
++    Configuration conf = new Configuration();
++    conf.set(YarnConfiguration.NM_LINUX_CONTAINER_EXECUTOR_PATH, executorPath);
++    mockExec.setConf(conf);
++
+     mockExec.deleteAsUser(appSubmitter, dir);
+     assertEquals(Arrays.asList(YarnConfiguration.DEFAULT_NM_NONSECURE_MODE_LOCAL_USER,
+         appSubmitter, cmd, "/tmp/testdir"),
+         readMockParams());
++
++    mockExec.deleteAsUser(appSubmitter, null);
++    assertEquals(Arrays.asList(YarnConfiguration.DEFAULT_NM_NONSECURE_MODE_LOCAL_USER,
++        appSubmitter, cmd, ""),
++        readMockParams());
++
++    mockExec.deleteAsUser(appSubmitter, testFile, baseDir0, baseDir1);
++    assertEquals(Arrays.asList(YarnConfiguration.DEFAULT_NM_NONSECURE_MODE_LOCAL_USER,
++        appSubmitter, cmd, testFile.toString(), baseDir0.toString(), baseDir1.toString()),
++        readMockParams());
++
++    mockExec.deleteAsUser(appSubmitter, null, baseDir0, baseDir1);
++    assertEquals(Arrays.asList(YarnConfiguration.DEFAULT_NM_NONSECURE_MODE_LOCAL_USER,
++        appSubmitter, cmd, "", baseDir0.toString(), baseDir1.toString()),
++        readMockParams());
+   }
+ }
+-- 
+1.7.9.5
+

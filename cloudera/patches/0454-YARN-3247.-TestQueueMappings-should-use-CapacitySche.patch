@@ -1,0 +1,31 @@
+From a79256b9e40be1fdf89011417d3948eaca55dd80 Mon Sep 17 00:00:00 2001
+From: Tsuyoshi Ozawa <ozawa@apache.org>
+Date: Wed, 25 Feb 2015 10:34:28 +0900
+Subject: [PATCH 454/596] YARN-3247. TestQueueMappings should use
+ CapacityScheduler explicitly. Contributed by Zhihai
+ Xu.
+
+(cherry picked from commit 6cbd9f1113fca9ff86fd6ffa783ecd54b147e0db)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+---
+ .../scheduler/capacity/TestQueueMappings.java      |    2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/TestQueueMappings.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/TestQueueMappings.java
+index 2317fab..005f40b 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/TestQueueMappings.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/capacity/TestQueueMappings.java
+@@ -135,6 +135,8 @@ public void testQueueMapping() throws Exception {
+     checkQMapping("a", Q1, cs);
+ 
+     csConf = new CapacitySchedulerConfiguration();
++    csConf.set(YarnConfiguration.RM_SCHEDULER,
++        CapacityScheduler.class.getName());
+     setupQueueConfiguration(csConf);
+     conf = new YarnConfiguration(csConf);
+ 
+-- 
+1.7.9.5
+

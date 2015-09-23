@@ -1,0 +1,38 @@
+From e8bc2ab23af53ce1708fae20817be9a036c1ed22 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Wed, 6 Nov 2013 15:13:49 -0800
+Subject: [PATCH 116/596] MR1: MAPREDUCE-5609. Add debug log message when
+ sending job end notification. (rkanter via tucu)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1539476 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 53a47c415600ae0216f9fe529650e26c72579118)
+(cherry picked from commit 9a52ec86c24b4614bedbf2a0fa91a3720c484898)
+(cherry picked from commit 0f3d8773451dcec87d1a89fbfbe63bc7ae262176)
+(cherry picked from commit 5579d17abd49c9a102596c5015822002a4c687b1)
+---
+ .../org/apache/hadoop/mapred/JobEndNotifier.java   |    2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobEndNotifier.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobEndNotifier.java
+index 81ea6c5..2810e69 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobEndNotifier.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobEndNotifier.java
+@@ -49,6 +49,7 @@ public static void startNotifier() {
+           public void run() {
+             try {
+               while (running) {
++                LOG.debug("Pending notifications: " + queue.size());
+                 sendNotification(queue.take());
+               }
+             }
+@@ -61,6 +62,7 @@ public void run() {
+ 
+           private void sendNotification(JobEndStatusInfo notification) {
+             try {
++              LOG.debug("Sending notification [" + notification + "]");
+               int code = httpNotification(notification.getUri(),
+                   notification.getTimeout());
+               if (code != 200) {
+-- 
+1.7.9.5
+

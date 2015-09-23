@@ -1,0 +1,29 @@
+From 6077d065cfe614b406c6a0df6843983d60b2f8a4 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Fri, 19 Dec 2014 11:13:04 -0800
+Subject: [PATCH 408/596] HDFS-7552. Change FsVolumeList toString() to fix
+ TestDataNodeVolumeFailureToleration (Liang Xie via
+ Colin P. McCabe) (cherry picked from commit
+ a4876c130f1627e59ef055e586640d1933fc49af)
+
+(cherry picked from commit 22f72c79462c424e47610470fd48e871887ac326)
+---
+ .../datanode/fsdataset/impl/FsVolumeList.java      |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
+index 042fa8b..1c3ccbb 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
+@@ -214,7 +214,7 @@ public void run() {
+ 
+   @Override
+   public String toString() {
+-    return volumes.toString();
++    return Arrays.toString(volumes.get());
+   }
+ 
+   /**
+-- 
+1.7.9.5
+

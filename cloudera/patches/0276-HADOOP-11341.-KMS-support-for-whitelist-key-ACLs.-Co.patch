@@ -1,0 +1,235 @@
+From ed235110181d8f685c22ef76586cbe56b4235f9d Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Mon, 1 Dec 2014 21:53:18 -0800
+Subject: [PATCH 276/596] HADOOP-11341. KMS support for whitelist key ACLs.
+ Contributed by Arun Suresh.
+
+(cherry picked from commit 31b4d2daa14a7f6e8ee73fd3160e126d8db62ffb)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit 578564c36757267ab09e3fcc1618b617f391a4dd)
+---
+ .../hadoop/crypto/key/kms/server/KMSACLs.java      |   31 ++++++++++++--
+ .../crypto/key/kms/server/KMSConfiguration.java    |    1 +
+ .../hadoop-kms/src/site/apt/index.apt.vm           |   38 +++++++++++++++--
+ .../hadoop/crypto/key/kms/server/TestKMS.java      |   43 ++++++++++++++++++--
+ 4 files changed, 103 insertions(+), 10 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSACLs.java b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSACLs.java
+index 530fe11..0217589 100644
+--- a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSACLs.java
++++ b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSACLs.java
+@@ -73,6 +73,8 @@ public String getBlacklistConfigKey() {
+   private volatile Map<String, HashMap<KeyOpType, AccessControlList>> keyAcls;
+   private final Map<KeyOpType, AccessControlList> defaultKeyAcls =
+       new HashMap<KeyOpType, AccessControlList>();
++  private final Map<KeyOpType, AccessControlList> whitelistKeyAcls =
++      new HashMap<KeyOpType, AccessControlList>();
+   private ScheduledExecutorService executorService;
+   private long lastReload;
+ 
+@@ -151,11 +153,21 @@ private void setKeyACLs(Configuration conf) {
+         String aclStr = conf.get(confKey);
+         if (aclStr != null) {
+           if (aclStr.equals("*")) {
+-            LOG.info("Default Key ACL for  KEY_OP '{}' is set to '*'", keyOp);
++            LOG.info("Default Key ACL for KEY_OP '{}' is set to '*'", keyOp);
+           }
+           defaultKeyAcls.put(keyOp, new AccessControlList(aclStr));
+         }
+       }
++      if (!whitelistKeyAcls.containsKey(keyOp)) {
++        String confKey = KMSConfiguration.WHITELIST_KEY_ACL_PREFIX + keyOp;
++        String aclStr = conf.get(confKey);
++        if (aclStr != null) {
++          if (aclStr.equals("*")) {
++            LOG.info("Whitelist Key ACL for KEY_OP '{}' is set to '*'", keyOp);
++          }
++          whitelistKeyAcls.put(keyOp, new AccessControlList(aclStr));
++        }
++      }
+     }
+   }
+ 
+@@ -229,13 +241,23 @@ public void assertAccess(KMSACLs.Type aclType,
+   @Override
+   public boolean hasAccessToKey(String keyName, UserGroupInformation ugi,
+       KeyOpType opType) {
++    return checkKeyAccess(keyName, ugi, opType)
++        || checkKeyAccess(whitelistKeyAcls, ugi, opType);
++  }
++
++  private boolean checkKeyAccess(String keyName, UserGroupInformation ugi,
++      KeyOpType opType) {
+     Map<KeyOpType, AccessControlList> keyAcl = keyAcls.get(keyName);
+     if (keyAcl == null) {
+-      // Get KeyAcl map of DEFAULT KEY.
++      // If No key acl defined for this key, check to see if
++      // there are key defaults configured for this operation
+       keyAcl = defaultKeyAcls;
+     }
+-    // If No key acl defined for this key, check to see if
+-    // there are key defaults configured for this operation
++    return checkKeyAccess(keyAcl, ugi, opType);
++  }
++
++  private boolean checkKeyAccess(Map<KeyOpType, AccessControlList> keyAcl,
++      UserGroupInformation ugi, KeyOpType opType) {
+     AccessControlList acl = keyAcl.get(opType);
+     if (acl == null) {
+       // If no acl is specified for this operation,
+@@ -246,6 +268,7 @@ public boolean hasAccessToKey(String keyName, UserGroupInformation ugi,
+     }
+   }
+ 
++
+   @Override
+   public boolean isACLPresent(String keyName, KeyOpType opType) {
+     return (keyAcls.containsKey(keyName) || defaultKeyAcls.containsKey(opType));
+diff --git a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSConfiguration.java b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSConfiguration.java
+index bd61ca7..a67c68e 100644
+--- a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSConfiguration.java
++++ b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KMSConfiguration.java
+@@ -39,6 +39,7 @@
+ 
+   public static final String KEY_ACL_PREFIX = "key.acl.";
+   public static final String DEFAULT_KEY_ACL_PREFIX = "default.key.acl.";
++  public static final String WHITELIST_KEY_ACL_PREFIX = "whitelist.key.acl.";
+ 
+   // Property to set the backing KeyProvider
+   public static final String KEY_PROVIDER_URI = CONFIG_PREFIX +
+diff --git a/hadoop-common-project/hadoop-kms/src/site/apt/index.apt.vm b/hadoop-common-project/hadoop-kms/src/site/apt/index.apt.vm
+index 76eb1a6..5d67b3b 100644
+--- a/hadoop-common-project/hadoop-kms/src/site/apt/index.apt.vm
++++ b/hadoop-common-project/hadoop-kms/src/site/apt/index.apt.vm
+@@ -467,10 +467,20 @@ $ keytool -genkey -alias tomcat -keyalg RSA
+   is possible to configure a default key access control for a subset of the
+   operation types.
+ 
++  It is also possible to configure a "whitelist" key ACL for a subset of the
++  operation types. The whitelist key ACL is a whitelist in addition to the
++  explicit or default per-key ACL. That is, if no per-key ACL is explicitly
++  set, a user will be granted access if they are present in the default per-key
++  ACL or the whitelist key ACL. If a per-key ACL is explicitly set, a user
++  will be granted access if they are present in the per-key ACL or the
++  whitelist key ACL.
++
+   If no ACL is configured for a specific key AND no default ACL is configured
+-  for the requested operation, then access will be DENIED.
++  AND no root key ACL is configured for the requested operation,
++  then access will be DENIED.
+   
+-  <<NOTE:>> The default ACL does not support <<<ALL>>> operation qualifier.
++  <<NOTE:>> The default and whitelist key ACL does not support <<<ALL>>>
++            operation qualifier.
+   
+ +---+
+   <property>
+@@ -491,7 +501,7 @@ $ keytool -genkey -alias tomcat -keyalg RSA
+ 
+   <property>
+     <name>key.acl.testKey3.DECRYPT_EEK</name>
+-    <value>*</value>
++    <value>admink3</value>
+     <description>
+       ACL for decryptEncryptedKey operations.
+     </description>
+@@ -515,6 +525,28 @@ $ keytool -genkey -alias tomcat -keyalg RSA
+   </property>
+ 
+   <property>
++    <name>whitelist.key.acl.MANAGEMENT</name>
++    <value>admin1</value>
++    <description>
++      whitelist ACL for MANAGEMENT operations for all keys.
++    </description>
++  </property>
++
++  <!--
++  'testKey3' key ACL is defined. Since a 'whitelist'
++  key is also defined for DECRYPT_EEK, in addition to
++  admink3, admin1 can also perform DECRYPT_EEK operations
++  on 'testKey3'
++  -->
++  <property>
++    <name>whitelist.key.acl.DECRYPT_EEK</name>
++    <value>admin1</value>
++    <description>
++      whitelist ACL for DECRYPT_EEK operations for all keys.
++    </description>
++  </property>
++
++  <property>
+     <name>default.key.acl.MANAGEMENT</name>
+     <value>user1,user2</value>
+     <description>
+diff --git a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+index 97901c8..d840646 100644
+--- a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
++++ b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+@@ -617,13 +617,15 @@ public void testKeyACLs() throws Exception {
+     for (KMSACLs.Type type : KMSACLs.Type.values()) {
+       conf.set(type.getAclConfigKey(), type.toString());
+     }
+-    conf.set(KMSACLs.Type.CREATE.getAclConfigKey(),"CREATE,ROLLOVER,GET,SET_KEY_MATERIAL,GENERATE_EEK");
+-    conf.set(KMSACLs.Type.ROLLOVER.getAclConfigKey(),"CREATE,ROLLOVER,GET,SET_KEY_MATERIAL,GENERATE_EEK");
++    conf.set(KMSACLs.Type.CREATE.getAclConfigKey(),"CREATE,ROLLOVER,GET,SET_KEY_MATERIAL,GENERATE_EEK,DECRYPT_EEK");
++    conf.set(KMSACLs.Type.ROLLOVER.getAclConfigKey(),"CREATE,ROLLOVER,GET,SET_KEY_MATERIAL,GENERATE_EEK,DECRYPT_EEK");
+     conf.set(KMSACLs.Type.GENERATE_EEK.getAclConfigKey(),"CREATE,ROLLOVER,GET,SET_KEY_MATERIAL,GENERATE_EEK");
+     conf.set(KMSACLs.Type.DECRYPT_EEK.getAclConfigKey(),"CREATE,ROLLOVER,GET,SET_KEY_MATERIAL,GENERATE_EEK");
+ 
+-
+     conf.set(KeyAuthorizationKeyProvider.KEY_ACL + "test_key.MANAGEMENT", "CREATE");
++    conf.set(KeyAuthorizationKeyProvider.KEY_ACL + "some_key.MANAGEMENT", "ROLLOVER");
++    conf.set(KMSConfiguration.WHITELIST_KEY_ACL_PREFIX + "MANAGEMENT", "DECRYPT_EEK");
++
+     conf.set(KeyAuthorizationKeyProvider.KEY_ACL + "all_access.ALL", "GENERATE_EEK");
+     conf.set(KeyAuthorizationKeyProvider.KEY_ACL + "all_access.DECRYPT_EEK", "ROLLOVER");
+     conf.set(KMSConfiguration.DEFAULT_KEY_ACL_PREFIX + "MANAGEMENT", "ROLLOVER");
+@@ -676,6 +678,41 @@ public Void run() throws Exception {
+           }
+         });
+ 
++        // Test whitelist key access..
++        // DECRYPT_EEK is whitelisted for MANAGEMENT operations only
++        doAs("DECRYPT_EEK", new PrivilegedExceptionAction<Void>() {
++          @Override
++          public Void run() throws Exception {
++            KeyProvider kp = new KMSClientProvider(uri, conf);
++            try {
++              Options options = new KeyProvider.Options(conf);
++              Map<String, String> attributes = options.getAttributes();
++              HashMap<String,String> newAttribs = new HashMap<String, String>(attributes);
++              newAttribs.put("key.acl.name", "some_key");
++              options.setAttributes(newAttribs);
++              KeyProvider.KeyVersion kv = kp.createKey("kk0", options);
++              Assert.assertNull(kv.getMaterial());
++              KeyVersion rollVersion = kp.rollNewVersion("kk0");
++              Assert.assertNull(rollVersion.getMaterial());
++              KeyProviderCryptoExtension kpce =
++                  KeyProviderCryptoExtension.createKeyProviderCryptoExtension(kp);
++              try {
++                kpce.generateEncryptedKey("kk0");
++                Assert.fail("User [DECRYPT_EEK] should not be allowed to generate_eek on kk0");
++              } catch (Exception e) {
++                // Ignore
++              }
++              newAttribs = new HashMap<String, String>(attributes);
++              newAttribs.put("key.acl.name", "all_access");
++              options.setAttributes(newAttribs);
++              kp.createKey("kkx", options);
++            } catch (Exception ex) {
++              Assert.fail(ex.getMessage());
++            }
++            return null;
++          }
++        });
++
+         doAs("ROLLOVER", new PrivilegedExceptionAction<Void>() {
+           @Override
+           public Void run() throws Exception {
+-- 
+1.7.9.5
+

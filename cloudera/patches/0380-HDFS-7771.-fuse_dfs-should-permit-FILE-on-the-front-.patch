@@ -1,0 +1,56 @@
+From 39eb4f1da51876492b2dd51cb12991a93942ac66 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Wed, 11 Feb 2015 12:14:23 -0800
+Subject: [PATCH 380/596] HDFS-7771. fuse_dfs should permit FILE: on the front
+ of KRB5CCNAME (cmccabe)
+
+(cherry picked from commit 50625e660ac0f76e7fe46d55df3d15cbbf058753)
+(cherry picked from commit 2ca76df21a3dceef27714744b333bf39c381ca3e)
+---
+ .../src/main/native/fuse-dfs/fuse_connect.c        |   16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/native/fuse-dfs/fuse_connect.c b/hadoop-hdfs-project/hadoop-hdfs/src/main/native/fuse-dfs/fuse_connect.c
+index 218c5c9..8a2a00b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/native/fuse-dfs/fuse_connect.c
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/native/fuse-dfs/fuse_connect.c
+@@ -28,6 +28,7 @@
+ #include <search.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <string.h>
+ #include <sys/time.h>
+ #include <sys/types.h>
+ #include <utime.h>
+@@ -358,6 +359,15 @@ static void hdfsConnExpiry(void)
+   pthread_mutex_unlock(&gConnMutex);
+ }
+ 
++// The Kerberos FILE: prefix.  This indicates that the kerberos ticket cache
++// specifier is a file.  (Note that we also assume that the specifier is a file
++// if no prefix is present.)
++#define KRB_FILE_PREFIX "FILE:"
++
++// Length of the Kerberos file prefix, which is equal to the string size in
++// bytes minus 1 (because we don't count the null terminator in the length.)
++#define KRB_FILE_PREFIX_LEN (sizeof(KRB_FILE_PREFIX) - 1)
++
+ /**
+  * Find the Kerberos ticket cache path.
+  *
+@@ -414,6 +424,12 @@ done:
+   } else {
+     path[pathIdx] = '\0';
+   }
++  if (strncmp(path, KRB_FILE_PREFIX, KRB_FILE_PREFIX_LEN) == 0) {
++    fprintf(stderr, "stripping " KRB_FILE_PREFIX " from the front of "
++            "KRB5CCNAME.\n");
++    memmove(path, path + KRB_FILE_PREFIX_LEN,
++            strlen(path + KRB_FILE_PREFIX_LEN) + 1);
++  }
+ }
+ 
+ /**
+-- 
+1.7.9.5
+

@@ -1,0 +1,53 @@
+From 5a36331f72926ae26b9d27f91ad1bd080ecf55c6 Mon Sep 17 00:00:00 2001
+From: Tom White <tom@cloudera.com>
+Date: Mon, 13 May 2013 12:40:39 +0100
+Subject: [PATCH 061/596] MR1: CLOUDERA-BUILD. Unable to refresh JT when HA is
+ enabled. (cherry picked from commit
+ e3049f11a6e05c588909947fbbdee1cae57ad79c)
+
+(cherry picked from commit 0ba9978ad9c6dac3d5bc7b0178b4d5c801c500ce)
+(cherry picked from commit d535ebb33281d5ab617ee385e98637f5eff1d968)
+(cherry picked from commit 3836a7562caf12a3e0d2b8e7f3adf00518a26158)
+---
+ .../org/apache/hadoop/mapred/tools/MRAdmin.java    |   11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/tools/MRAdmin.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/tools/MRAdmin.java
+index 6726cbe..83bdb64 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/tools/MRAdmin.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/tools/MRAdmin.java
+@@ -27,6 +27,7 @@
+ import org.apache.hadoop.ipc.RPC;
+ import org.apache.hadoop.ipc.RemoteException;
+ import org.apache.hadoop.mapred.AdminOperationsProtocol;
++import org.apache.hadoop.mapred.HAUtil;
+ import org.apache.hadoop.mapred.JobConf;
+ import org.apache.hadoop.mapred.JobTracker;
+ import org.apache.hadoop.net.NetUtils;
+@@ -54,6 +55,15 @@ public MRAdmin(Configuration conf) {
+     super(conf);
+   }
+ 
++  public void setConf(Configuration conf) {
++    if (conf != null && HAUtil.isHAEnabled(conf,
++        conf.get(HAUtil.MR_JOBTRACKER_ADDRESS_KEY))) {
++      HAUtil.setJtRpcAddress(conf);
++    }
++    super.setConf(conf);
++  }
++
++
+   private static void printHelp(String cmd) {
+     String summary = "hadoop mradmin is the command to execute Map-Reduce administrative commands.\n" +
+     "The full syntax is: \n\n" +
+@@ -351,6 +361,7 @@ public int run(String[] args) throws Exception {
+   }
+ 
+   public static void main(String[] args) throws Exception {
++    JobConf jConf = new JobConf(); // force load mapred-site.xml
+     int result = ToolRunner.run(new MRAdmin(), args);
+     System.exit(result);
+   }
+-- 
+1.7.9.5
+

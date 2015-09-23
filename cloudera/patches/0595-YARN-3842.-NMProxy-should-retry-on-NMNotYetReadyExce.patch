@@ -1,0 +1,96 @@
+From ef84cfb39740e473ec4a793987ee4a8c0e95d1bb Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Mon, 22 Jun 2015 17:45:41 -0700
+Subject: [PATCH 595/596] YARN-3842. NMProxy should retry on
+ NMNotYetReadyException. (Robert Kanter via kasha)
+
+(cherry picked from commit 5ebf2817e58e1be8214dc1916a694a912075aa0a)
+(cherry picked from commit 9656ee4ee763dc48435ba8bb3ac9b10f6b306fe3)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+
+(cherry picked from commit a2b02b35b0f81ee087e716c40bab18166781068a)
+---
+ .../org/apache/hadoop/yarn/client/ServerProxy.java |    2 ++
+ .../nodemanager/containermanager/TestNMProxy.java  |   20 +++++++++++++++++++-
+ 2 files changed, 21 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/client/ServerProxy.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/client/ServerProxy.java
+index 6024560..e9bcf8d 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/client/ServerProxy.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/client/ServerProxy.java
+@@ -38,6 +38,7 @@
+ import org.apache.hadoop.ipc.RetriableException;
+ import org.apache.hadoop.net.ConnectTimeoutException;
+ import org.apache.hadoop.security.UserGroupInformation;
++import org.apache.hadoop.yarn.exceptions.NMNotYetReadyException;
+ import org.apache.hadoop.yarn.ipc.YarnRPC;
+ 
+ import com.google.common.base.Preconditions;
+@@ -74,6 +75,7 @@ protected static RetryPolicy createRetryPolicy(Configuration conf,
+     exceptionToPolicyMap.put(UnknownHostException.class, retryPolicy);
+     exceptionToPolicyMap.put(RetriableException.class, retryPolicy);
+     exceptionToPolicyMap.put(SocketException.class, retryPolicy);
++    exceptionToPolicyMap.put(NMNotYetReadyException.class, retryPolicy);
+ 
+     return RetryPolicies.retryByException(RetryPolicies.TRY_ONCE_THEN_FAIL,
+       exceptionToPolicyMap);
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/TestNMProxy.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/TestNMProxy.java
+index 67f540c..0b372be 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/TestNMProxy.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/TestNMProxy.java
+@@ -54,6 +54,7 @@ public TestNMProxy() throws UnsupportedFileSystemException {
+   }
+ 
+   int retryCount = 0;
++  boolean shouldThrowNMNotYetReadyException = false;
+ 
+   @Before
+   public void setUp() throws Exception {
+@@ -72,7 +73,15 @@ public StartContainersResponse startContainers(
+           StartContainersRequest requests) throws YarnException, IOException {
+         if (retryCount < 5) {
+           retryCount++;
+-          throw new java.net.ConnectException("start container exception");
++          if (shouldThrowNMNotYetReadyException) {
++            // This causes super to throw an NMNotYetReadyException
++            containerManager.setBlockNewContainerRequests(true);
++          } else {
++            throw new java.net.ConnectException("start container exception");
++          }
++        } else {
++          // This stops super from throwing an NMNotYetReadyException
++          containerManager.setBlockNewContainerRequests(false);
+         }
+         return super.startContainers(requests);
+       }
+@@ -126,16 +135,25 @@ public void testNMProxyRetry() throws Exception {
+         NMProxy.createNMProxy(conf, ContainerManagementProtocol.class, ugi,
+           YarnRPC.create(conf), address);
+ 
++    retryCount = 0;
++    shouldThrowNMNotYetReadyException = false;
+     proxy.startContainers(allRequests);
+     Assert.assertEquals(5, retryCount);
+ 
+     retryCount = 0;
++    shouldThrowNMNotYetReadyException = false;
+     proxy.stopContainers(Records.newRecord(StopContainersRequest.class));
+     Assert.assertEquals(5, retryCount);
+ 
+     retryCount = 0;
++    shouldThrowNMNotYetReadyException = false;
+     proxy.getContainerStatuses(Records
+       .newRecord(GetContainerStatusesRequest.class));
+     Assert.assertEquals(5, retryCount);
++
++    retryCount = 0;
++    shouldThrowNMNotYetReadyException = true;
++    proxy.startContainers(allRequests);
++    Assert.assertEquals(5, retryCount);
+   }
+ }
+-- 
+1.7.9.5
+

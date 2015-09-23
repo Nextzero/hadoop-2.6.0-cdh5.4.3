@@ -1,0 +1,55 @@
+From cafab90e6c968202466edaa195aedc224edd6838 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Fri, 5 Dec 2014 12:01:23 -0800
+Subject: [PATCH 284/596] HADOOP-11355. When accessing data in HDFS and the
+ key has been deleted, a Null Pointer Exception is
+ shown. Contributed by Arun Suresh.
+
+(cherry picked from commit 9cdaec6a6f6cb1680ad6e44d7b0c8d70cdcbe3fa)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit 165c8c9505413a1670caa551119517eb5a8f0e5a)
+---
+ .../kms/server/KeyAuthorizationKeyProvider.java    |    4 ++++
+ .../hadoop/crypto/key/kms/server/TestKMS.java      |    8 ++++++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KeyAuthorizationKeyProvider.java b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KeyAuthorizationKeyProvider.java
+index 4ce9611..074f1fb 100644
+--- a/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KeyAuthorizationKeyProvider.java
++++ b/hadoop-common-project/hadoop-kms/src/main/java/org/apache/hadoop/crypto/key/kms/server/KeyAuthorizationKeyProvider.java
+@@ -240,6 +240,10 @@ private void verifyKeyVersionBelongsToKey(EncryptedKeyVersion ekv)
+     String kn = ekv.getEncryptionKeyName();
+     String kvn = ekv.getEncryptionKeyVersionName();
+     KeyVersion kv = provider.getKeyVersion(kvn);
++    if (kv == null) {
++      throw new IllegalArgumentException(String.format(
++          "'%s' not found", kvn));
++    }
+     if (!kv.getName().equals(kn)) {
+       throw new IllegalArgumentException(String.format(
+           "KeyVersion '%s' does not belong to the key '%s'", kvn, kn));
+diff --git a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+index b9409ca..61ce807 100644
+--- a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
++++ b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+@@ -498,6 +498,14 @@ public Void call() throws Exception {
+         // deleteKey()
+         kp.deleteKey("k1");
+ 
++        // Check decryption after Key deletion
++        try {
++          kpExt.decryptEncryptedKey(ek1);
++          Assert.fail("Should not be allowed !!");
++        } catch (Exception e) {
++          Assert.assertTrue(e.getMessage().contains("'k1@1' not found"));
++        }
++
+         // getKey()
+         Assert.assertNull(kp.getKeyVersion("k1"));
+ 
+-- 
+1.7.9.5
+

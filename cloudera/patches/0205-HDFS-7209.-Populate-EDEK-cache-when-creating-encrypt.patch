@@ -1,0 +1,202 @@
+From 5f2a35c1e351887c07c0ecf9cf1817de1e7a12e9 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Fri, 10 Oct 2014 13:40:37 -0700
+Subject: [PATCH 205/596] HDFS-7209. Populate EDEK cache when creating
+ encryption zone. (Yi Liu via wang)
+
+(cherry picked from commit d3d3d47202a18749eeebec22db759c19dd3e232c)
+(cherry picked from commit 217c0405d9a370c210056c6f2289c34c468e2d5a)
+(cherry picked from commit 790f7ad213b0bf69c1c420156797616aa64b7693)
+---
+ .../hadoop/crypto/key/kms/KMSClientProvider.java   |   10 ++++
+ .../apache/hadoop/crypto/key/kms/ValueQueue.java   |   10 ++++
+ .../hadoop/hdfs/server/namenode/FSNamesystem.java  |   59 +++++++++++---------
+ .../apache/hadoop/hdfs/TestEncryptionZones.java    |    4 +-
+ .../hadoop/hdfs/TestEncryptionZonesWithKMS.java    |   13 +++++
+ 5 files changed, 67 insertions(+), 29 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
+index fb99bac..a6dbb70 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
+@@ -71,6 +71,7 @@
+ import org.apache.hadoop.crypto.key.KeyProviderCryptoExtension;
+ import org.apache.hadoop.crypto.key.KeyProviderCryptoExtension.CryptoExtension;
+ 
++import com.google.common.annotations.VisibleForTesting;
+ import com.google.common.base.Preconditions;
+ 
+ /**
+@@ -772,6 +773,15 @@ public void drain(String keyName) {
+     encKeyVersionQueue.drain(keyName);
+   }
+ 
++  @VisibleForTesting
++  public int getEncKeyQueueSize(String keyName) throws IOException {
++    try {
++      return encKeyVersionQueue.getSize(keyName);
++    } catch (ExecutionException e) {
++      throw new IOException(e);
++    }
++  }
++
+   @Override
+   public Token<?>[] addDelegationTokens(String renewer,
+       Credentials credentials) throws IOException {
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/ValueQueue.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/ValueQueue.java
+index aa0e624..8e67ecc 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/ValueQueue.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/ValueQueue.java
+@@ -240,6 +240,16 @@ public void drain(String keyName ) {
+   }
+ 
+   /**
++   * Get size of the Queue for keyName
++   * @param keyName the key name
++   * @return int queue size
++   * @throws ExecutionException
++   */
++  public int getSize(String keyName) throws ExecutionException {
++    return keyQueues.get(keyName).size();
++  }
++
++  /**
+    * This removes the "num" values currently at the head of the Queue for the
+    * provided key. Will immediately fire the Queue filler function if key
+    * does not exist
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index 89c5fc1..7d84107 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -2605,36 +2605,39 @@ private HdfsFileStatus startFileInt(final String srcArg,
+     CryptoProtocolVersion protocolVersion = null;
+     CipherSuite suite = null;
+     String ezKeyName = null;
+-    readLock();
+-    try {
+-      src = resolvePath(src, pathComponents);
+-      INodesInPath iip = dir.getINodesInPath4Write(src);
+-      // Nothing to do if the path is not within an EZ
+-      if (dir.isInAnEZ(iip)) {
+-        EncryptionZone zone = dir.getEZForPath(iip);
+-        protocolVersion = chooseProtocolVersion(zone, supportedVersions);
+-        suite = zone.getSuite();
+-        ezKeyName = dir.getKeyName(iip);
+-
+-        Preconditions.checkNotNull(protocolVersion);
+-        Preconditions.checkNotNull(suite);
+-        Preconditions.checkArgument(!suite.equals(CipherSuite.UNKNOWN),
+-            "Chose an UNKNOWN CipherSuite!");
+-        Preconditions.checkNotNull(ezKeyName);
++    EncryptedKeyVersion edek = null;
++
++    if (provider != null) {
++      readLock();
++      try {
++        src = resolvePath(src, pathComponents);
++        INodesInPath iip = dir.getINodesInPath4Write(src);
++        // Nothing to do if the path is not within an EZ
++        if (dir.isInAnEZ(iip)) {
++          EncryptionZone zone = dir.getEZForPath(iip);
++          protocolVersion = chooseProtocolVersion(zone, supportedVersions);
++          suite = zone.getSuite();
++          ezKeyName = dir.getKeyName(iip);
++
++          Preconditions.checkNotNull(protocolVersion);
++          Preconditions.checkNotNull(suite);
++          Preconditions.checkArgument(!suite.equals(CipherSuite.UNKNOWN),
++              "Chose an UNKNOWN CipherSuite!");
++          Preconditions.checkNotNull(ezKeyName);
++        }
++      } finally {
++        readUnlock();
+       }
+-    } finally {
+-      readUnlock();
+-    }
+ 
+-    Preconditions.checkState(
+-        (suite == null && ezKeyName == null) ||
+-            (suite != null && ezKeyName != null),
+-        "Both suite and ezKeyName should both be null or not null");
++      Preconditions.checkState(
++          (suite == null && ezKeyName == null) ||
++              (suite != null && ezKeyName != null),
++          "Both suite and ezKeyName should both be null or not null");
+ 
+-    // Generate EDEK if necessary while not holding the lock
+-    EncryptedKeyVersion edek =
+-        generateEncryptedDataEncryptionKey(ezKeyName);
+-    EncryptionFaultInjector.getInstance().startFileAfterGenerateKey();
++      // Generate EDEK if necessary while not holding the lock
++      edek = generateEncryptedDataEncryptionKey(ezKeyName);
++      EncryptionFaultInjector.getInstance().startFileAfterGenerateKey();
++    }
+ 
+     // Proceed with the create, using the computed cipher suite and 
+     // generated EDEK
+@@ -8916,6 +8919,8 @@ void createEncryptionZone(final String src, final String keyName)
+          */
+         throw new IOException("Key " + keyName + " doesn't exist.");
+       }
++      // If the provider supports pool for EDEKs, this will fill in the pool
++      generateEncryptedDataEncryptionKey(keyName);
+       createEncryptionZoneInt(src, metadata.getCipher(),
+           keyName, cacheEntry != null);
+       success = true;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZones.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZones.java
+index 442abc7..1f98a62 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZones.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZones.java
+@@ -117,10 +117,10 @@
+   private FileSystemTestHelper fsHelper;
+ 
+   private MiniDFSCluster cluster;
+-  private HdfsAdmin dfsAdmin;
++  protected HdfsAdmin dfsAdmin;
+   protected DistributedFileSystem fs;
+   private File testRootDir;
+-  private final String TEST_KEY = "testKey";
++  protected final String TEST_KEY = "testKey";
+ 
+   protected FileSystemTestWrapper fsWrapper;
+   protected FileContextTestWrapper fcWrapper;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZonesWithKMS.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZonesWithKMS.java
+index 51ff96e..b165c56 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZonesWithKMS.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestEncryptionZonesWithKMS.java
+@@ -17,11 +17,15 @@
+  */
+ package org.apache.hadoop.hdfs;
+ 
++import static org.junit.Assert.assertTrue;
++
+ import org.apache.hadoop.crypto.key.kms.KMSClientProvider;
+ import org.apache.hadoop.crypto.key.kms.server.MiniKMS;
+ import org.apache.hadoop.security.Credentials;
+ import org.apache.hadoop.security.UserGroupInformation;
+ import org.apache.hadoop.security.token.Token;
++import org.apache.hadoop.fs.Path;
++import org.apache.hadoop.fs.permission.FsPermission;
+ import org.junit.After;
+ import org.junit.Assert;
+ import org.junit.Before;
+@@ -63,6 +67,15 @@ protected void setProvider() {
+   }
+ 
+   @Test(timeout = 120000)
++  public void testCreateEZPopulatesEDEKCache() throws Exception {
++    final Path zonePath = new Path("/TestEncryptionZone");
++    fsWrapper.mkdir(zonePath, FsPermission.getDirDefault(), false);
++    dfsAdmin.createEncryptionZone(zonePath, TEST_KEY);
++    assertTrue(((KMSClientProvider)fs.getClient().provider).
++        getEncKeyQueueSize(TEST_KEY) > 0);
++  }
++
++  @Test(timeout = 120000)
+   public void testDelegationToken() throws Exception {
+     final String renewer = "JobTracker";
+     UserGroupInformation.createRemoteUser(renewer);
+-- 
+1.7.9.5
+

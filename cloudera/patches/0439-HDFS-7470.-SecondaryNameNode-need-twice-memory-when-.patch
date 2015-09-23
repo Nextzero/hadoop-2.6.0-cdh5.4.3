@@ -1,0 +1,65 @@
+From 3abcaba695a05680b0830fd1e98bdf59a8d6a4d7 Mon Sep 17 00:00:00 2001
+From: cnauroth <cnauroth@apache.org>
+Date: Tue, 13 Jan 2015 16:10:28 -0800
+Subject: [PATCH 439/596] HDFS-7470. SecondaryNameNode need twice memory when
+ calling reloadFromImageFile. Contributed by
+ zhaoyunjiong.
+
+(cherry picked from commit 85aec75ce53445e1abf840076d2e10f1e3c6d69b)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../hdfs/server/blockmanagement/BlockManager.java  |    5 +++++
+ .../hdfs/server/blockmanagement/BlocksMap.java     |    6 +++++-
+ .../hadoop/hdfs/server/namenode/FSNamesystem.java  |    1 +
+ 3 files changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index 1607c5c..a64e2ca 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -3717,4 +3717,9 @@ public void shutdown() {
+     stopReplicationInitializer();
+     blocksMap.close();
+   }
++  
++  public void clear() {
++    clearQueues();
++    blocksMap.clear();
++  }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlocksMap.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlocksMap.java
+index 6664034..d532e74 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlocksMap.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlocksMap.java
+@@ -86,9 +86,13 @@ public void remove()  {
+ 
+ 
+   void close() {
++    clear();
++    blocks = null;
++  }
++  
++  void clear() {
+     if (blocks != null) {
+       blocks.clear();
+-      blocks = null;
+     }
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index 619e274..220246d 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -672,6 +672,7 @@ void clear() {
+     snapshotManager.clearSnapshottableDirs();
+     cacheManager.clear();
+     setImageLoaded(false);
++    blockManager.clear();
+   }
+ 
+   @VisibleForTesting
+-- 
+1.7.9.5
+

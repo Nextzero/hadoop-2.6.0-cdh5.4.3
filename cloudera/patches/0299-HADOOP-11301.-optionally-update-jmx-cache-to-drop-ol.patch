@@ -1,0 +1,112 @@
+From bdb33471b02a04273781badcf5ff83fc21342d22 Mon Sep 17 00:00:00 2001
+From: stack <stack@duboce.net>
+Date: Mon, 1 Dec 2014 23:07:05 -0800
+Subject: [PATCH 299/596] HADOOP-11301. [optionally] update jmx cache to drop
+ old metrics  (Maysam Yabandeh via stack) Ref:
+ CDH-23378 updateJmxCache in MetricsSourceAdapter
+ misses MBean attribute updates, makes metrics
+ inaccessible Reviewer: Andrew Wang and stack
+
+(cherry picked from commit b36f29298247f6c5db9f6eff7c2f5177a0fe3de5)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit da1694d8d5c9e1b01d9b5cee5ce8c2aa625d2e71)
+---
+ .../hadoop/metrics2/impl/MetricsSourceAdapter.java |    5 +-
+ .../metrics2/impl/TestMetricsSourceAdapter.java    |   51 ++++++++++++++++++++
+ 2 files changed, 53 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/metrics2/impl/MetricsSourceAdapter.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/metrics2/impl/MetricsSourceAdapter.java
+index de1b28c..b0b758c 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/metrics2/impl/MetricsSourceAdapter.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/metrics2/impl/MetricsSourceAdapter.java
+@@ -173,9 +173,8 @@ private void updateJmxCache() {
+     }
+ 
+     synchronized(this) {
+-      int oldCacheSize = attrCache.size();
+-      int newCacheSize = updateAttrCache();
+-      if (oldCacheSize < newCacheSize) {
++      updateAttrCache();
++      if (getAllMetrics) {
+         updateInfoCache();
+       }
+       jmxCacheTS = Time.now();
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/metrics2/impl/TestMetricsSourceAdapter.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/metrics2/impl/TestMetricsSourceAdapter.java
+index 724d449..22b594a 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/metrics2/impl/TestMetricsSourceAdapter.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/metrics2/impl/TestMetricsSourceAdapter.java
+@@ -23,6 +23,8 @@
+ import java.util.ArrayList;
+ import java.util.List;
+ 
++import org.apache.hadoop.metrics2.MetricsCollector;
++import org.apache.hadoop.metrics2.MetricsRecordBuilder;
+ import org.apache.hadoop.metrics2.MetricsSource;
+ import org.apache.hadoop.metrics2.MetricsTag;
+ import org.apache.hadoop.metrics2.annotation.Metric;
+@@ -31,10 +33,59 @@
+ import org.apache.hadoop.metrics2.lib.MetricsRegistry;
+ import org.apache.hadoop.metrics2.lib.MetricsSourceBuilder;
+ import org.apache.hadoop.metrics2.lib.MutableCounterLong;
++import static org.apache.hadoop.metrics2.lib.Interns.info;
++import static org.junit.Assert.assertEquals;
++
+ import org.junit.Test;
+ 
++import javax.management.MBeanAttributeInfo;
++import javax.management.MBeanInfo;
++
+ public class TestMetricsSourceAdapter {
+ 
++
++  @Test
++  public void testPurgeOldMetrics() throws Exception {
++    // create test source with a single metric counter of value 1
++    PurgableSource source = new PurgableSource();
++    MetricsSourceBuilder sb = MetricsAnnotations.newSourceBuilder(source);
++    final MetricsSource s = sb.build();
++
++    List<MetricsTag> injectedTags = new ArrayList<MetricsTag>();
++    MetricsSourceAdapter sa = new MetricsSourceAdapter(
++        "tst", "tst", "testdesc", s, injectedTags, null, null, 1, false);
++
++    MBeanInfo info = sa.getMBeanInfo();
++    boolean sawIt = false;
++    for (MBeanAttributeInfo mBeanAttributeInfo : info.getAttributes()) {
++      sawIt |= mBeanAttributeInfo.getName().equals(source.lastKeyName);
++    };
++    assertTrue("The last generated metric is not exported to jmx", sawIt);
++
++    Thread.sleep(1000); // skip JMX cache TTL
++
++    info = sa.getMBeanInfo();
++    sawIt = false;
++    for (MBeanAttributeInfo mBeanAttributeInfo : info.getAttributes()) {
++      sawIt |= mBeanAttributeInfo.getName().equals(source.lastKeyName);
++    };
++    assertTrue("The last generated metric is not exported to jmx", sawIt);
++  }
++
++  //generate a new key per each call
++  class PurgableSource implements MetricsSource {
++    int nextKey = 0;
++    String lastKeyName = null;
++    @Override
++    public void getMetrics(MetricsCollector collector, boolean all) {
++      MetricsRecordBuilder rb =
++          collector.addRecord("purgablesource")
++              .setContext("test");
++      lastKeyName = "key" + nextKey++;
++      rb.addGauge(info(lastKeyName, "desc"), 1);
++    }
++  }
++
+   @Test
+   public void testGetMetricsAndJmx() throws Exception {
+     // create test source with a single metric counter of value 0
+-- 
+1.7.9.5
+

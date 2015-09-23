@@ -1,0 +1,34 @@
+From bcba39da4b2cdb50a74f5159f8e17b7b71ffe8ab Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Thu, 9 Apr 2015 10:50:44 -0700
+Subject: [PATCH 532/596] HDFS-8099. Change "DFSInputStream has been closed
+ already" message to debug log level (Charles Lamb
+ via Colin P. McCabe)
+
+(cherry picked from commit 30acb7372ab97adf9bc86ead529c96cfe36e2396)
+(cherry picked from commit ca1208825390b4121cc2fdaacad258b28ac26f3d)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+
+(cherry picked from commit 28ea0ed3ba66afe1b06613cb712717cdc04522e1)
+---
+ .../org/apache/hadoop/hdfs/DFSInputStream.java     |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+index 6a3bead..67d1dad 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+@@ -669,7 +669,7 @@ private synchronized DatanodeInfo blockSeekTo(long target) throws IOException {
+   @Override
+   public synchronized void close() throws IOException {
+     if (!closed.compareAndSet(false, true)) {
+-      DFSClient.LOG.warn("DFSInputStream has been closed already");
++      DFSClient.LOG.debug("DFSInputStream has been closed already");
+       return;
+     }
+     dfsClient.checkOpen();
+-- 
+1.7.9.5
+

@@ -1,0 +1,86 @@
+From c63eeb9e176e1cb4ab90575a017518de72784407 Mon Sep 17 00:00:00 2001
+From: Tom White <tom@cloudera.com>
+Date: Thu, 17 Jan 2013 14:48:35 +0000
+Subject: [PATCH 006/596] MR1: CLOUDERA-BUILD. Don't shut down jobtracker HA
+ process if an error occurs while active jobtracker
+ is being closed.
+
+Reason: Bug
+Ref: CDH-9687
+Author: Tom White
+(cherry picked from commit a784698987c20f12ffab50e39e274bd10ba37dc8)
+(cherry picked from commit 6f54bbcd05c0f534b267a39961205dd06a38ee0a)
+(cherry picked from commit 26cc2da710d5a72735bf4ce09434764123163903)
+(cherry picked from commit a4e5ffd675b38b0f3612a23e905db8bc7c244ab4)
+---
+ .../hadoop/mapred/JobTrackerHAServiceProtocol.java |   12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHAServiceProtocol.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHAServiceProtocol.java
+index 8641a8b..352d5bb 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHAServiceProtocol.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobTrackerHAServiceProtocol.java
+@@ -56,6 +56,7 @@
+   private HAServiceState haState = HAServiceState.STANDBY;
+   private FileSystem fs;
+   private JobTracker jt;
++  private volatile boolean jtClosing;
+   private Path currentSysDir;
+   private Thread jtThread;
+   private ScheduledExecutorService sysDirMonitorExecutor;
+@@ -99,7 +100,11 @@ public void run() {
+       try {
+         jt.offerService();
+       } catch (Throwable t) {
+-        doImmediateShutdown(t);
++        if (jtClosing) {
++          LOG.info("Exception while closing jobtracker", t);
++        } else {
++          doImmediateShutdown(t);
++        }
+       }
+     }
+   }
+@@ -155,6 +160,7 @@ public void transitionToActive(StateChangeRequestInfo reqInfo)
+       currentSysDir = rollSystemDirectory(jtConf);
+       // Update the conf for the JT so the address is resolved
+       HAUtil.setJtRpcAddress(jtConf);
++      jtClosing = false;
+       jt = JobTracker.startTracker(jtConf);
+     } catch (Throwable t) {
+       doImmediateShutdown(t);
+@@ -251,6 +257,7 @@ public void transitionToStandby(StateChangeRequestInfo reqInfo)
+         sysDirMonitorExecutor.shutdownNow();
+       }
+       if (jt != null) {
++        jtClosing = true;
+         jt.close();
+       }
+       if (jtThread != null) {
+@@ -263,6 +270,7 @@ public void transitionToStandby(StateChangeRequestInfo reqInfo)
+     sysDirMonitorExecutor = null;
+     currentSysDir = null;
+     jt = null;
++    jtClosing = false;
+     jtThread = null;
+     haState = HAServiceState.STANDBY;
+     LOG.info("Transitioned to standby");
+@@ -275,6 +283,7 @@ public void stop() {
+         sysDirMonitorExecutor.shutdownNow();
+       }
+       if (jt != null) {
++        jtClosing = true;
+         jt.close();
+       }
+       if (jtThread != null) {
+@@ -287,6 +296,7 @@ public void stop() {
+     sysDirMonitorExecutor = null;
+     currentSysDir = null;
+     jt = null;
++    jtClosing = false;
+     jtThread = null;
+     haState = HAServiceState.STANDBY;
+     LOG.info("Stopped");
+-- 
+1.7.9.5
+

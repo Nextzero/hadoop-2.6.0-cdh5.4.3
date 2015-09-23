@@ -1,0 +1,53 @@
+From 0ccf5c9ed397a446a189e3ce975b0e765e7b49d8 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Thu, 4 Jun 2015 15:35:07 -0700
+Subject: [PATCH 587/596] HDFS-8535. Clarify that dfs usage in dfsadmin
+ -report output includes all block replicas.
+ Contributed by Eddy Xu.
+
+(cherry picked from commit b2540f486ed99e1433d4e5118608da8dd365a934)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/src/site/markdown/HDFSCommands.md
+---
+ .../org/apache/hadoop/hdfs/tools/DFSAdmin.java     |    6 ++++--
+ .../hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm   |    5 ++++-
+ 2 files changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+index 93d16ba..e64c09a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+@@ -864,9 +864,11 @@ private void printHelp(String cmd) {
+       commonUsageSummary;
+ 
+     String report ="-report [-live] [-dead] [-decommissioning]:\n" +
+-      "\tReports basic filesystem information and statistics.\n" +
++      "\tReports basic filesystem information and statistics. \n" +
++      "\tThe dfs usage can be different from \"du\" usage, because it\n" +
++      "\tmeasures raw space used by replication, checksums, snapshots\n" +
++      "\tand etc. on all the DNs.\n" +
+       "\tOptional flags may be used to filter the list of displayed DNs.\n";
+-    
+ 
+     String safemode = "-safemode <enter|leave|get|wait>:  Safe mode maintenance command.\n" + 
+       "\t\tSafe mode is a Namenode state in which it\n" +
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
+index e72c9e5..1df2494 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
+@@ -215,7 +215,10 @@ HDFS Commands Guide
+ || COMMAND_OPTION || Description
+ *-----------------+-----------------------------------------------------------+
+ | -report [-live] [-dead] [-decommissioning] | Reports basic filesystem
+-                  | information and statistics. Optional flags may be used to
++                  | information and statistics. The dfs usage can be different
++                  | from "du" usage, because it measures raw space used by
++                  | replication, checksums, snapshots and etc. on all the DNs.
++                  | Optional flags may be used to
+                   | filter the list of displayed DataNodes.
+ *-----------------+-----------------------------------------------------------+
+ | -safemode enter\|leave\|get\|wait | Safe mode maintenance command. Safe
+-- 
+1.7.9.5
+

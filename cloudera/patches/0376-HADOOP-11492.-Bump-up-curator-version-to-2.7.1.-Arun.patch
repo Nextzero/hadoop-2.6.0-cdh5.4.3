@@ -1,0 +1,124 @@
+From 06b635d3859a1b5cb49af1f65dcd10e4e55b16cb Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Wed, 4 Feb 2015 13:05:11 -0800
+Subject: [PATCH 376/596] HADOOP-11492. Bump up curator version to 2.7.1.
+ (Arun Suresh and Karthik Kambatla via kasha)
+ (cherry picked from commit
+ 55235d28c3641ff5f1c05c53dd7271cafc131926)
+
+(cherry picked from commit fcf3dc597731a9fcb54e3c9ff2c7ede40917e473)
+---
+ .../delegation/ZKDelegationTokenSecretManager.java |   26 +++++++++++++-------
+ hadoop-project/pom.xml                             |    9 ++++---
+ 2 files changed, 22 insertions(+), 13 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/token/delegation/ZKDelegationTokenSecretManager.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/token/delegation/ZKDelegationTokenSecretManager.java
+index d6bc995..ec522dcf 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/token/delegation/ZKDelegationTokenSecretManager.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/security/token/delegation/ZKDelegationTokenSecretManager.java
+@@ -45,6 +45,7 @@
+ import org.apache.curator.framework.recipes.cache.PathChildrenCacheEvent;
+ import org.apache.curator.framework.recipes.cache.PathChildrenCacheListener;
+ import org.apache.curator.framework.recipes.shared.SharedCount;
++import org.apache.curator.framework.recipes.shared.VersionedValue;
+ import org.apache.curator.retry.RetryNTimes;
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.classification.InterfaceAudience.Private;
+@@ -58,7 +59,6 @@
+ import org.apache.zookeeper.client.ZooKeeperSaslClient;
+ import org.apache.zookeeper.data.ACL;
+ import org.apache.zookeeper.data.Id;
+-import org.apache.zookeeper.data.Stat;
+ import org.slf4j.Logger;
+ import org.slf4j.LoggerFactory;
+ 
+@@ -109,10 +109,10 @@
+       "ZKDelegationTokenSecretManagerClient";
+ 
+   private static final String ZK_DTSM_NAMESPACE = "ZKDTSMRoot";
+-  private static final String ZK_DTSM_SEQNUM_ROOT = "ZKDTSMSeqNumRoot";
+-  private static final String ZK_DTSM_KEYID_ROOT = "ZKDTSMKeyIdRoot";
+-  private static final String ZK_DTSM_TOKENS_ROOT = "ZKDTSMTokensRoot";
+-  private static final String ZK_DTSM_MASTER_KEY_ROOT = "ZKDTSMMasterKeyRoot";
++  private static final String ZK_DTSM_SEQNUM_ROOT = "/ZKDTSMSeqNumRoot";
++  private static final String ZK_DTSM_KEYID_ROOT = "/ZKDTSMKeyIdRoot";
++  private static final String ZK_DTSM_TOKENS_ROOT = "/ZKDTSMTokensRoot";
++  private static final String ZK_DTSM_MASTER_KEY_ROOT = "/ZKDTSMMasterKeyRoot";
+ 
+   private static final String DELEGATION_KEY_PREFIX = "DK_";
+   private static final String DELEGATION_TOKEN_PREFIX = "DT_";
+@@ -505,11 +505,20 @@ protected int getDelegationTokenSeqNum() {
+     return delTokSeqCounter.getCount();
+   }
+ 
++  private void incrSharedCount(SharedCount sharedCount) throws Exception {
++    while (true) {
++      // Loop until we successfully increment the counter
++      VersionedValue<Integer> versionedValue = sharedCount.getVersionedValue();
++      if (sharedCount.trySetCount(versionedValue, versionedValue.getValue() + 1)) {
++        break;
++      }
++    }
++  }
++
+   @Override
+   protected int incrementDelegationTokenSeqNum() {
+     try {
+-      while (!delTokSeqCounter.trySetCount(delTokSeqCounter.getCount() + 1)) {
+-      }
++      incrSharedCount(delTokSeqCounter);
+     } catch (InterruptedException e) {
+       // The ExpirationThread is just finishing.. so dont do anything..
+       LOG.debug("Thread interrupted while performing token counter increment", e);
+@@ -537,8 +546,7 @@ protected int getCurrentKeyId() {
+   @Override
+   protected int incrementCurrentKeyId() {
+     try {
+-      while (!keyIdSeqCounter.trySetCount(keyIdSeqCounter.getCount() + 1)) {
+-      }
++      incrSharedCount(keyIdSeqCounter);
+     } catch (InterruptedException e) {
+       // The ExpirationThread is just finishing.. so dont do anything..
+       LOG.debug("Thread interrupted while performing keyId increment", e);
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index d401413..08706df 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -71,6 +71,7 @@
+     <protoc.path>${env.HADOOP_PROTOC_CDH5_PATH}</protoc.path>
+ 
+     <zookeeper.version>3.4.6</zookeeper.version>
++    <curator.version>2.7.1</curator.version>
+     <findbugs.version>3.0.0</findbugs.version>
+ 
+     <tomcat.version>6.0.41</tomcat.version>
+@@ -929,22 +930,22 @@
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-recipes</artifactId>
+-       <version>2.6.0</version>
++       <version>${curator.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-client</artifactId>
+-       <version>2.6.0</version>
++       <version>${curator.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-framework</artifactId>
+-       <version>2.6.0</version>
++       <version>${curator.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-test</artifactId>
+-       <version>2.6.0</version>
++       <version>${curator.version}</version>
+      </dependency>
+       <dependency>
+        <groupId>org.bouncycastle</groupId>
+-- 
+1.7.9.5
+

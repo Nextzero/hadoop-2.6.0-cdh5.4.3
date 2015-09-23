@@ -1,0 +1,30 @@
+From 23fd897b698d20d163f8255bc09b1fddbb80eb1b Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Mon, 15 Sep 2014 13:26:31 -0700
+Subject: [PATCH 149/596] MR1: CLOUDERA-BUILD. Reverts "MR1: CLOUDERA-BUILD.
+ Add flag to not fail on unused-result warning
+ (CDH-20987)"
+
+This reverts commit 044201a3e5097bb85713f85c186c8b4d4e2016a1.
+
+(cherry picked from commit 2a936a18231fcacc481e587e4c23ebc5727dd2f5)
+---
+ .../src/c++/task-controller/Makefile.am            |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/c++/task-controller/Makefile.am b/hadoop-mapreduce1-project/src/c++/task-controller/Makefile.am
+index c9df55a..37dc5e8 100644
+--- a/hadoop-mapreduce1-project/src/c++/task-controller/Makefile.am
++++ b/hadoop-mapreduce1-project/src/c++/task-controller/Makefile.am
+@@ -14,7 +14,7 @@
+ # See the License for the specific language governing permissions and
+ # limitations under the License.
+ 
+-AM_CFLAGS=-I$(srcdir)/impl -Wall -g -Wno-unused-result -Werror
++AM_CFLAGS=-I$(srcdir)/impl -Wall -g -Werror
+ 
+ # Define the programs that need to be built
+ bin_PROGRAMS = task-controller
+-- 
+1.7.9.5
+

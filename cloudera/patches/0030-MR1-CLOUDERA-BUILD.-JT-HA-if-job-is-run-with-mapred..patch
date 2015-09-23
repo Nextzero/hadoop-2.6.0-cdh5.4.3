@@ -1,0 +1,35 @@
+From 9c24d62eb6c736fe34508625d8d00e29fbcb728a Mon Sep 17 00:00:00 2001
+From: Tom White <tom@cloudera.com>
+Date: Fri, 1 Feb 2013 14:14:13 +0000
+Subject: [PATCH 030/596] MR1: CLOUDERA-BUILD. JT HA: if job is run with
+ mapred.job.restart.recover=false, job client hangs
+ on failover
+
+Reason: Bug
+Ref: CDH-10247
+Author: Tom White
+(cherry picked from commit 229250d70250380f44d9df5a0188c04333a9f084)
+(cherry picked from commit 116c5880424c62927b15d4015aa752ee56fdb751)
+(cherry picked from commit 09f9d2d188992d3cbaeb2264f0e8134fc6bfda0c)
+(cherry picked from commit 1b76936b7df981c1eb2e2ff4c82c6b5eb2c593e1)
+---
+ .../mapred/org/apache/hadoop/mapred/JobClient.java |    3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+index 758ed20..2e2b21e 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+@@ -252,6 +252,9 @@ synchronized void ensureFreshStatus() throws IOException {
+      */
+     synchronized void updateStatus() throws IOException {
+       this.status = jobSubmitClient.getJobStatus(profile.getJobID());
++      if(this.status == null) {
++        throw new IOException("The job appears to have been removed.");
++      }
+       this.statustime = System.currentTimeMillis();
+     }
+ 
+-- 
+1.7.9.5
+

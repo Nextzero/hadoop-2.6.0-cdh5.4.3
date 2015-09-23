@@ -1,0 +1,56 @@
+From 7d0847111f6d05e7d134bb0debb550d3d7644b0a Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Wed, 28 Aug 2013 10:12:09 -0700
+Subject: [PATCH 080/596] MR1: CLOUDERA-BUILD: Fix 4274823 Distributed Cache
+ is not adding files to class paths
+
+Contributed by Chris Douglas
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-0.20-security-patches@1077790 13f79535-47bb-0310-9956-ffa450edef68
+(cherry-picked from commit fc0ec8c130da1ed2638728b0482b47f9250a156b)
+
+Ref: CDH-13780
+(cherry picked from commit f98e77b392fb80cffc46fd0f1a8308582bf70680)
+(cherry picked from commit ac24bf0d60a656ce42fcac4cbd5054b832ac1a27)
+(cherry picked from commit 6f00f810ff06bcc0eb1abc06f9dac96a9c8cd70c)
+---
+ .../apache/hadoop/filecache/DistributedCache.java  |   14 ++++++++------
+ 1 file changed, 8 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/filecache/DistributedCache.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/filecache/DistributedCache.java
+index 5eaa9b9..9aa8f3c 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/filecache/DistributedCache.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/filecache/DistributedCache.java
+@@ -443,10 +443,11 @@ public static void addFileToClassPath(Path file, Configuration conf)
+   public static void addFileToClassPath
+            (Path file, Configuration conf, FileSystem fs)
+         throws IOException {
++    String filepath = file.toUri().getPath();
+     String classpath = conf.get("mapred.job.classpath.files");
+-    conf.set("mapred.job.classpath.files", classpath == null ? file.toString()
+-             : classpath
+-                 + System.getProperty("path.separator") + file.toString());
++    conf.set("mapred.job.classpath.files", classpath == null
++        ? filepath
++        : classpath + System.getProperty("path.separator") + filepath);
+     URI uri = fs.makeQualified(file).toUri();
+     addCacheFile(uri, conf);
+   }
+@@ -494,10 +495,11 @@ public static void addFileToClassPath(Path file, Configuration conf)
+   public static void addArchiveToClassPath
+          (Path archive, Configuration conf, FileSystem fs)
+       throws IOException {
++    String archivepath = archive.toUri().getPath();
+     String classpath = conf.get("mapred.job.classpath.archives");
+-    conf.set("mapred.job.classpath.archives", classpath == null ? archive
+-             .toString() : classpath + System.getProperty("path.separator")
+-             + archive.toString());
++    conf.set("mapred.job.classpath.archives", classpath == null
++        ? archivepath
++        : classpath + System.getProperty("path.separator") + archivepath);
+     URI uri = fs.makeQualified(archive).toUri();
+ 
+     addCacheArchive(uri, conf);
+-- 
+1.7.9.5
+

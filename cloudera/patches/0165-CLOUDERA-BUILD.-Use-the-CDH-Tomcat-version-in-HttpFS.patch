@@ -1,0 +1,32 @@
+From 1fd5039a1b8781a3e0fd320ac82259f0bd50a8c7 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <andrew.wang@cloudera.com>
+Date: Mon, 20 Jan 2014 12:00:17 -0800
+Subject: [PATCH 165/596] CLOUDERA-BUILD. Use the CDH Tomcat version in HttpFS
+ pom.xml.
+
+(cherry picked from commit a079ed5a9acb70b29f666d936ec1b660e51758d6)
+(cherry picked from commit d23ae5cc8462bec859f6cc14ddf70b67eb7a3906)
+(cherry picked from commit 2381c944a9b52774edb6701afe06296cb23877e1)
+(cherry picked from commit d80d1f1a48ddedc445970b13b6638325df031388)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml
+---
+ hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml |    1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml b/hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml
+index 54abdd9..dce6fde 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml
++++ b/hadoop-hdfs-project/hadoop-hdfs-httpfs/pom.xml
+@@ -34,6 +34,7 @@
+   <description>Apache Hadoop HttpFS</description>
+ 
+   <properties>
++    <tomcat.version>${cdh.tomcat.version}</tomcat.version>
+     <httpfs.source.repository>REPO NOT AVAIL</httpfs.source.repository>
+     <httpfs.source.repository>REPO NOT AVAIL</httpfs.source.repository>
+     <httpfs.source.revision>REVISION NOT AVAIL</httpfs.source.revision>
+-- 
+1.7.9.5
+

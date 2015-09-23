@@ -1,0 +1,102 @@
+From 7581a4db93618f806109697add06645d2430725f Mon Sep 17 00:00:00 2001
+From: Vinayakumar B <vinayakumarb@apache.org>
+Date: Wed, 4 Mar 2015 14:38:38 +0530
+Subject: [PATCH 561/596] HDFS-7869. Inconsistency in the return information
+ while performing rolling upgrade ( Contributed by
+ J.Andreina )
+
+(cherry picked from commit 3560180b6e9926aa3ee1357da59b28a4b4689a0d)
+(cherry picked from commit c24448c27b91d0398fb42a0a9ab8b8cdd4887647)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../hadoop/hdfs/server/namenode/FSNamesystem.java  |    6 +++---
+ .../hdfs/server/namenode/NameNodeRpcServer.java    |    3 +--
+ .../org/apache/hadoop/hdfs/tools/DFSAdmin.java     |    2 +-
+ .../org/apache/hadoop/hdfs/TestRollingUpgrade.java |    4 ++--
+ 4 files changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+index a6b6d40..3a23b8f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSNamesystem.java
+@@ -8512,7 +8512,7 @@ void checkRollingUpgrade(String action) throws RollingUpgradeException {
+     }
+   }
+ 
+-  void finalizeRollingUpgrade() throws IOException {
++  RollingUpgradeInfo finalizeRollingUpgrade() throws IOException {
+     checkSuperuserPrivilege();
+     checkOperation(OperationCategory.WRITE);
+     writeLock();
+@@ -8520,7 +8520,7 @@ void finalizeRollingUpgrade() throws IOException {
+     try {
+       checkOperation(OperationCategory.WRITE);
+       if (!isRollingUpgrade()) {
+-        return;
++        return null;
+       }
+       checkNameNodeSafeMode("Failed to finalize rolling upgrade");
+ 
+@@ -8545,7 +8545,7 @@ void finalizeRollingUpgrade() throws IOException {
+     if (auditLog.isInfoEnabled() && isExternalInvocation()) {
+       logAuditEvent(true, "finalizeRollingUpgrade", null, null, null);
+     }
+-    return;
++    return returnInfo;
+   }
+ 
+   RollingUpgradeInfo finalizeRollingUpgradeInternal(long finalizeTime)
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeRpcServer.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeRpcServer.java
+index be967b0..09774aa 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeRpcServer.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/NameNodeRpcServer.java
+@@ -1020,8 +1020,7 @@ public RollingUpgradeInfo rollingUpgrade(RollingUpgradeAction action) throws IOE
+     case PREPARE:
+       return namesystem.startRollingUpgrade();
+     case FINALIZE:
+-      namesystem.finalizeRollingUpgrade();
+-      return null;
++      return namesystem.finalizeRollingUpgrade();
+     default:
+       throw new UnsupportedActionException(action + " is not yet supported.");
+     }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+index ca979c3..93d16ba 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/tools/DFSAdmin.java
+@@ -317,7 +317,7 @@ static boolean matches(String cmd) {
+     private static void printMessage(RollingUpgradeInfo info,
+         PrintStream out) {
+       if (info != null && info.isStarted()) {
+-        if (!info.createdRollbackImages()) {
++        if (!info.createdRollbackImages() && !info.isFinalized()) {
+           out.println(
+               "Preparing for upgrade. Data is being saved for rollback."
+               + "\nRun \"dfsadmin -rollingUpgrade query\" to check the status"
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestRollingUpgrade.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestRollingUpgrade.java
+index aa3f362..22ead10 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestRollingUpgrade.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/TestRollingUpgrade.java
+@@ -241,7 +241,7 @@ public void testRollingUpgradeWithQJM() throws Exception {
+       //finalize rolling upgrade
+       final RollingUpgradeInfo finalize = dfs2.rollingUpgrade(
+           RollingUpgradeAction.FINALIZE);
+-      Assert.assertNull(finalize);
++      Assert.assertTrue(finalize.isFinalized());
+ 
+       LOG.info("RESTART cluster 2 with regular startup option");
+       cluster2.getNameNodeInfos()[0].setStartOpt(StartupOption.REGULAR);
+@@ -385,7 +385,7 @@ public void testFinalize() throws Exception {
+       Assert.assertTrue(fsimage.hasRollbackFSImage());
+ 
+       info = dfs.rollingUpgrade(RollingUpgradeAction.FINALIZE);
+-      Assert.assertNull(info);
++      Assert.assertTrue(info.isFinalized());
+       Assert.assertTrue(dfs.exists(foo));
+ 
+       // Once finalized, there should be no more fsimage for rollbacks.
+-- 
+1.7.9.5
+

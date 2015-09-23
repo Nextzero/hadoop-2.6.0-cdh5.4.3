@@ -1,0 +1,91 @@
+From 8e6a9d401a87019a45d555cfe714f177bdc8436c Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Tue, 16 Dec 2014 11:07:27 -0800
+Subject: [PATCH 388/596] HDFS-7494. Checking of closed in
+ DFSInputStream#pread() should be protected by
+ synchronization (Ted Yu via Colin P. McCabe)
+
+(cherry picked from commit a97a1e73177974cff8afafad6ca43a96563f3c61)
+(cherry picked from commit 1b91a6d011da06003d957b42f842c03b220f684d)
+---
+ .../org/apache/hadoop/hdfs/DFSInputStream.java     |   15 ++++++++-------
+ 1 file changed, 8 insertions(+), 7 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+index 291fe93..6a3bead 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSInputStream.java
+@@ -41,6 +41,7 @@
+ import java.util.concurrent.ExecutorCompletionService;
+ import java.util.concurrent.Future;
+ import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicBoolean;
+ 
+ import org.apache.commons.io.IOUtils;
+ import org.apache.hadoop.classification.InterfaceAudience;
+@@ -88,7 +89,7 @@
+   public static boolean tcpReadsDisabledForTesting = false;
+   private long hedgedReadOpsLoopNumForTesting = 0;
+   private final DFSClient dfsClient;
+-  private boolean closed = false;
++  private AtomicBoolean closed = new AtomicBoolean(false);
+   private final String src;
+   private final boolean verifyChecksum;
+ 
+@@ -667,7 +668,8 @@ private synchronized DatanodeInfo blockSeekTo(long target) throws IOException {
+    */
+   @Override
+   public synchronized void close() throws IOException {
+-    if (closed) {
++    if (!closed.compareAndSet(false, true)) {
++      DFSClient.LOG.warn("DFSInputStream has been closed already");
+       return;
+     }
+     dfsClient.checkOpen();
+@@ -688,7 +690,6 @@ public void accept(ByteBuffer k, Object v) {
+     }
+     closeCurrentBlockReader();
+     super.close();
+-    closed = true;
+   }
+ 
+   @Override
+@@ -830,7 +831,7 @@ private synchronized int readBuffer(ReaderStrategy reader, int off, int len,
+ 
+   private synchronized int readWithStrategy(ReaderStrategy strategy, int off, int len) throws IOException {
+     dfsClient.checkOpen();
+-    if (closed) {
++    if (closed.get()) {
+       throw new IOException("Stream closed");
+     }
+     Map<ExtendedBlock,Set<DatanodeInfo>> corruptedBlockMap 
+@@ -1351,7 +1352,7 @@ public int read(long position, byte[] buffer, int offset, int length)
+     throws IOException {
+     // sanity checks
+     dfsClient.checkOpen();
+-    if (closed) {
++    if (closed.get()) {
+       throw new IOException("Stream closed");
+     }
+     failures = 0;
+@@ -1460,7 +1461,7 @@ public synchronized void seek(long targetPos) throws IOException {
+     if (targetPos < 0) {
+       throw new EOFException("Cannot seek to negative offset");
+     }
+-    if (closed) {
++    if (closed.get()) {
+       throw new IOException("Stream is closed!");
+     }
+     boolean done = false;
+@@ -1547,7 +1548,7 @@ public synchronized long getPos() throws IOException {
+    */
+   @Override
+   public synchronized int available() throws IOException {
+-    if (closed) {
++    if (closed.get()) {
+       throw new IOException("Stream closed");
+     }
+ 
+-- 
+1.7.9.5
+

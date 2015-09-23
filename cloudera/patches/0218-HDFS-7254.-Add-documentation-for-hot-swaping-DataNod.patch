@@ -1,0 +1,76 @@
+From c9543812d4984d67a2fcf346a7b88d1a580285b3 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Wed, 22 Oct 2014 13:27:51 -0700
+Subject: [PATCH 218/596] HDFS-7254. Add documentation for hot swaping
+ DataNode drives (Lei Xu via Colin P. McCabe)
+ (cherry picked from commit
+ 66e8187ea1dbc6230ab2c633e4f609a7068b75db)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+
+(cherry picked from commit 2aa21c97884fe9a9943086fa1b6240c9ee31e92f)
+---
+ .../hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm   |    7 +++++++
+ .../hadoop-hdfs/src/site/apt/HdfsUserGuide.apt.vm  |   20 ++++++++++++++++++++
+ 2 files changed, 27 insertions(+)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
+index 01c9422..08e08a4 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HDFSCommands.apt.vm
+@@ -191,6 +191,7 @@ HDFS Commands Guide
+           [-refreshSuperUserGroupsConfiguration]
+           [-refreshCallQueue]
+           [-refresh <host:ipc_port> <key> [arg1..argn]]
++          [-reconfig <datanode|...> <host:ipc_port> <start|status>]
+           [-printTopology]
+           [-refreshNamenodes datanodehost:port]
+           [-deleteBlockPool datanode-host:port blockpoolId [force]]
+@@ -285,6 +286,12 @@ HDFS Commands Guide
+                   | of the resource specified by \<key\> on \<host:ipc_port\>.
+                   | All other args after are sent to the host.
+ *-----------------+-----------------------------------------------------------+
++| -reconfig <datanode|...> <host:ipc_port> <start|status> | Start
++                  | reconfiguration or get the status of an ongoing
++                  | reconfiguration. The second parameter specifies the node
++                  | type. Currently, only reloading DataNode's configuration is
++                  | supported.
++*-----------------+-----------------------------------------------------------+
+ | -printTopology  | Print a tree of the racks and their nodes as reported by
+                   | the Namenode
+ *-----------------+-----------------------------------------------------------+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HdfsUserGuide.apt.vm b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HdfsUserGuide.apt.vm
+index 55208c9..25a466e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HdfsUserGuide.apt.vm
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/site/apt/HdfsUserGuide.apt.vm
+@@ -486,6 +486,26 @@ HDFS Users Guide
+     This is because data inconsistency can result if an edit log operation
+     refers to the destination of an automatically renamed file.
+ 
++* DataNode Hot Swap Drive
++
++   Datanode supports hot swappable drives. The user can add or replace HDFS data
++   volumes without shutting down the DataNode. The following briefly describes
++   the typical hot swapping drive procedure:
++
++     * If there are new storage directories, the user should format them and mount them
++       appropriately.
++
++     * The user updates the DataNode configuration <<<dfs.datanode.data.dir>>>
++       to reflect the data volume directories that will be actively in use.
++
++     * The user runs <<<dfsadmin -reconfig datanode HOST:PORT start>>> to start
++       the reconfiguration process. The user can use <<<dfsadmin -reconfig
++       datanode HOST:PORT status>>> to query the running status of the reconfiguration
++       task.
++
++     * Once the reconfiguration task has completed, the user can safely <<<umount>>>
++       the removed data volume directories and physically remove the disks.
++
+ * File Permissions and Security
+ 
+    The file permissions are designed to be similar to file permissions on
+-- 
+1.7.9.5
+

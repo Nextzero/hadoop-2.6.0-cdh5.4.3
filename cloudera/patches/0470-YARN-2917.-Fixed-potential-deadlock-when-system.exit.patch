@@ -1,0 +1,49 @@
+From 9135ba1daa963e22d9321ffcbae9dfa9f3a95b8e Mon Sep 17 00:00:00 2001
+From: Jian He <jianhe@apache.org>
+Date: Thu, 11 Dec 2014 11:16:45 -0800
+Subject: [PATCH 470/596] YARN-2917. Fixed potential deadlock when system.exit
+ is called in AsyncDispatcher. Contributed by Rohith
+ Sharmaks (cherry picked from commit
+ 614b6afea450ebb897fbb2519c6f02e13b9bd12d) (cherry
+ picked from commit
+ 41f0d20fcb4fec5b932b8947a44f93345205222c)
+
+(cherry picked from commit 4496bec9166cd3b82f30608740c2f5cd04a083cf)
+---
+ .../apache/hadoop/yarn/event/AsyncDispatcher.java  |   15 +++++++++++++--
+ 1 file changed, 13 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/event/AsyncDispatcher.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/event/AsyncDispatcher.java
+index 370b0f7..28be6ac 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/event/AsyncDispatcher.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-common/src/main/java/org/apache/hadoop/yarn/event/AsyncDispatcher.java
+@@ -181,8 +181,9 @@ protected void dispatch(Event event) {
+       if (exitOnDispatchException
+           && (ShutdownHookManager.get().isShutdownInProgress()) == false
+           && stopped == false) {
+-        LOG.info("Exiting, bbye..");
+-        System.exit(-1);
++        Thread shutDownThread = new Thread(createShutDownThread());
++        shutDownThread.setName("AsyncDispatcher ShutDown handler");
++        shutDownThread.start();
+       }
+     }
+   }
+@@ -271,4 +272,14 @@ void addHandler(EventHandler<Event> handler) {
+     }
+ 
+   }
++
++  Runnable createShutDownThread() {
++    return new Runnable() {
++      @Override
++      public void run() {
++        LOG.info("Exiting, bbye..");
++        System.exit(-1);
++      }
++    };
++  }
+ }
+-- 
+1.7.9.5
+

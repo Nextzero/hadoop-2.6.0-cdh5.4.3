@@ -1,0 +1,27 @@
+From 10c8bf14add9bbdf7a7d7436046f14b39b35b689 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Mon, 17 Nov 2014 14:52:53 -0800
+Subject: [PATCH 153/596] MR1: CLOUDERA-BUILD. Adding bouncycastle dependency
+ required for some unit tests
+
+(cherry picked from commit b22da0e1d0cb7e1caa49667219303797fbd2139a)
+---
+ hadoop-mapreduce1-project/ivy.xml |    2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/hadoop-mapreduce1-project/ivy.xml b/hadoop-mapreduce1-project/ivy.xml
+index 425def6..d5119ab 100644
+--- a/hadoop-mapreduce1-project/ivy.xml
++++ b/hadoop-mapreduce1-project/ivy.xml
+@@ -127,6 +127,8 @@
+                conf="test->default">
+      <artifact name="zookeeper" type="test-jar" ext="jar" m:classifier="tests"/>
+    </dependency>
++   <dependency org="org.bouncycastle" name="bcprov-jdk16" rev="1.46"
++               conf="test->default"/>
+    
+    <!-- Exclusions for transitive dependencies pulled in by log4j -->
+    <exclude org="com.sun.jdmk"/>
+-- 
+1.7.9.5
+

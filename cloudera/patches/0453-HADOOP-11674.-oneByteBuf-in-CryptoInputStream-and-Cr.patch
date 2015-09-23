@@ -1,0 +1,49 @@
+From 60ec1fa48f631370828dfc22f2aaace4e5add58d Mon Sep 17 00:00:00 2001
+From: yliu <yliu@apache.org>
+Date: Thu, 5 Mar 2015 06:39:58 +0800
+Subject: [PATCH 453/596] HADOOP-11674. oneByteBuf in CryptoInputStream and
+ CryptoOutputStream should be non static. (Sean
+ Busbey via yliu)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit b569c3ab1cb7e328dde822f6b2405d24b9560e3a)
+
+Reason: Bug
+Author: Sean Busbey
+Ref: CDH-25802
+---
+ .../apache/hadoop/crypto/CryptoInputStream.java    |    2 +-
+ .../apache/hadoop/crypto/CryptoOutputStream.java   |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoInputStream.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoInputStream.java
+index 4b53563..5445d8e 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoInputStream.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoInputStream.java
+@@ -60,7 +60,7 @@
+     Seekable, PositionedReadable, ByteBufferReadable, HasFileDescriptor, 
+     CanSetDropBehind, CanSetReadahead, HasEnhancedByteBufferAccess, 
+     ReadableByteChannel {
+-  private static final byte[] oneByteBuf = new byte[1];
++  private final byte[] oneByteBuf = new byte[1];
+   private final CryptoCodec codec;
+   private final Decryptor decryptor;
+   private final int bufferSize;
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoOutputStream.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoOutputStream.java
+index fc07923..f1b2737 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoOutputStream.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/CryptoOutputStream.java
+@@ -45,7 +45,7 @@
+ @InterfaceStability.Evolving
+ public class CryptoOutputStream extends FilterOutputStream implements 
+     Syncable, CanSetDropBehind {
+-  private static final byte[] oneByteBuf = new byte[1];
++  private final byte[] oneByteBuf = new byte[1];
+   private final CryptoCodec codec;
+   private final Encryptor encryptor;
+   private final int bufferSize;
+-- 
+1.7.9.5
+

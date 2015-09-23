@@ -1,0 +1,65 @@
+From 36d2f3427658845b961e05d6ee8171cc97d38798 Mon Sep 17 00:00:00 2001
+From: Stephen Chu <schu@cloudera.com>
+Date: Tue, 28 Oct 2014 17:34:01 -0700
+Subject: [PATCH 174/596] CLOUDERA-BUILD. Disable SSLv3 in our Jetty 6 fork.
+ (CDH-22521 continued)
+
+(cherry picked from commit 65108c165674673053c35a31e1f89014397f03c0)
+---
+ .../.eclipse.templates/.classpath                  |    4 ++--
+ .../ivy/hadoop-core-pom-template.xml               |    4 ++--
+ hadoop-mapreduce1-project/ivy/libraries.properties |    4 ++--
+ 3 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/.eclipse.templates/.classpath b/hadoop-mapreduce1-project/.eclipse.templates/.classpath
+index 12c3be5..bdbda48 100644
+--- a/hadoop-mapreduce1-project/.eclipse.templates/.classpath
++++ b/hadoop-mapreduce1-project/.eclipse.templates/.classpath
+@@ -33,8 +33,8 @@
+ 	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/log4j-1.2.15.jar"/>
+ 	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/mockito-all-1.8.2.jar"/>
+ 	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/oro-2.0.8.jar"/>
+-	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/jetty-6.1.26.cloudera.2.jar"/>
+-	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/jetty-util-6.1.26.cloudera.2.jar"/>
++	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/jetty-6.1.26.cloudera.3.jar"/>
++	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/jetty-util-6.1.26.cloudera.3.jar"/>
+ 	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/jackson-core-asl-1.5.2.jar"/>
+ 	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/jackson-mapper-asl-1.5.2.jar"/>
+   	<classpathentry kind="lib" path="build/ivy/lib/Hadoop/common/servlet-api-2.5-6.1.14.jar"/>
+diff --git a/hadoop-mapreduce1-project/ivy/hadoop-core-pom-template.xml b/hadoop-mapreduce1-project/ivy/hadoop-core-pom-template.xml
+index 12ac58b..08e49ec 100644
+--- a/hadoop-mapreduce1-project/ivy/hadoop-core-pom-template.xml
++++ b/hadoop-mapreduce1-project/ivy/hadoop-core-pom-template.xml
+@@ -61,12 +61,12 @@
+     <dependency>
+       <groupId>org.mortbay.jetty</groupId>
+       <artifactId>jetty</artifactId>
+-      <version>6.1.26.cloudera.2</version>
++      <version>6.1.26.cloudera.3</version>
+     </dependency>
+     <dependency>
+       <groupId>org.mortbay.jetty</groupId>
+       <artifactId>jetty-util</artifactId>
+-      <version>6.1.26.cloudera.2</version>
++      <version>6.1.26.cloudera.3</version>
+     </dependency>
+     <dependency>
+       <groupId>tomcat</groupId>
+diff --git a/hadoop-mapreduce1-project/ivy/libraries.properties b/hadoop-mapreduce1-project/ivy/libraries.properties
+index ef07e22..a8957cd 100644
+--- a/hadoop-mapreduce1-project/ivy/libraries.properties
++++ b/hadoop-mapreduce1-project/ivy/libraries.properties
+@@ -54,8 +54,8 @@ jdeb.version=0.8
+ jsp.version=2.1
+ jsp-api.version=5.5.12
+ jets3t.version=0.7.1
+-jetty.version=6.1.26.cloudera.2
+-jetty-util.version=6.1.26.cloudera.2
++jetty.version=6.1.26.cloudera.3
++jetty-util.version=6.1.26.cloudera.3
+ junit.version=4.8.1
+ jdiff.version=1.0.9
+ 
+-- 
+1.7.9.5
+

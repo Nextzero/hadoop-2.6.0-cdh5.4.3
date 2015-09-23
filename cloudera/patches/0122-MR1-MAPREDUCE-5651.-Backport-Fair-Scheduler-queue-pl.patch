@@ -1,0 +1,766 @@
+From ac2cbc221a0bf0b70307fc3de915d89e036e2264 Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Mon, 13 Jan 2014 10:20:36 -0800
+Subject: [PATCH 122/596] MR1: MAPREDUCE-5651. Backport Fair Scheduler queue
+ placement policies to branch-1 (Ted Malaska via
+ Sandy Ryza)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1556404 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit 608ca7f6cfef3d5e1c7d8042b134b9da24989873)
+(cherry picked from commit 4f3bcedbaeacc25706568595885510e17f131b99)
+(cherry picked from commit 311ccaf94a9a12cbaa3d23d16636436129270f5a)
+---
+ .../org/apache/hadoop/mapred/FairScheduler.java    |    2 +
+ .../java/org/apache/hadoop/mapred/PoolManager.java |   50 ++++-
+ .../apache/hadoop/mapred/PoolPlacementPolicy.java  |  122 ++++++++++++
+ .../apache/hadoop/mapred/PoolPlacementRule.java    |  210 ++++++++++++++++++++
+ .../apache/hadoop/mapred/SimpleGroupsMapping.java  |   44 ++++
+ .../apache/hadoop/mapred/TestFairScheduler.java    |   61 ++++++
+ .../hadoop/mapred/TestPoolPlacementPolicy.java     |  121 +++++++++++
+ 7 files changed, 609 insertions(+), 1 deletion(-)
+ create mode 100644 hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolPlacementPolicy.java
+ create mode 100644 hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolPlacementRule.java
+ create mode 100644 hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/SimpleGroupsMapping.java
+ create mode 100644 hadoop-mapreduce1-project/src/contrib/fairscheduler/src/test/org/apache/hadoop/mapred/TestPoolPlacementPolicy.java
+
+diff --git a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/FairScheduler.java b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/FairScheduler.java
+index 9aab64f..3cd073e 100644
+--- a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/FairScheduler.java
++++ b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/FairScheduler.java
+@@ -106,6 +106,8 @@
+    */
+   public final static String ALLOW_UNDECLARED_POOLS_KEY =
+     "mapred.fairscheduler.allow.undeclared.pools";
++  public static final boolean DEFAULT_ALLOW_UNDECLARED_POOLS = true;
++
+   private boolean allowUndeclaredPools = false;
+ 
+   private MetricsUpdater metricsUpdater; // responsible for pushing hadoop metrics
+diff --git a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolManager.java b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolManager.java
+index bcc4bc4..ca3968f 100644
+--- a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolManager.java
++++ b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolManager.java
+@@ -24,6 +24,7 @@
+ import java.util.Collection;
+ import java.util.Collections;
+ import java.util.HashMap;
++import java.util.HashSet;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.Set;
+@@ -103,6 +104,8 @@
+   private String allocFile; // Path to XML file containing allocations
+   private String poolNameProperty; // Jobconf property to use for determining a
+                                    // job's pool name (default: user.name)
++
++  PoolPlacementPolicy placementPolicy;
+   
+   private Map<String, Pool> pools = new HashMap<String, Pool>();
+   
+@@ -121,6 +124,10 @@ public void initialize() throws IOException, SAXException,
+     Configuration conf = scheduler.getConf();
+     this.poolNameProperty = conf.get(
+         "mapred.fairscheduler.poolnameproperty", "user.name");
++
++    this.placementPolicy = new PoolPlacementPolicy(getSimplePlacementRules(),
++        new HashSet<String>(), conf);
++
+     this.allocFile = conf.get("mapred.fairscheduler.allocation.file");
+     if (allocFile == null) {
+       LOG.warn("No mapred.fairscheduler.allocation.file given in jobconf - " +
+@@ -223,6 +230,8 @@ public void reloadAllocs() throws IOException, ParserConfigurationException,
+     long fairSharePreemptionTimeout = Long.MAX_VALUE;
+     long defaultMinSharePreemptionTimeout = Long.MAX_VALUE;
+     SchedulingMode defaultSchedulingMode = SchedulingMode.FAIR;
++
++    PoolPlacementPolicy newPlacementPolicy = null;
+     
+     // Read and parse the allocations file.
+     DocumentBuilderFactory docBuilderFactory =
+@@ -231,6 +240,8 @@ public void reloadAllocs() throws IOException, ParserConfigurationException,
+     DocumentBuilder builder = docBuilderFactory.newDocumentBuilder();
+     Document doc = builder.parse(new File(allocFile));
+     Element root = doc.getDocumentElement();
++    Element placementPolicyElement = null;
++
+     if (!"allocations".equals(root.getTagName()))
+       throw new AllocationConfigurationException("Bad fair scheduler config " + 
+           "file: top-level element not <allocations>");
+@@ -325,10 +336,21 @@ public void reloadAllocs() throws IOException, ParserConfigurationException,
+       } else if ("defaultPoolSchedulingMode".equals(element.getTagName())) {
+         String text = ((Text)element.getFirstChild()).getData().trim();
+         defaultSchedulingMode = parseSchedulingMode(text);
++      } else if ("poolPlacementPolicy".equals(element.getTagName())) {
++        placementPolicyElement = element;
+       } else {
+         LOG.warn("Bad element in allocations file: " + element.getTagName());
+       }
+     }
++
++    // Load placement policy and pass it configured pools
++    if (placementPolicyElement != null) {
++      newPlacementPolicy = PoolPlacementPolicy.fromXml(placementPolicyElement,
++          new HashSet<String>(poolNamesInAllocFile), scheduler.getConf());
++    } else {
++      newPlacementPolicy = new PoolPlacementPolicy(getSimplePlacementRules(),
++          new HashSet<String>(poolNamesInAllocFile), scheduler.getConf());
++    }
+     
+     // Commit the reload; also create any pool defined in the alloc file
+     // if it does not already exist, so it can be displayed on the web UI.
+@@ -348,6 +370,7 @@ public void reloadAllocs() throws IOException, ParserConfigurationException,
+       this.defaultSchedulingMode = defaultSchedulingMode;
+       this.declaredPools = Collections.unmodifiableSet(new TreeSet<String>(
+           poolNamesInAllocFile));
++      this.placementPolicy = newPlacementPolicy;
+       for (String name: poolNamesInAllocFile) {
+         Pool pool = getPool(name);
+         if (poolModes.containsKey(name)) {
+@@ -453,8 +476,16 @@ public synchronized void setPool(JobInProgress job, String pool) {
+    */
+   public String getPoolName(JobInProgress job) {
+     Configuration conf = job.getJobConf();
+-    return conf.get(EXPLICIT_POOL_PROPERTY,
++    String poolName = conf.get(EXPLICIT_POOL_PROPERTY,
+       conf.get(poolNameProperty, Pool.DEFAULT_POOL_NAME)).trim();
++    String user = conf.get("user.name");
++
++    try {
++      return placementPolicy.assignJobToPool(poolName, user);
++    } catch (IOException ex) {
++      LOG.error("Error assigning job to pool, using default pool", ex);
++      return Pool.DEFAULT_POOL_NAME;
++    }
+   }
+ 
+   /**
+@@ -526,4 +557,21 @@ synchronized void updateMetrics() {
+     return declaredPools;
+   }
+ 
++  /**
++   * Construct simple pool placement policy from allow-undeclared-pools 
++   */
++  private List<PoolPlacementRule> getSimplePlacementRules() {
++    List<PoolPlacementRule> rules = new ArrayList<PoolPlacementRule>();
++
++    boolean specifiedCreate = scheduler.getConf().getBoolean(
++      FairScheduler.ALLOW_UNDECLARED_POOLS_KEY, 
++      FairScheduler.DEFAULT_ALLOW_UNDECLARED_POOLS);
++
++    rules.add(
++      new PoolPlacementRule.Specified().initialize(specifiedCreate, null));
++    rules.add(new PoolPlacementRule.Default().initialize(true, null));
++    
++    return rules;
++  }
++
+ }
+diff --git a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolPlacementPolicy.java b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolPlacementPolicy.java
+new file mode 100644
+index 0000000..e0d5bd9
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolPlacementPolicy.java
+@@ -0,0 +1,122 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.mapred;
++
++import java.io.IOException;
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.HashMap;
++import java.util.List;
++import java.util.Map;
++import java.util.Set;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.security.Groups;
++import org.apache.hadoop.util.ReflectionUtils;
++import org.w3c.dom.Element;
++import org.w3c.dom.Node;
++import org.w3c.dom.NodeList;
++
++public class PoolPlacementPolicy {
++  private static final Map<String, Class<? extends PoolPlacementRule>> ruleClasses;
++  static {
++    Map<String, Class<? extends PoolPlacementRule>> map =
++        new HashMap<String, Class<? extends PoolPlacementRule>>();
++    map.put("user", PoolPlacementRule.User.class);
++    map.put("primaryGroup", PoolPlacementRule.PrimaryGroup.class);
++    map.put("specified", PoolPlacementRule.Specified.class);
++    map.put("default", PoolPlacementRule.Default.class);
++    map.put("reject", PoolPlacementRule.Reject.class);
++    ruleClasses = Collections.unmodifiableMap(map);
++  }
++  
++  private final List<PoolPlacementRule> rules;
++  private final Set<String> configuredPools;
++  private final Groups groups;
++  
++  public PoolPlacementPolicy(List<PoolPlacementRule> rules,
++      Set<String> configuredPools, Configuration conf)
++      throws AllocationConfigurationException {
++    for (int i = 0; i < rules.size()-1; i++) {
++      if (rules.get(i).isTerminal()) {
++        throw new AllocationConfigurationException("Rules after rule "
++            + i + " in pool placement policy can never be reached");
++      }
++    }
++    if (!rules.get(rules.size()-1).isTerminal()) {
++      throw new AllocationConfigurationException(
++          "Could get past last pool placement rule without assigning");
++    }
++    this.rules = rules;
++    this.configuredPools = configuredPools;
++    groups = new Groups(conf);
++  }
++  
++  /**
++   * Builds a PoolPlacementPolicy from an xml element.
++   */
++  public static PoolPlacementPolicy fromXml(Element el, Set<String> configuredPools,
++      Configuration conf) throws AllocationConfigurationException {
++    List<PoolPlacementRule> rules = new ArrayList<PoolPlacementRule>();
++    NodeList elements = el.getChildNodes();
++    for (int i = 0; i < elements.getLength(); i++) {
++      Node node = elements.item(i);
++      if (node instanceof Element) {
++        Element element = (Element)node;
++        String ruleName = element.getTagName();
++        Class<? extends PoolPlacementRule> clazz = ruleClasses.get(ruleName);
++        if (clazz == null) {
++          throw new AllocationConfigurationException("No rule class found for "
++              + ruleName);
++        }
++        PoolPlacementRule rule = ReflectionUtils.newInstance(clazz, null);
++        rule.initializeFromXml(element);
++        rules.add(rule);
++      }
++    }
++    return new PoolPlacementPolicy(rules, configuredPools, conf);
++  }
++  
++  /**
++   * Applies this rule to an job with the given requested pool and user/group
++   * information.
++   * 
++   * @param requestedPool
++   *    The pool specified in the Context
++   * @param user
++   *    The user submitting the job
++   * @return
++   *    The name of the pool to assign the job to.  Or null is no pool was
++   *    assigned
++   * @throws IOException
++   *    If an exception is encountered while getting the user's groups
++   */
++  public String assignJobToPool(String requestedPool, String user)
++      throws IOException {
++    for (PoolPlacementRule rule : rules) {
++      String pool = rule.assignJobToPool(requestedPool, user, groups,
++          configuredPools);
++
++      if (pool == null || !pool.isEmpty()) {
++        return pool;
++      }
++    }
++    throw new IllegalStateException("Should have applied a rule before " +
++    		"reaching here");
++  }
++}
+diff --git a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolPlacementRule.java b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolPlacementRule.java
+new file mode 100644
+index 0000000..2d89298
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/PoolPlacementRule.java
+@@ -0,0 +1,210 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.mapred;
++
++import java.io.IOException;
++import java.util.Collection;
++import java.util.List;
++import java.util.HashMap;
++import java.util.Map;
++
++import org.apache.hadoop.security.Groups;
++import org.w3c.dom.Element;
++import org.w3c.dom.NamedNodeMap;
++import org.w3c.dom.Node;
++
++public abstract class PoolPlacementRule {
++  protected boolean create;
++  
++  /**
++   * Initializes the rule with any arguments.
++   * 
++   * @param args
++   *    Additional attributes of the rule's xml element other than create.
++   */
++  public PoolPlacementRule initialize(boolean create, Map<String, String> args) {
++    this.create = create;
++    return this;
++  }
++  
++  /**
++   * 
++   * @param requestedPool
++   *    The pool explicitly requested.
++   * @param user
++   *    The user submitting the job.
++   * @param groups
++   *    The groups of the user submitting the job.
++   * @param configuredPools
++   *    The pools specified in the scheduler configuration.
++   * @return
++   *    The pool to place the job into. An empty string indicates that we should
++   *    continue to the next rule, and null indicates that the app should be rejected.
++   */
++  public String assignJobToPool(String requestedPool, String user,
++      Groups groups, Collection<String> configuredPools) throws IOException {
++    String pool = getPoolForJob(requestedPool, user, groups);
++    if (create || configuredPools.contains(pool)) {
++      return pool;
++    } else {
++      return "";
++    }
++  }
++  
++  public void initializeFromXml(Element el) {
++    boolean create = true;
++    NamedNodeMap attributes = el.getAttributes();
++    Map<String, String> args = new HashMap<String, String>();
++    for (int i = 0; i < attributes.getLength(); i++) {
++      Node node = attributes.item(i);
++      String key = node.getNodeName();
++      String value = node.getNodeValue();
++      if (key.equals("create")) {
++        create = Boolean.parseBoolean(value);
++      } else {
++        args.put(key, value);
++      }
++    }
++    initialize(create, args);
++  }
++  
++  /**
++   * Returns true if this rule never tells the policy to continue.
++   */
++  public abstract boolean isTerminal();
++  
++  /**
++   * Applies this rule to an job with the given requested pool and user/group
++   * information.
++   * 
++   * @param requestedPool
++   *    The Pool specified in the Context
++   * @param user
++   *    The user submitting the job.
++   * @param groups
++   *    The groups of the user submitting the job.
++   * @return
++   *    The name of the Pool to assign the job to, or null to empty string
++   *    continue to the next rule.
++   */
++  protected abstract String getPoolForJob(String requestedPool, String user,
++      Groups groups) throws IOException;
++
++  /**
++   * Places jobs in pools by username of the submitter
++   */
++  public static class User extends PoolPlacementRule {
++    @Override
++    protected String getPoolForJob(String requestedPool,
++        String user, Groups groups) {
++      if (user != null) {
++        return user; 
++      } else {
++        return Pool.DEFAULT_POOL_NAME;
++      }
++    }
++    
++    @Override
++    public boolean isTerminal() {
++      return create;
++    }
++  }
++  
++  /**
++   * Places jobs in pools by primary group of the submitter
++   */
++  public static class PrimaryGroup extends PoolPlacementRule {
++    @Override
++    protected String getPoolForJob(String requestedPool,
++        String user, Groups groups) throws IOException {
++      if (user == null) {
++        return Pool.DEFAULT_POOL_NAME;
++      }
++      List<String> groupList = groups.getGroups(user);
++
++      if (groupList.size() > 0) {
++        return groupList.get(0);
++      } else {
++        return Pool.DEFAULT_POOL_NAME;
++      }
++    }
++    
++    @Override
++    public boolean isTerminal() {
++      return create;
++    }
++  }
++
++  /**
++   * Places jobs in pools by requested pool of the submitter
++   */
++  public static class Specified extends PoolPlacementRule {
++    @Override
++    protected String getPoolForJob(String requestedPool,
++        String user, Groups groups) {
++      if (requestedPool.equals(Pool.DEFAULT_POOL_NAME)) {
++        return "";
++      } else {
++        return requestedPool;
++      }
++    }
++    
++    @Override
++    public boolean isTerminal() {
++      return false;
++    }
++  }
++  
++  /**
++   * Places all jobs in the default pool
++   */
++  public static class Default extends PoolPlacementRule {
++    @Override
++    protected String getPoolForJob(String requestedPool, String user,
++        Groups groups) {
++      return Pool.DEFAULT_POOL_NAME;
++    }
++    
++    @Override
++    public boolean isTerminal() {
++      return create;
++    }
++  }
++  
++  /**
++   * Rejects all jobs
++   */
++  public static class Reject extends PoolPlacementRule {
++    @Override
++    public String assignJobToPool(String requestedPool, String user,
++        Groups groups, Collection<String> configuredPool) {
++      return null;
++    }
++    
++    @Override
++    protected String getPoolForJob(String requestedPool, String user,
++        Groups groups) {
++      throw new UnsupportedOperationException();
++    }
++    
++    @Override
++    public boolean isTerminal() {
++      return true;
++    }
++  }
++}
+diff --git a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/SimpleGroupsMapping.java b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/SimpleGroupsMapping.java
+new file mode 100644
+index 0000000..2074e6c
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/java/org/apache/hadoop/mapred/SimpleGroupsMapping.java
+@@ -0,0 +1,44 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++
++package org.apache.hadoop.mapred;
++
++import java.io.IOException;
++import java.util.Arrays;
++import java.util.List;
++
++import org.apache.hadoop.security.GroupMappingServiceProvider;
++
++public class SimpleGroupsMapping implements GroupMappingServiceProvider {
++  
++  @Override
++  public List<String> getGroups(String user) {
++    return Arrays.asList(user + "group");
++  }
++
++  @Override
++  public void cacheGroupsRefresh() throws IOException {
++    throw new UnsupportedOperationException();
++  }
++
++  @Override
++  public void cacheGroupsAdd(List<String> groups) throws IOException {
++    throw new UnsupportedOperationException();
++  }
++
++}
+diff --git a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/test/org/apache/hadoop/mapred/TestFairScheduler.java b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/test/org/apache/hadoop/mapred/TestFairScheduler.java
+index 6f37cb9..010c096 100644
+--- a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/test/org/apache/hadoop/mapred/TestFairScheduler.java
++++ b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/test/org/apache/hadoop/mapred/TestFairScheduler.java
+@@ -25,6 +25,7 @@
+ import java.util.ArrayList;
+ import java.util.Collection;
+ import java.util.HashMap;
++import java.util.HashSet;
+ import java.util.IdentityHashMap;
+ import java.util.LinkedHashSet;
+ import java.util.List;
+@@ -51,6 +52,7 @@
+ import org.apache.hadoop.metrics.spi.NoEmitMetricsContext;
+ import org.apache.hadoop.metrics.spi.OutputRecord;
+ import org.apache.hadoop.net.Node;
++import org.apache.hadoop.security.GroupMappingServiceProvider;
+ import org.mockito.Mockito;
+ 
+ public class TestFairScheduler extends TestCase {
+@@ -3031,4 +3033,63 @@ public void testFairSharePreemptionWithShortTimeout() throws Exception {
+     assertNull(scheduler.assignTasks(tracker("tt1")));
+     assertNull(scheduler.assignTasks(tracker("tt2")));
+   }
++
++  public void testPoolPlacementWithPolicy() throws Exception {
++    
++    Configuration placementPolicyConfig = new Configuration();
++    placementPolicyConfig.setClass("hadoop.security.group.mapping",
++        SimpleGroupsMapping.class, GroupMappingServiceProvider.class);
++    
++    List<PoolPlacementRule> rules = new ArrayList<PoolPlacementRule>();
++    rules.add(new PoolPlacementRule.Specified().initialize(true, null));
++    rules.add(new PoolPlacementRule.User().initialize(false, null));
++    rules.add(new PoolPlacementRule.PrimaryGroup().initialize(false, null));
++    rules.add(new PoolPlacementRule.Default().initialize(true, null));
++    Set<String> pools = new HashSet();
++    pools.add("user1");
++    pools.add("user3group");
++
++    placementPolicyConfig.set("user.name", "user1");
++    PoolManager poolManager = scheduler.getPoolManager();
++
++    poolManager.placementPolicy = new PoolPlacementPolicy(
++        rules, pools, placementPolicyConfig);
++    
++    JobInProgress job1 = submitJob(JobStatus.RUNNING, 2, 1);
++
++    job1.getJobConf().set("user.name", "user1");
++    poolManager.setPool(job1, "somepool");
++    assertEquals("somepool", poolManager.getPoolName(job1));
++
++    poolManager.setPool(job1, "default");
++    assertEquals("user1", poolManager.getPoolName(job1));
++
++    job1.getJobConf().set("user.name", "user3");
++    poolManager.setPool(job1, "default");
++    assertEquals("user3group", poolManager.getPoolName(job1));
++
++    job1.getJobConf().set("user.name", "otheruser");
++    poolManager.setPool(job1, "default");
++    assertEquals("default", poolManager.getPoolName(job1));
++    
++    // test without specified as first rule
++    rules = new ArrayList<PoolPlacementRule>();
++    rules.add(new PoolPlacementRule.User().initialize(false, null));
++    rules.add(new PoolPlacementRule.Specified().initialize(true, null));
++    rules.add(new PoolPlacementRule.Default().initialize(true, null));
++    poolManager.placementPolicy = new PoolPlacementPolicy(
++        rules, pools, conf);
++
++    job1.getJobConf().set("user.name", "user1");
++    poolManager.setPool(job1, "somepool");
++    assertEquals("user1", poolManager.getPoolName(job1));
++
++    job1.getJobConf().set("user.name", "otheruser");
++    poolManager.setPool(job1, "somepool");
++    assertEquals("somepool", poolManager.getPoolName(job1));
++
++    poolManager.setPool(job1, "default");
++    assertEquals("default", poolManager.getPoolName(job1));
++
++  }
+ }
+diff --git a/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/test/org/apache/hadoop/mapred/TestPoolPlacementPolicy.java b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/test/org/apache/hadoop/mapred/TestPoolPlacementPolicy.java
+new file mode 100644
+index 0000000..c447865
+--- /dev/null
++++ b/hadoop-mapreduce1-project/src/contrib/fairscheduler/src/test/org/apache/hadoop/mapred/TestPoolPlacementPolicy.java
+@@ -0,0 +1,121 @@
++/**
++ * Licensed to the Apache Software Foundation (ASF) under one
++ * or more contributor license agreements.  See the NOTICE file
++ * distributed with this work for additional information
++ * regarding copyright ownership.  The ASF licenses this file
++ * to you under the Apache License, Version 2.0 (the
++ * "License"); you may not use this file except in compliance
++ * with the License.  You may obtain a copy of the License at
++ *
++ *     http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.hadoop.mapred;
++
++import static org.junit.Assert.assertEquals;
++
++import java.util.HashSet;
++import java.util.Set;
++
++import javax.xml.parsers.DocumentBuilder;
++import javax.xml.parsers.DocumentBuilderFactory;
++
++import org.apache.hadoop.conf.Configuration;
++import org.apache.hadoop.fs.CommonConfigurationKeys;
++import org.apache.hadoop.security.GroupMappingServiceProvider;
++import org.junit.BeforeClass;
++import org.junit.Test;
++import org.w3c.dom.Document;
++import org.w3c.dom.Element;
++
++import java.io.ByteArrayInputStream;
++
++
++public class TestPoolPlacementPolicy {
++  private final static Configuration conf = new Configuration();
++  private final static Set<String> configuredPools = new HashSet<String>();
++
++  @BeforeClass
++  public static void setup() {
++    conf.setClass(CommonConfigurationKeys.HADOOP_SECURITY_GROUP_MAPPING,
++        SimpleGroupsMapping.class, GroupMappingServiceProvider.class);
++    configuredPools.add("someuser");
++  }
++  
++  @Test
++  public void testSpecifiedUserPolicy() throws Exception {
++    StringBuffer sb = new StringBuffer();
++    sb.append("<poolPlacementPolicy>");
++    sb.append("  <specified />");
++    sb.append("  <user />");
++    sb.append("</poolPlacementPolicy>");
++    PoolPlacementPolicy policy = parse(sb.toString());
++    assertEquals("specifiedq",policy.assignJobToPool("specifiedq", "someuser"));
++    assertEquals("someuser", policy.assignJobToPool("default", "someuser"));
++    assertEquals("otheruser", policy.assignJobToPool("default", "otheruser"));
++  }
++  
++  @Test
++  public void testNoCreate() throws Exception {
++    StringBuffer sb = new StringBuffer();
++    sb.append("<poolPlacementPolicy>");
++    sb.append("  <specified />");
++    sb.append("  <user create=\"false\" />");
++    sb.append("  <default />");
++    sb.append("</poolPlacementPolicy>");
++    PoolPlacementPolicy policy = parse(sb.toString());
++    assertEquals("specifiedq", policy.assignJobToPool("specifiedq", "someuser"));
++    assertEquals("someuser", policy.assignJobToPool("default", "someuser"));
++    assertEquals("specifiedq", policy.assignJobToPool("specifiedq", "otheruser"));
++    assertEquals("default", policy.assignJobToPool("default", "otheruser"));
++  }
++  
++  @Test
++  public void testSpecifiedThenReject() throws Exception {
++    StringBuffer sb = new StringBuffer();
++    sb.append("<poolPlacementPolicy>");
++    sb.append("  <specified />");
++    sb.append("  <reject />");
++    sb.append("</poolPlacementPolicy>");
++    PoolPlacementPolicy policy = parse(sb.toString());
++    assertEquals("specifiedq", policy.assignJobToPool("specifiedq", "someuser"));
++    assertEquals(null, policy.assignJobToPool("default", "someuser"));
++  }
++  
++  @Test (expected = AllocationConfigurationException.class)
++  public void testOmittedTerminalRule() throws Exception {
++    StringBuffer sb = new StringBuffer();
++    sb.append("<poolPlacementPolicy>");
++    sb.append("  <specified />");
++    sb.append("  <user create=\"false\" />");
++    sb.append("</poolPlacementPolicy>");
++    parse(sb.toString());
++  }
++  
++  @Test (expected = AllocationConfigurationException.class)
++  public void testTerminalRuleInMiddle() throws Exception {
++    StringBuffer sb = new StringBuffer();
++    sb.append("<poolPlacementPolicy>");
++    sb.append("  <specified />");
++    sb.append("  <default />");
++    sb.append("  <user />");
++    sb.append("</poolPlacementPolicy>");
++    parse(sb.toString());
++  }
++  
++  private PoolPlacementPolicy parse(String str) throws Exception {
++    // Read and parse the allocations file.
++    DocumentBuilderFactory docBuilderFactory =
++      DocumentBuilderFactory.newInstance();
++    docBuilderFactory.setIgnoringComments(true);
++    DocumentBuilder builder = docBuilderFactory.newDocumentBuilder();
++    Document doc = builder.parse(new ByteArrayInputStream(str.getBytes()));
++    Element root = doc.getDocumentElement();
++    return PoolPlacementPolicy.fromXml(root, configuredPools, conf);
++  }
++}
+-- 
+1.7.9.5
+

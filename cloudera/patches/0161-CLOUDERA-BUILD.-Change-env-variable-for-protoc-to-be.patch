@@ -1,0 +1,48 @@
+From cdc172c5883eaa401d81d046ca23159cd2cd2504 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Mon, 26 Aug 2013 23:11:14 +0200
+Subject: [PATCH 161/596] CLOUDERA-BUILD. Change env variable for protoc to be
+ CDH5 specific
+
+(cherry picked from commit bb30321ad5867b51b0fa7f2419f98e951a44fa3c)
+(cherry picked from commit e9e6f3994bc6b62ed7f356d7c91dc1c4521247c5)
+
+Conflicts:
+	hadoop-project/pom.xml
+
+(cherry picked from commit ccc85ee27479b23f5f04ef2671685a7ee75fee22)
+(cherry picked from commit f50465797841807b940ca8effed0ef86c629fac8)
+---
+ BUILDING.txt           |    2 +-
+ hadoop-project/pom.xml |    2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/BUILDING.txt b/BUILDING.txt
+index 621a221..9ab77e5 100644
+--- a/BUILDING.txt
++++ b/BUILDING.txt
+@@ -129,7 +129,7 @@ The version of Protocol Buffer compiler, protoc, must match the version of the
+ protobuf JAR.
+ 
+ If you have multiple versions of protoc in your system, you can set in your 
+-build shell the HADOOP_PROTOC_PATH environment variable to point to the one you 
++build shell the HADOOP_PROTOC_CDH5_PATH environment variable to point to the one you 
+ want to use for the Hadoop build. If you don't define this environment variable,
+ protoc is looked up in the PATH.
+ ----------------------------------------------------------------------------------
+diff --git a/hadoop-project/pom.xml b/hadoop-project/pom.xml
+index 062f9e3..a7d0236 100644
+--- a/hadoop-project/pom.xml
++++ b/hadoop-project/pom.xml
+@@ -68,7 +68,7 @@
+     <!-- ProtocolBuffer version, used to verify the protoc version and -->
+     <!-- define the protobuf JAR version                               -->
+     <protobuf.version>2.5.0</protobuf.version>
+-    <protoc.path>${env.HADOOP_PROTOC_PATH}</protoc.path>
++    <protoc.path>${env.HADOOP_PROTOC_CDH5_PATH}</protoc.path>
+ 
+     <zookeeper.version>3.4.6</zookeeper.version>
+ 
+-- 
+1.7.9.5
+

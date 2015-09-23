@@ -1,0 +1,55 @@
+From 45799f1be331c4380c69efd19cba0c6fffad4778 Mon Sep 17 00:00:00 2001
+From: Stephen Chu <schu@cloudera.com>
+Date: Sun, 1 Feb 2015 09:35:11 -0800
+Subject: [PATCH 353/596] CLOUDERA-BUILD. Apply
+ hadoop-mapreduce-client-nativetask changes in
+ HADOOP-11184.
+
+---
+ .../hadoop-mapreduce-client-nativetask/pom.xml     |    2 --
+ .../src/main/native/src/codec/Lz4Codec.cc          |    2 +-
+ .../src/main/native/test/TestCompressions.cc       |    2 +-
+ 3 files changed, 2 insertions(+), 4 deletions(-)
+
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+index 3dc6462..018be6f 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+@@ -172,8 +172,6 @@
+                   <target>
+                     <copy file="${basedir}/../../../hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/compress/lz4/lz4.h"
+                       todir="${project.build.directory}/native/" />
+-                    <copy file="${basedir}/../../../hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/compress/lz4/lz4_encoder.h"
+-                      todir="${project.build.directory}/native/" />
+                     <copy file="${basedir}/../../../hadoop-common-project/hadoop-common/src/main/native/src/org/apache/hadoop/io/compress/lz4/lz4.c"
+                       todir="${project.build.directory}/native/" />
+                     <copy todir="${project.build.directory}/native/test/testData"
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/codec/Lz4Codec.cc b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/codec/Lz4Codec.cc
+index 75bfad1..48c96b5 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/codec/Lz4Codec.cc
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/codec/Lz4Codec.cc
+@@ -73,7 +73,7 @@ uint32_t Lz4DecompressStream::decompressOneBlock(uint32_t compressedSize, void *
+     THROW_EXCEPTION(IOException, "readFully reach EOF");
+   }
+   _compressedBytesRead += rd;
+-  uint32_t ret = LZ4_uncompress(_tempBuffer, (char*)buff, length);
++  uint32_t ret = LZ4_decompress_fast(_tempBuffer, (char*)buff, length);
+   if (ret == compressedSize) {
+     return length;
+   } else {
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test/TestCompressions.cc b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test/TestCompressions.cc
+index 387e262..c998589 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test/TestCompressions.cc
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test/TestCompressions.cc
+@@ -193,7 +193,7 @@ void MeasureSingleFileLz4(const string & path, CompressResult & total, size_t bl
+     result.compressTime += endTime - startTime;
+     startTime = t.now();
+     for (int i = 0; i < times; i++) {
+-      int osize = LZ4_uncompress(outputBuffer, dest, currentblocksize);
++      int osize = LZ4_decompress_fast(outputBuffer, dest, currentblocksize);
+       ASSERT_EQ(currentblocksize, osize);
+     }
+     endTime = t.now();
+-- 
+1.7.9.5
+

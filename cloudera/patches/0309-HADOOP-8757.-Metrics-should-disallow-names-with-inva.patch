@@ -1,0 +1,112 @@
+From 63319809fa0f1f2a4a84fabd7d96d4c35ff6f0ee Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@apache.org>
+Date: Thu, 15 Jan 2015 11:39:43 -0800
+Subject: [PATCH 309/596] HADOOP-8757. Metrics should disallow names with
+ invalid characters (rchiang via rkanter)
+
+(cherry picked from commit b6ff9c03a4f8aba945e562a7ff60b0fc6a1cd040)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit 3f4d1808c6366ef24d14c6c18ba9b7962c5753d4)
+---
+ .../hadoop/metrics2/lib/MetricsRegistry.java       |   14 +++++++
+ .../hadoop/metrics2/lib/TestMetricsRegistry.java   |   42 ++++++++++++++++++++
+ 2 files changed, 56 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/metrics2/lib/MetricsRegistry.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/metrics2/lib/MetricsRegistry.java
+index 1c0d30e..4b561f2 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/metrics2/lib/MetricsRegistry.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/metrics2/lib/MetricsRegistry.java
+@@ -363,6 +363,20 @@ public MetricsRegistry tag(MetricsInfo info, String value) {
+   }
+ 
+   private void checkMetricName(String name) {
++    // Check for invalid characters in metric name
++    boolean foundWhitespace = false;
++    for (int i = 0; i < name.length(); i++) {
++      char c = name.charAt(i);
++      if (Character.isWhitespace(c)) {
++        foundWhitespace = true;
++        break;
++      }
++    }
++    if (foundWhitespace) {
++      throw new MetricsException("Metric name '"+ name +
++          "' contains illegal whitespace character");
++    }
++    // Check if name has already been registered
+     if (metricsMap.containsKey(name)) {
+       throw new MetricsException("Metric name "+ name +" already exists!");
+     }
+diff --git a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/metrics2/lib/TestMetricsRegistry.java b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/metrics2/lib/TestMetricsRegistry.java
+index 47b496f..af1ff96 100644
+--- a/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/metrics2/lib/TestMetricsRegistry.java
++++ b/hadoop-common-project/hadoop-common/src/test/java/org/apache/hadoop/metrics2/lib/TestMetricsRegistry.java
+@@ -18,6 +18,7 @@
+ 
+ package org.apache.hadoop.metrics2.lib;
+ 
++import org.junit.Ignore;
+ import org.junit.Test;
+ import static org.junit.Assert.*;
+ import static org.mockito.Mockito.*;
+@@ -57,6 +58,46 @@
+   }
+ 
+   /**
++   * Test adding metrics with whitespace in the name
++   */
++  @Test
++  public void testMetricsRegistryIllegalMetricNames() {
++    final MetricsRegistry r = new MetricsRegistry("test");
++    // Fill up with some basics
++    r.newCounter("c1", "c1 desc", 1);
++    r.newGauge("g1", "g1 desc", 1);
++    r.newQuantiles("q1", "q1 desc", "q1 name", "q1 val type", 1);
++    // Add some illegal names
++    expectMetricsException("Metric name 'badcount 2' contains "+
++        "illegal whitespace character", new Runnable() {
++      @Override
++      public void run() { r.newCounter("badcount 2", "c2 desc", 2); }
++    });
++    expectMetricsException("Metric name 'badcount3  ' contains "+
++        "illegal whitespace character", new Runnable() {
++      @Override
++      public void run() { r.newCounter("badcount3  ", "c3 desc", 3); }
++    });
++    expectMetricsException("Metric name '  badcount4' contains "+
++        "illegal whitespace character", new Runnable() {
++      @Override
++      public void run() { r.newCounter("  badcount4", "c4 desc", 4); }
++    });
++    expectMetricsException("Metric name 'withtab5	' contains "+
++        "illegal whitespace character", new Runnable() {
++      @Override
++      public void run() { r.newCounter("withtab5	", "c5 desc", 5); }
++    });
++    expectMetricsException("Metric name 'withnewline6\n' contains "+
++        "illegal whitespace character", new Runnable() {
++      @Override
++      public void run() { r.newCounter("withnewline6\n", "c6 desc", 6); }
++    });
++    // Final validation
++    assertEquals("num metrics in registry", 3, r.metrics().size());
++  }
++
++  /**
+    * Test the add by name method
+    */
+   @Test public void testAddByName() {
+@@ -81,6 +122,7 @@
+     });
+   }
+ 
++  @Ignore
+   private void expectMetricsException(String prefix, Runnable fun) {
+     try {
+       fun.run();
+-- 
+1.7.9.5
+

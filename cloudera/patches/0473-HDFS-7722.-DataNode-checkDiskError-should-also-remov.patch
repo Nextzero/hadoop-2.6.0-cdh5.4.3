@@ -1,0 +1,684 @@
+From 0a88cc83c4b21d98610e6c3d00905bbc18e9dae2 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Thu, 12 Mar 2015 12:00:18 -0700
+Subject: [PATCH 473/596] HDFS-7722. DataNode#checkDiskError should also
+ remove Storage when error is found. (Lei Xu via
+ Colin P. McCabe) (cherry picked from commit
+ 7455412a241486a86ad4232f2eaa666c6454329e) (cherry
+ picked from commit
+ b49c3a1813aa8c5b05fe6c02a653286c573137ca)
+
+ Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
+	hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailureReporting.java
+---
+ .../hadoop/hdfs/server/datanode/DataNode.java      |  114 +++++++++++++++++---
+ .../hadoop/hdfs/server/datanode/DataStorage.java   |   15 +--
+ .../server/datanode/fsdataset/FsDatasetSpi.java    |   11 +-
+ .../datanode/fsdataset/impl/FsDatasetImpl.java     |   81 ++++----------
+ .../datanode/fsdataset/impl/FsVolumeImpl.java      |    3 +-
+ .../datanode/fsdataset/impl/FsVolumeList.java      |   29 ++---
+ .../hdfs/server/datanode/SimulatedFSDataset.java   |    6 +-
+ .../datanode/TestDataNodeHotSwapVolumes.java       |   65 +++++++++++
+ .../datanode/extdataset/ExternalDatasetImpl.java   |    7 +-
+ .../datanode/fsdataset/impl/TestFsDatasetImpl.java |   16 +--
+ 10 files changed, 231 insertions(+), 116 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index 5315343..98fb33a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -55,6 +55,7 @@
+ import java.io.DataInputStream;
+ import java.io.DataOutputStream;
+ import java.io.EOFException;
++import java.io.File;
+ import java.io.FileInputStream;
+ import java.io.FileNotFoundException;
+ import java.io.IOException;
+@@ -74,6 +75,7 @@
+ import java.util.Collections;
+ import java.util.EnumSet;
+ import java.util.HashMap;
++import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.List;
+ import java.util.Map;
+@@ -595,22 +597,19 @@ public IOException call() {
+               LOG.info("Successfully added volume: " + volume);
+             }
+           } catch (Exception e) {
+-            errorMessageBuilder.append(String.format("FAILED to ADD: %s: %s\n",
+-                volume, e.getMessage()));
++            errorMessageBuilder.append(
++                String.format("FAILED to ADD: %s: %s%n", volume,
++                              e.toString()));
++            LOG.error("Failed to add volume: " + volume, e);
+           }
+         }
+       }
+ 
+-      if (!changedVolumes.deactivateLocations.isEmpty()) {
+-        LOG.info("Deactivating volumes: " +
+-            Joiner.on(",").join(changedVolumes.deactivateLocations));
+-
+-        data.removeVolumes(changedVolumes.deactivateLocations);
+-        try {
+-          storage.removeVolumes(changedVolumes.deactivateLocations);
+-        } catch (IOException e) {
+-          errorMessageBuilder.append(e.getMessage());
+-        }
++      try {
++        removeVolumes(changedVolumes.deactivateLocations);
++      } catch (IOException e) {
++        errorMessageBuilder.append(e.getMessage());
++        LOG.error("Failed to remove volume: " + e.getMessage(), e);
+       }
+ 
+       if (errorMessageBuilder.length() > 0) {
+@@ -623,6 +622,79 @@ public IOException call() {
+     }
+   }
+ 
++  /**
++   * Remove volumes from DataNode.
++   * See {@link removeVolumes(final Set<File>, boolean)} for details.
++   *
++   * @param locations the StorageLocations of the volumes to be removed.
++   * @throws IOException
++   */
++  private void removeVolumes(final Collection<StorageLocation> locations)
++    throws IOException {
++    if (locations.isEmpty()) {
++      return;
++    }
++    Set<File> volumesToRemove = new HashSet<>();
++    for (StorageLocation loc : locations) {
++      volumesToRemove.add(loc.getFile().getAbsoluteFile());
++    }
++    removeVolumes(volumesToRemove, true);
++  }
++
++  /**
++   * Remove volumes from DataNode.
++   *
++   * It does three things:
++   * <li>
++   *   <ul>Remove volumes and block info from FsDataset.</ul>
++   *   <ul>Remove volumes from DataStorage.</ul>
++   *   <ul>Reset configuration DATA_DIR and {@link dataDirs} to represent
++   *   active volumes.</ul>
++   * </li>
++   * @param absoluteVolumePaths the absolute path of volumes.
++   * @param clearFailure if true, clears the failure information related to the
++   *                     volumes.
++   * @throws IOException
++   */
++  private synchronized void removeVolumes(
++      final Set<File> absoluteVolumePaths, boolean clearFailure)
++      throws IOException {
++    for (File vol : absoluteVolumePaths) {
++      Preconditions.checkArgument(vol.isAbsolute());
++    }
++
++    if (absoluteVolumePaths.isEmpty()) {
++      return;
++    }
++
++    LOG.info(String.format("Deactivating volumes (clear failure=%b): %s",
++        clearFailure, Joiner.on(",").join(absoluteVolumePaths)));
++
++    IOException ioe = null;
++    // Remove volumes and block infos from FsDataset.
++    data.removeVolumes(absoluteVolumePaths, clearFailure);
++
++    // Remove volumes from DataStorage.
++    try {
++      storage.removeVolumes(absoluteVolumePaths);
++    } catch (IOException e) {
++      ioe = e;
++    }
++
++    // Set configuration and dataDirs to reflect volume changes.
++    for (Iterator<StorageLocation> it = dataDirs.iterator(); it.hasNext(); ) {
++      StorageLocation loc = it.next();
++      if (absoluteVolumePaths.contains(loc.getFile().getAbsoluteFile())) {
++        it.remove();
++      }
++    }
++    conf.set(DFS_DATANODE_DATA_DIR_KEY, Joiner.on(",").join(dataDirs));
++
++    if (ioe != null) {
++      throw ioe;
++    }
++  }
++
+   private synchronized void setClusterId(final String nsCid, final String bpid
+       ) throws IOException {
+     if(clusterId != null && !clusterId.equals(nsCid)) {
+@@ -3071,10 +3143,20 @@ public ShortCircuitRegistry getShortCircuitRegistry() {
+    * Check the disk error
+    */
+   private void checkDiskError() {
+-    try {
+-      data.checkDataDir();
+-    } catch (DiskErrorException de) {
+-      handleDiskError(de.getMessage());
++    Set<File> unhealthyDataDirs = data.checkDataDir();
++    if (unhealthyDataDirs != null && !unhealthyDataDirs.isEmpty()) {
++      try {
++        // Remove all unhealthy volumes from DataNode.
++        removeVolumes(unhealthyDataDirs, false);
++      } catch (IOException e) {
++        LOG.warn("Error occurred when removing unhealthy storage dirs: "
++            + e.getMessage(), e);
++      }
++      StringBuilder sb = new StringBuilder("DataNode failed volumes:");
++      for (File dataDir : unhealthyDataDirs) {
++        sb.append(dataDir.getAbsolutePath() + ";");
++      }
++      handleDiskError(sb.toString());
+     }
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java
+index 58d9fc8..674953a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataStorage.java
+@@ -396,28 +396,23 @@ public VolumeBuilder prepareVolume(DataNode datanode, File volume,
+   }
+ 
+   /**
+-   * Remove volumes from DataStorage. All volumes are removed even when the
++   * Remove storage dirs from DataStorage. All storage dirs are removed even when the
+    * IOException is thrown.
+    *
+-   * @param locations a collection of volumes.
++   * @param dirsToRemove a set of storage directories to be removed.
+    * @throws IOException if I/O error when unlocking storage directory.
+    */
+-  synchronized void removeVolumes(Collection<StorageLocation> locations)
++  synchronized void removeVolumes(final Set<File> dirsToRemove)
+       throws IOException {
+-    if (locations.isEmpty()) {
++    if (dirsToRemove.isEmpty()) {
+       return;
+     }
+ 
+-    Set<File> dataDirs = new HashSet<File>();
+-    for (StorageLocation sl : locations) {
+-      dataDirs.add(sl.getFile());
+-    }
+-
+     StringBuilder errorMsgBuilder = new StringBuilder();
+     for (Iterator<StorageDirectory> it = this.storageDirs.iterator();
+          it.hasNext(); ) {
+       StorageDirectory sd = it.next();
+-      if (dataDirs.contains(sd.getRoot())) {
++      if (dirsToRemove.contains(sd.getRoot())) {
+         // Remove the block pool level storage first.
+         for (Map.Entry<String, BlockPoolSliceStorage> entry :
+             this.bpStorageMap.entrySet()) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsDatasetSpi.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsDatasetSpi.java
+index 2ca0143..57ee454 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsDatasetSpi.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/FsDatasetSpi.java
+@@ -27,6 +27,7 @@
+ import java.util.Collection;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Set;
+ 
+ import org.apache.hadoop.classification.InterfaceAudience;
+ import org.apache.hadoop.conf.Configuration;
+@@ -112,9 +113,11 @@ public void addVolume(
+    * If the FSDataset supports block scanning, this function removes
+    * the volumes from the block scanner.
+    *
+-   * @param volumes      The storage locations of the volumes to remove.
++   * @param volumes  The paths of the volumes to be removed.
++   * @param clearFailure set true to clear the failure information about the
++   *                     volumes.
+    */
+-  public void removeVolumes(Collection<StorageLocation> volumes);
++  public void removeVolumes(Set<File> volumes, boolean clearFailure);
+ 
+   /** @return a storage with the given storage ID */
+   public DatanodeStorage getStorage(final String storageUuid);
+@@ -380,9 +383,9 @@ public void checkBlock(ExtendedBlock b, long minLength, ReplicaState state)
+ 
+     /**
+      * Check if all the data directories are healthy
+-     * @throws DiskErrorException
++     * @return A set of unhealthy data directories.
+      */
+-  public void checkDataDir() throws DiskErrorException;
++  public Set<File> checkDataDir();
+ 
+   /**
+    * Shutdown the FSDataset
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+index c5ca8db..d6b2d97 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsDatasetImpl.java
+@@ -392,41 +392,42 @@ public void addVolume(final StorageLocation location,
+   }
+ 
+   /**
+-   * Removes a collection of volumes from FsDataset.
+-   * @param volumes the root directories of the volumes.
++   * Removes a set of volumes from FsDataset.
++   * @param volumesToRemove a set of absolute root path of each volume.
++   * @param clearFailure set true to clear failure information.
+    *
+    * DataNode should call this function before calling
+    * {@link DataStorage#removeVolumes(java.util.Collection)}.
+    */
+   @Override
+-  public synchronized void removeVolumes(Collection<StorageLocation> volumes) {
+-    Set<String> volumeSet = new HashSet<>();
+-    for (StorageLocation sl : volumes) {
+-      volumeSet.add(sl.getFile().getAbsolutePath());
++  public synchronized void removeVolumes(
++      Set<File> volumesToRemove, boolean clearFailure) {
++    // Make sure that all volumes are absolute path.
++    for (File vol : volumesToRemove) {
++      Preconditions.checkArgument(vol.isAbsolute(),
++          String.format("%s is not absolute path.", vol.getPath()));
+     }
+     for (int idx = 0; idx < dataStorage.getNumStorageDirs(); idx++) {
+       Storage.StorageDirectory sd = dataStorage.getStorageDir(idx);
+-      String volume = sd.getRoot().getAbsolutePath();
+-      if (volumeSet.contains(volume)) {
+-        LOG.info("Removing " + volume + " from FsDataset.");
++      final File absRoot = sd.getRoot().getAbsoluteFile();
++      if (volumesToRemove.contains(absRoot)) {
++        LOG.info("Removing " + absRoot + " from FsDataset.");
+ 
+         // Disable the volume from the service.
+         asyncDiskService.removeVolume(sd.getCurrentDir());
+-        this.volumes.removeVolume(sd.getRoot());
++        volumes.removeVolume(absRoot, clearFailure);
+ 
+         // Removed all replica information for the blocks on the volume. Unlike
+         // updating the volumeMap in addVolume(), this operation does not scan
+         // disks.
+         for (String bpid : volumeMap.getBlockPoolList()) {
+-          List<Block> blocks = new ArrayList<Block>();
+           for (Iterator<ReplicaInfo> it = volumeMap.replicas(bpid).iterator();
+-              it.hasNext(); ) {
++               it.hasNext(); ) {
+             ReplicaInfo block = it.next();
+-            String absBasePath =
+-                  new File(block.getVolume().getBasePath()).getAbsolutePath();
+-            if (absBasePath.equals(volume)) {
++            final File absBasePath =
++                new File(block.getVolume().getBasePath()).getAbsoluteFile();
++            if (absBasePath.equals(absRoot)) {
+               invalidate(bpid, block);
+-              blocks.add(block);
+               it.remove();
+             }
+           }
+@@ -1855,50 +1856,14 @@ File getFile(final String bpid, final long blockId, boolean touch) {
+ 
+   /**
+    * check if a data directory is healthy
+-   * if some volumes failed - make sure to remove all the blocks that belong
+-   * to these volumes
+-   * @throws DiskErrorException
++   *
++   * if some volumes failed - the caller must emove all the blocks that belong
++   * to these failed volumes.
++   * @return the failed volumes. Returns null if no volume failed.
+    */
+   @Override // FsDatasetSpi
+-  public void checkDataDir() throws DiskErrorException {
+-    long totalBlocks=0, removedBlocks=0;
+-    List<FsVolumeImpl> failedVols =  volumes.checkDirs();
+-    
+-    // If there no failed volumes return
+-    if (failedVols == null) { 
+-      return;
+-    }
+-    
+-    // Otherwise remove blocks for the failed volumes
+-    long mlsec = Time.now();
+-    synchronized (this) {
+-      for (FsVolumeImpl fv: failedVols) {
+-        for (String bpid : fv.getBlockPoolList()) {
+-          Iterator<ReplicaInfo> ib = volumeMap.replicas(bpid).iterator();
+-          while(ib.hasNext()) {
+-            ReplicaInfo b = ib.next();
+-            totalBlocks++;
+-            // check if the volume block belongs to still valid
+-            if(b.getVolume() == fv) {
+-              LOG.warn("Removing replica " + bpid + ":" + b.getBlockId()
+-                  + " on failed volume " + fv.getCurrentDir().getAbsolutePath());
+-              ib.remove();
+-              removedBlocks++;
+-            }
+-          }
+-        }
+-      }
+-    } // end of sync
+-    mlsec = Time.now() - mlsec;
+-    LOG.warn("Removed " + removedBlocks + " out of " + totalBlocks +
+-        "(took " + mlsec + " millisecs)");
+-
+-    // report the error
+-    StringBuilder sb = new StringBuilder();
+-    for (FsVolumeImpl fv : failedVols) {
+-      sb.append(fv.getCurrentDir().getAbsolutePath() + ";");
+-    }
+-    throw new DiskErrorException("DataNode failed volumes:" + sb);
++  public Set<File> checkDataDir() {
++   return volumes.checkDirs();
+   }
+     
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
+index 9c07017..b9aad7c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeImpl.java
+@@ -289,7 +289,8 @@ void incDfsUsed(String bpid, long value) {
+     }
+   }
+ 
+-  long getDfsUsed() throws IOException {
++  @VisibleForTesting
++  public long getDfsUsed() throws IOException {
+     long dfsUsed = 0;
+     synchronized(dataset) {
+       for(BlockPoolSlice s : bpSlices.values()) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
+index ae2f5b4..1178eb5 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
+@@ -23,8 +23,10 @@
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.Collections;
++import java.util.HashSet;
+ import java.util.Iterator;
+ import java.util.List;
++import java.util.Set;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+ import com.google.common.collect.Lists;
+@@ -213,16 +215,15 @@ public void run() {
+   }
+ 
+   /**
+-   * Calls {@link FsVolumeImpl#checkDirs()} on each volume, removing any
+-   * volumes from the active list that result in a DiskErrorException.
++   * Calls {@link FsVolumeImpl#checkDirs()} on each volume.
+    * 
+    * Use checkDirsMutext to allow only one instance of checkDirs() call
+    *
+-   * @return list of all the removed volumes.
++   * @return list of all the failed volumes.
+    */
+-  List<FsVolumeImpl> checkDirs() {
++  Set<File> checkDirs() {
+     synchronized(checkDirsMutex) {
+-      ArrayList<FsVolumeImpl> removedVols = null;
++      Set<File> failedVols = null;
+       
+       // Make a copy of volumes for performing modification 
+       final List<FsVolumeImpl> volumeList = getVolumes();
+@@ -233,12 +234,11 @@ public void run() {
+           fsv.checkDirs();
+         } catch (DiskErrorException e) {
+           FsDatasetImpl.LOG.warn("Removing failed volume " + fsv + ": ", e);
+-          if (removedVols == null) {
+-            removedVols = new ArrayList<>(1);
++          if (failedVols == null) {
++            failedVols = new HashSet<>(1);
+           }
+-          removedVols.add(fsv);
++          failedVols.add(new File(fsv.getBasePath()).getAbsoluteFile());
+           removeVolume(fsv);
+-          numFailedVolumes++;
+         } catch (ClosedChannelException e) {
+           FsDatasetImpl.LOG.debug("Caught exception when obtaining " +
+             "reference count on closed volume", e);
+@@ -247,12 +247,12 @@ public void run() {
+         }
+       }
+       
+-      if (removedVols != null && removedVols.size() > 0) {
+-        FsDatasetImpl.LOG.warn("Completed checkDirs. Removed " + removedVols.size()
+-            + " volumes. Current volumes: " + this);
++      if (failedVols != null && failedVols.size() > 0) {
++        FsDatasetImpl.LOG.warn("Completed checkDirs. Found " + failedVols.size()
++            + " failure volumes.");
+       }
+ 
+-      return removedVols;
++      return failedVols;
+     }
+   }
+ 
+@@ -332,8 +332,9 @@ private void removeVolume(FsVolumeImpl target) {
+   /**
+    * Dynamically remove volume in the list.
+    * @param volume the volume to be removed.
++   * @param clearFailure set true to remove failure info for this volume.
+    */
+-  void removeVolume(File volume) {
++  void removeVolume(File volume, boolean clearFailure) {
+     // Make a copy of volumes to remove one volume.
+     final FsVolumeImpl[] curVolumes = volumes.get();
+     final List<FsVolumeImpl> volumeList = Lists.newArrayList(curVolumes);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
+index 777d137..abed2c3 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/SimulatedFSDataset.java
+@@ -30,6 +30,7 @@
+ import java.util.LinkedList;
+ import java.util.List;
+ import java.util.Map;
++import java.util.Set;
+ 
+ import javax.management.NotCompliantMBeanException;
+ import javax.management.ObjectName;
+@@ -936,8 +937,9 @@ public synchronized LengthInputStream getMetaDataInputStream(ExtendedBlock b
+   }
+ 
+   @Override
+-  public void checkDataDir() throws DiskErrorException {
++  public Set<File> checkDataDir() {
+     // nothing to check for simulated data set
++    return null;
+   }
+ 
+   @Override // FsDatasetSpi
+@@ -1257,7 +1259,7 @@ public FsVolumeSpi getVolume(ExtendedBlock b) {
+   }
+ 
+   @Override
+-  public synchronized void removeVolumes(Collection<StorageLocation> volumes) {
++  public synchronized void removeVolumes(Set<File> volumes, boolean clearFailure) {
+     throw new UnsupportedOperationException();
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
+index ac316e8..466598b 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
+@@ -26,6 +26,7 @@
+ import org.apache.hadoop.fs.FSDataOutputStream;
+ import org.apache.hadoop.fs.FileStatus;
+ import org.apache.hadoop.fs.FileSystem;
++import org.apache.hadoop.fs.FileUtil;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.hdfs.BlockMissingException;
+ import org.apache.hadoop.hdfs.DFSConfigKeys;
+@@ -38,6 +39,7 @@
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsDatasetSpi;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsVolumeSpi;
+ import org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.FsDatasetTestUtil;
++import org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.FsVolumeImpl;
+ import org.apache.hadoop.hdfs.server.protocol.DatanodeStorage;
+ import org.apache.hadoop.test.GenericTestUtils;
+ import org.junit.After;
+@@ -95,6 +97,8 @@ private void startDFSCluster(int numNameNodes, int numDataNodes)
+     conf.setInt(DFSConfigKeys.DFS_DF_INTERVAL_KEY, 1000);
+     conf.setInt(DFSConfigKeys.DFS_NAMENODE_HEARTBEAT_RECHECK_INTERVAL_KEY,
+         1000);
++    /* Allow 1 volume failure */
++    conf.setInt(DFSConfigKeys.DFS_DATANODE_FAILED_VOLUMES_TOLERATED_KEY, 1);
+ 
+     MiniDFSNNTopology nnTopology =
+         MiniDFSNNTopology.simpleFederatedTopology(numNameNodes);
+@@ -646,4 +650,65 @@ public void testAddBackRemovedVolume()
+     // this directory were removed from the previous step.
+     dn.reconfigurePropertyImpl(DFS_DATANODE_DATA_DIR_KEY, oldDataDir);
+   }
++
++  /** Get the FsVolume on the given basePath */
++  private FsVolumeImpl getVolume(DataNode dn, File basePath) {
++    for (FsVolumeSpi vol : dn.getFSDataset().getVolumes()) {
++      if (vol.getBasePath().equals(basePath.getPath())) {
++        return (FsVolumeImpl)vol;
++      }
++    }
++    return null;
++  }
++
++  /**
++   * Verify that {@link DataNode#checkDiskErrors()} removes all metadata in
++   * DataNode upon a volume failure. Thus we can run reconfig on the same
++   * configuration to reload the new volume on the same directory as the failed one.
++   */
++  @Test(timeout=60000)
++  public void testDirectlyReloadAfterCheckDiskError()
++      throws IOException, TimeoutException, InterruptedException,
++      ReconfigurationException {
++    startDFSCluster(1, 2);
++    createFile(new Path("/test"), 32, (short)2);
++
++    DataNode dn = cluster.getDataNodes().get(0);
++    final String oldDataDir = dn.getConf().get(DFS_DATANODE_DATA_DIR_KEY);
++    File dirToFail = new File(cluster.getDataDirectory(), "data1");
++
++    FsVolumeImpl failedVolume = getVolume(dn, dirToFail);
++    assertTrue("No FsVolume was found for " + dirToFail,
++        failedVolume != null);
++    long used = failedVolume.getDfsUsed();
++
++    try {
++      assertTrue("Couldn't chmod local vol: " + dirToFail,
++          FileUtil.setExecutable(dirToFail, false));
++      // Call and wait DataNode to detect disk failure.
++      long lastDiskErrorCheck = dn.getLastDiskErrorCheck();
++      dn.checkDiskErrorAsync();
++      while (dn.getLastDiskErrorCheck() == lastDiskErrorCheck) {
++        Thread.sleep(100);
++      }
++
++      createFile(new Path("/test1"), 32, (short)2);
++      assertEquals(used, failedVolume.getDfsUsed());
++    } finally {
++      // Need to restore the mode on dirToFail. Otherwise, if an Exception
++      // is thrown above, the following tests can not delete this data directory
++      // and thus fail to start MiniDFSCluster.
++      assertTrue("Couldn't restore executable for: " + dirToFail,
++          FileUtil.setExecutable(dirToFail, true));
++    }
++
++    dn.reconfigurePropertyImpl(DFS_DATANODE_DATA_DIR_KEY, oldDataDir);
++
++    createFile(new Path("/test2"), 32, (short)2);
++    FsVolumeImpl restoredVolume = getVolume(dn, dirToFail);
++    assertTrue(restoredVolume != null);
++    assertTrue(restoredVolume != failedVolume);
++    // More data has been written to this volume.
++    assertTrue(restoredVolume.getDfsUsed() > used);
++  }
+ }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/extdataset/ExternalDatasetImpl.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/extdataset/ExternalDatasetImpl.java
+index 66af9ca..0049b66 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/extdataset/ExternalDatasetImpl.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/extdataset/ExternalDatasetImpl.java
+@@ -60,8 +60,7 @@ public void addVolume(StorageLocation location, List<NamespaceInfo> nsInfos) thr
+   }
+ 
+   @Override
+-  public void removeVolumes(Collection<StorageLocation> volumes) {
+-
++  public void removeVolumes(Set<File> volumes, boolean clearFailure) {
+   }
+ 
+   @Override
+@@ -242,8 +241,8 @@ public boolean isCached(String bpid, long blockId) {
+   }
+ 
+   @Override
+-  public void checkDataDir() throws DiskErrorException {
+-    throw new DiskChecker.DiskErrorException(null);
++  public Set<File> checkDataDir() {
++    return null;
+   }
+ 
+   @Override
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java
+index 839daeb..5d4d80f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/TestFsDatasetImpl.java
+@@ -184,10 +184,10 @@ public void testRemoveVolumes() throws IOException {
+     final String[] dataDirs =
+         conf.get(DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY).split(",");
+     final String volumePathToRemove = dataDirs[0];
+-    List<StorageLocation> volumesToRemove = new ArrayList<StorageLocation>();
+-    volumesToRemove.add(StorageLocation.parse(volumePathToRemove));
++    Set<File> volumesToRemove = new HashSet<>();
++    volumesToRemove.add(StorageLocation.parse(volumePathToRemove).getFile());
+ 
+-    dataset.removeVolumes(volumesToRemove);
++    dataset.removeVolumes(volumesToRemove, true);
+     int expectedNumVolumes = dataDirs.length - 1;
+     assertEquals("The volume has been removed from the volumeList.",
+         expectedNumVolumes, dataset.getVolumes().size());
+@@ -195,7 +195,7 @@ public void testRemoveVolumes() throws IOException {
+         expectedNumVolumes, dataset.storageMap.size());
+ 
+     try {
+-      dataset.asyncDiskService.execute(volumesToRemove.get(0).getFile(),
++      dataset.asyncDiskService.execute(volumesToRemove.iterator().next(),
+           new Runnable() {
+             @Override
+             public void run() {}
+@@ -237,8 +237,9 @@ public void testRemoveNewlyAddedVolume() throws IOException {
+ 
+     when(storage.getNumStorageDirs()).thenReturn(numExistingVolumes + 1);
+     when(storage.getStorageDir(numExistingVolumes)).thenReturn(sd);
+-    List<StorageLocation> volumesToRemove = Arrays.asList(loc);
+-    dataset.removeVolumes(volumesToRemove);
++    Set<File> volumesToRemove = new HashSet<>();
++    volumesToRemove.add(loc.getFile());
++    dataset.removeVolumes(volumesToRemove, true);
+     assertEquals(numExistingVolumes, dataset.getVolumes().size());
+   }
+ 
+@@ -267,12 +268,13 @@ public void testChangeVolumeWithRunningCheckDirs() throws IOException {
+     final FsVolumeImpl newVolume = mock(FsVolumeImpl.class);
+     final FsVolumeReference newRef = mock(FsVolumeReference.class);
+     when(newRef.getVolume()).thenReturn(newVolume);
++    when(newVolume.getBasePath()).thenReturn("data4");
+     FsVolumeImpl blockedVolume = volumeList.getVolumes().get(1);
+     doAnswer(new Answer() {
+       @Override
+       public Object answer(InvocationOnMock invocationOnMock)
+           throws Throwable {
+-        volumeList.removeVolume(new File("data4"));
++        volumeList.removeVolume(new File("data4"), false);
+         volumeList.addVolume(newRef);
+         return null;
+       }
+-- 
+1.7.9.5
+

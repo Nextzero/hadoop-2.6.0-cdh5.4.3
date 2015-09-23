@@ -1,0 +1,408 @@
+From afb2056fa3cb3ce3b5618e05568addf9eb43fa1a Mon Sep 17 00:00:00 2001
+From: Sandy Ryza <sandy@cloudera.com>
+Date: Mon, 4 Nov 2013 17:04:33 -0800
+Subject: [PATCH 109/596] CLOUDERA-BUILD. MR1: Dump stacks on task timeout.
+
+This will go in upstream as MAPREDUCE-5592.
+
+Ref: CDH-492
+Reason: Request from support
+(cherry picked from commit 272ee449e05ff6bd06d9243fbe835d744cb2170c)
+(cherry picked from commit 0e2eebdc81b72f460a5caa151d4d5a79881fddff)
+(cherry picked from commit 3b2b673e695305a5326bfef28c0e032e156d0866)
+---
+ .../org/apache/hadoop/mapred/JvmManager.java       |   79 +++++++++++++-------
+ .../org/apache/hadoop/mapred/TaskRunner.java       |    6 +-
+ .../org/apache/hadoop/mapred/TaskTracker.java      |   46 +++++++-----
+ .../org/apache/hadoop/mapred/TestJvmManager.java   |    4 +-
+ 4 files changed, 82 insertions(+), 53 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JvmManager.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JvmManager.java
+index 9adbc89..ac6c2662 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JvmManager.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JvmManager.java
+@@ -50,6 +50,8 @@
+ 
+   private JvmManagerForType reduceJvmManager;
+   
++  private static final boolean DUMP_STACKS_BEFORE = true;
++  
+   public JvmEnv constructJvmEnv(List<String> setup, Vector<String>vargs,
+       File stdout,File stderr,long logSize, File workDir, 
+       JobConf conf) {
+@@ -152,20 +154,21 @@ public void taskFinished(TaskRunner tr) {
+     }
+   }
+ 
+-  public void taskKilled(TaskRunner tr
+-                         ) throws IOException, InterruptedException {
++  public void taskKilled(TaskRunner tr, boolean dumpStacksBefore)
++      throws IOException, InterruptedException {
+     if (tr.getTask().isMapTask()) {
+-      mapJvmManager.taskKilled(tr);
++      mapJvmManager.taskKilled(tr, dumpStacksBefore);
+     } else {
+-      reduceJvmManager.taskKilled(tr);
++      reduceJvmManager.taskKilled(tr, dumpStacksBefore);
+     }
+   }
+-
+-  public void killJvm(JVMId jvmId) throws IOException, InterruptedException {
++  
++  public void killJvm(JVMId jvmId) throws IOException,
++      InterruptedException {
+     if (jvmId.isMap) {
+-      mapJvmManager.killJvm(jvmId);
++      mapJvmManager.killJvm(jvmId, !DUMP_STACKS_BEFORE);
+     } else {
+-      reduceJvmManager.killJvm(jvmId);
++      reduceJvmManager.killJvm(jvmId, !DUMP_STACKS_BEFORE);
+     }
+   }  
+ 
+@@ -206,6 +209,7 @@ static void deleteWorkDir(TaskTracker tracker, Task task) {
+     int maxJvms;
+     boolean isMap;
+     private final long sleeptimeBeforeSigkill;
++    private static final long SLEEPTIME_AFTER_SIGQUIT = 750;
+     
+     Random rand = new Random(System.currentTimeMillis());
+     static final String DELAY_BEFORE_KILL_KEY =
+@@ -280,21 +284,20 @@ synchronized public void taskFinished(TaskRunner tr) {
+       }
+     }
+ 
+-    synchronized public void taskKilled(TaskRunner tr
+-                                        ) throws IOException,
+-                                                 InterruptedException {
++    synchronized public void taskKilled(TaskRunner tr,
++        boolean dumpStacksBefore) throws IOException, InterruptedException {
+       JVMId jvmId = runningTaskToJvm.remove(tr);
+       if (jvmId != null) {
+         jvmToRunningTask.remove(jvmId);
+-        killJvm(jvmId);
++        killJvm(jvmId, dumpStacksBefore);
+       }
+     }
+ 
+-    synchronized public void killJvm(JVMId jvmId) throws IOException, 
+-                                                         InterruptedException {
++    synchronized public void killJvm(JVMId jvmId, boolean dumpStacksBefore)
++        throws IOException, InterruptedException {
+       JvmRunner jvmRunner;
+       if ((jvmRunner = jvmIdToRunner.get(jvmId)) != null) {
+-        killJvmRunner(jvmRunner);
++        killJvmRunner(jvmRunner, dumpStacksBefore);
+       }
+     }
+     
+@@ -307,14 +310,13 @@ synchronized public void stop() throws IOException, InterruptedException {
+       List <JvmRunner> list = new ArrayList<JvmRunner>();
+       list.addAll(jvmIdToRunner.values());
+       for (JvmRunner jvm : list) {
+-        killJvmRunner(jvm);
++        killJvmRunner(jvm, false);
+       }
+     }
+ 
+-    private synchronized void killJvmRunner(JvmRunner jvmRunner
+-                                            ) throws IOException,
+-                                                     InterruptedException {
+-      jvmRunner.kill();
++    private synchronized void killJvmRunner(JvmRunner jvmRunner, boolean dumpStacksBefore
++                                            ) throws IOException, InterruptedException {
++      jvmRunner.kill(dumpStacksBefore);
+       removeJvm(jvmRunner.jvmId);
+     }
+ 
+@@ -378,7 +380,7 @@ private synchronized void reapJvm(
+       if (spawnNewJvm) {
+         if (runnerToKill != null) {
+           LOG.info("Killing JVM: " + runnerToKill.jvmId);
+-          killJvmRunner(runnerToKill);
++          killJvmRunner(runnerToKill, false);
+         }
+         spawnNewJvm(jobId, env, t);
+         return;
+@@ -505,7 +507,7 @@ public void runChild(JvmEnv env) throws IOException, InterruptedException{
+         } finally { // handle the exit code
+           // although the process has exited before we get here,
+           // make sure the entire process group has also been killed.
+-          kill();
++          kill(!DUMP_STACKS_BEFORE);
+           updateOnJvmExit(jvmId, exitCode);
+           LOG.info("JVM : " + jvmId + " exited with exit code " + exitCode
+               + ". Number of tasks it ran: " + numTasksRan);
+@@ -539,7 +541,7 @@ public void run() {
+         }
+       }
+ 
+-      synchronized void kill() throws IOException, InterruptedException {
++      synchronized void kill(boolean dumpStacksBefore) throws IOException, InterruptedException {
+         if (!killed) {
+           TaskController controller = tracker.getTaskController();
+           // Check inital context before issuing a kill to prevent situations
+@@ -548,13 +550,32 @@ synchronized void kill() throws IOException, InterruptedException {
+           if (pidStr != null) {
+             String user = env.conf.getUser();
+             int pid = Integer.parseInt(pidStr);
+-            // start a thread that will kill the process dead
+-            if (sleeptimeBeforeSigkill > 0) {
+-              new DelayedProcessKiller(user, pid, sleeptimeBeforeSigkill, 
+-                                       Signal.KILL).start();
+-              controller.signalTask(user, pid, Signal.TERM);
++            // Send a signal and then start threads to send additional signals later.
++            // In normal conditions, we send a SIGTERM immediately and a SIGKILL later.
++            // If sleeptimeBeforeSigkill is 0, we don't send the SIGTERM and
++            // instead send the SIGKILL immediately.
++            // If dumpStacksBefore is true, we start with a SIGQUIT (to make the
++            // child process dump its stacks) and then follow up with the
++            // SIGTERM/SIGKILL later.
++            if (dumpStacksBefore) {
++              controller.signalTask(user, pid, Signal.QUIT);
++              if (sleeptimeBeforeSigkill > 0) {
++                new DelayedProcessKiller(user, pid, SLEEPTIME_AFTER_SIGQUIT,
++                    Signal.TERM).start();
++                new DelayedProcessKiller(user, pid, SLEEPTIME_AFTER_SIGQUIT
++                    + sleeptimeBeforeSigkill, Signal.KILL).start();
++              } else {
++                new DelayedProcessKiller(user, pid, SLEEPTIME_AFTER_SIGQUIT,
++                    Signal.KILL).start();
++              }
+             } else {
+-              controller.signalTask(user, pid, Signal.KILL);
++              if (sleeptimeBeforeSigkill > 0) {
++                controller.signalTask(user, pid, Signal.TERM);
++                new DelayedProcessKiller(user, pid, sleeptimeBeforeSigkill, 
++                    Signal.KILL).start();
++              } else {
++                controller.signalTask(user, pid, Signal.KILL);
++              }
+             }
+           } else {
+             LOG.info(String.format("JVM Not killed %s but just removed", jvmId
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskRunner.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskRunner.java
+index ed2bd2d..4750a4d 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskRunner.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskRunner.java
+@@ -779,12 +779,14 @@ private static void symlink(File workDir, String target, String link)
+ 
+   /**
+    * Kill the child process
++   * @param dumpStacksBefore whether to wait a little before killing the task
+    * @throws InterruptedException 
+    * @throws IOException 
+    */
+-  public void kill() throws IOException, InterruptedException {
++  public void kill(boolean dumpStacksBefore) throws IOException,
++      InterruptedException {
+     killed = true;
+-    jvmManager.taskKilled(this);
++    jvmManager.taskKilled(this, dumpStacksBefore);
+     signalDone();
+   }
+   public void signalDone() {
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+index c46a4b5..82f1815 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/TaskTracker.java
+@@ -196,6 +196,8 @@
+ 
+   volatile boolean running = true;
+ 
++  private final static boolean DUMP_STACKS_BEFORE = true;
++  
+   /**
+    * Manages TT local storage directories.
+    */
+@@ -637,7 +639,7 @@ void processKillTaskAction(KillTaskAction killAction) throws IOException {
+       tip = tasks.get(killAction.getTaskID());
+     }
+     LOG.info("Received KillTaskAction for task: " + killAction.getTaskID());
+-    purgeTask(tip, false);
++    purgeTask(tip, false, !DUMP_STACKS_BEFORE);
+   }
+   
+   private void checkJobStatusAndWait(TaskTrackerAction action) 
+@@ -1603,7 +1605,7 @@ public synchronized void close() throws IOException, InterruptedException {
+       new TreeMap<TaskAttemptID, TaskInProgress>();
+     tasksToClose.putAll(tasks);
+     for (TaskInProgress tip : tasksToClose.values()) {
+-      tip.jobHasFinished(true, false);
++      tip.jobHasFinished(true, false, false);
+     }
+     
+     this.running = false;
+@@ -2399,7 +2401,7 @@ private synchronized void markUnresponsiveTasks() throws IOException {
+           ReflectionUtils.logThreadInfo(LOG, "lost task", 30);
+           tip.reportDiagnosticInfo(msg);
+           myInstrumentation.timedoutTask(tip.getTask().getTaskID());
+-          purgeTask(tip, true);
++          purgeTask(tip, true, DUMP_STACKS_BEFORE);
+         }
+       }
+     }
+@@ -2426,7 +2428,7 @@ synchronized void purgeJob(KillJobAction action) throws IOException {
+         rjob.distCacheMgr.release();
+         // Add this tips of this job to queue of tasks to be purged 
+         for (TaskInProgress tip : rjob.tasks) {
+-          tip.jobHasFinished(false, false);
++          tip.jobHasFinished(false, false, false);
+           Task t = tip.getTask();
+           if (t.isMapTask()) {
+             indexCache.removeMap(tip.getTask().getTaskID().toString());
+@@ -2491,16 +2493,17 @@ void removeJobFiles(String user, JobID jobId) throws IOException {
+    * 
+    * @param tip {@link TaskInProgress} to be removed.
+    * @param wasFailure did the task fail or was it killed?
++   * @param whether to send quit signal before killing the task
+    */
+-  private void purgeTask(TaskInProgress tip, boolean wasFailure) 
+-  throws IOException {
++  private void purgeTask(TaskInProgress tip, boolean wasFailure,
++      boolean dumpStacksBefore) throws IOException {
+     if (tip != null) {
+       LOG.info("About to purge task: " + tip.getTask().getTaskID());
+         
+       // Remove the task from running jobs, 
+       // removing the job if it's the last task
+       removeTaskFromJob(tip.getTask().getJobID(), tip);
+-      tip.jobHasFinished(false, wasFailure);
++      tip.jobHasFinished(false, wasFailure, dumpStacksBefore);
+       if (tip.getTask().isMapTask()) {
+         indexCache.removeMap(tip.getTask().getTaskID().toString());
+       }
+@@ -2531,7 +2534,7 @@ private void killOverflowingTasks() throws IOException {
+             " Killing task.";
+           LOG.info(killMe.getTask().getTaskID() + ": " + msg);
+           killMe.reportDiagnosticInfo(msg);
+-          purgeTask(killMe, false);
++          purgeTask(killMe, false, !DUMP_STACKS_BEFORE);
+         }
+       }
+     }
+@@ -2793,7 +2796,7 @@ void startNewTask(TaskInProgress tip) throws InterruptedException {
+       LOG.warn(msg);
+       tip.reportDiagnosticInfo(msg);
+       try {
+-        tip.kill(true);
++        tip.kill(true, false);
+         tip.cleanup(false, true);
+       } catch (IOException ie2) {
+         LOG.info("Error cleaning up " + tip.getTask().getTaskID(), ie2);
+@@ -3450,9 +3453,10 @@ else if (num == -1) {
+      * @param ttReInit is the TaskTracker executing re-initialization sequence?
+      * @param wasFailure did the task fail, as opposed to was it killed by
+      *                   the framework
++     * @param dumpStacksBefore whether the send a quit signal before killing the task
+      */
+-    public void jobHasFinished(boolean ttReInit, boolean wasFailure) 
+-        throws IOException {
++    public void jobHasFinished(boolean ttReInit, boolean wasFailure,
++        boolean dumpStacksBefore) throws IOException {
+       // Kill the task if it is still running
+       synchronized(this){
+         if (getRunState() == TaskStatus.State.RUNNING ||
+@@ -3460,7 +3464,7 @@ public void jobHasFinished(boolean ttReInit, boolean wasFailure)
+             getRunState() == TaskStatus.State.COMMIT_PENDING ||
+             isCleaningup()) {
+           try {
+-            kill(wasFailure);
++            kill(wasFailure, dumpStacksBefore);
+           } catch (InterruptedException e) {
+             throw new IOException("Interrupted while killing " +
+                 getTask().getTaskID(), e);
+@@ -3475,10 +3479,12 @@ public void jobHasFinished(boolean ttReInit, boolean wasFailure)
+     /**
+      * Something went wrong and the task must be killed.
+      * @param wasFailure was it a failure (versus a kill request)?
++     * @param dumpStacksBefore if we should send a SIGQUIT before killing
+      * @throws InterruptedException 
+      */
+-    public synchronized void kill(boolean wasFailure
+-                                  ) throws IOException, InterruptedException {
++    public synchronized void kill(boolean wasFailure,
++                                  boolean dumpStacksBefore) throws IOException,
++                                  InterruptedException {
+       if (taskStatus.getRunState() == TaskStatus.State.RUNNING ||
+           taskStatus.getRunState() == TaskStatus.State.COMMIT_PENDING ||
+           isCleaningup()) {
+@@ -3488,7 +3494,7 @@ public synchronized void kill(boolean wasFailure
+         }
+         // runner could be null if task-cleanup attempt is not localized yet
+         if (runner != null) {
+-          runner.kill();
++          runner.kill(dumpStacksBefore);
+         }
+         setTaskFailState(wasFailure);
+       } else if (taskStatus.getRunState() == TaskStatus.State.UNASSIGNED) {
+@@ -3841,7 +3847,7 @@ public synchronized void shuffleError(TaskAttemptID taskId, String message, JvmC
+       LOG.fatal("Task: " + taskId + " - Killed due to Shuffle Failure: "
+           + message);
+       tip.reportDiagnosticInfo("Shuffle Error: " + message);
+-      purgeTask(tip, true);
++      purgeTask(tip, true, !DUMP_STACKS_BEFORE);
+     } else {
+       LOG.warn("Unknown child task shuffleError: " + taskId + ". Ignored.");
+     }
+@@ -3858,7 +3864,7 @@ public synchronized void fsError(TaskAttemptID taskId, String message,
+       validateJVM(tip, jvmContext, taskId);
+       LOG.fatal("Task: " + taskId + " - Killed due to FSError: " + message);
+       tip.reportDiagnosticInfo("FSError: " + message);
+-      purgeTask(tip, true);
++      purgeTask(tip, true, !DUMP_STACKS_BEFORE);
+     } else {
+       LOG.warn("Unknown child task fsError: "+taskId+". Ignored.");
+     }
+@@ -3873,7 +3879,7 @@ synchronized void internalFsError(TaskAttemptID taskId, String message)
+     LOG.fatal("Task: " + taskId + " - Killed due to FSError: " + message);
+     TaskInProgress tip = runningTasks.get(taskId);
+     tip.reportDiagnosticInfo("FSError: " + message);
+-    purgeTask(tip, true);
++    purgeTask(tip, true, !DUMP_STACKS_BEFORE);
+   }
+ 
+   /** 
+@@ -3887,7 +3893,7 @@ public synchronized void fatalError(TaskAttemptID taskId, String msg,
+       validateJVM(tip, jvmContext, taskId);
+       LOG.fatal("Task: " + taskId + " - Killed : " + msg);
+       tip.reportDiagnosticInfo("Error: " + msg);
+-      purgeTask(tip, true);
++      purgeTask(tip, true, !DUMP_STACKS_BEFORE);
+     } else {
+       LOG.warn("Unknown child task fatalError: "+taskId+". Ignored.");
+     }
+@@ -4677,7 +4683,7 @@ synchronized void cleanUpOverMemoryTask(TaskAttemptID tid, boolean wasFailure,
+     if (tip != null) {
+       tip.reportDiagnosticInfo(diagnosticMsg);
+       try {
+-        purgeTask(tip, wasFailure); // Marking it as failed/killed.
++        purgeTask(tip, wasFailure, !DUMP_STACKS_BEFORE); // Marking it as failed/killed.
+       } catch (IOException ioe) {
+         LOG.warn("Couldn't purge the task of " + tid + ". Error : " + ioe);
+       }
+diff --git a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJvmManager.java b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJvmManager.java
+index 6e6b30d..008a46e 100644
+--- a/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJvmManager.java
++++ b/hadoop-mapreduce1-project/src/test/org/apache/hadoop/mapred/TestJvmManager.java
+@@ -176,7 +176,7 @@ public void run() {
+     Thread killer = new Thread() {
+       public void run() {
+         try {
+-          jvmRunner.kill();
++          jvmRunner.kill(false);
+         } catch (IOException e) {
+           e.printStackTrace();
+           setThreadCaughtException();
+@@ -191,7 +191,7 @@ public void run() {
+     Thread.sleep(100);
+ 
+     // kill the jvm externally
+-    taskRunner.kill();
++    taskRunner.kill(false);
+ 
+     assertTrue(jvmRunner.killed);
+ 
+-- 
+1.7.9.5
+

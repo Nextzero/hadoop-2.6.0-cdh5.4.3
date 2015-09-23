@@ -1,0 +1,29 @@
+From bc23fe731297e7f9881f19f849b858132a7bc732 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Thu, 20 Nov 2014 15:13:39 -0800
+Subject: [PATCH 154/596] MR1: MAPREDUCE-6170. TestUlimit failure on JDK8. (bc
+ Wong via kasha)
+
+(cherry-picked from commit 2dff54ebc8a3a541209c333dbdbbafe82b02e6e9)
+
+(cherry picked from commit b72ab4c4466bc00cf16fe79b8528faca95c46802)
+---
+ .../org/apache/hadoop/streaming/TestUlimit.java    |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/contrib/streaming/src/test/org/apache/hadoop/streaming/TestUlimit.java b/hadoop-mapreduce1-project/src/contrib/streaming/src/test/org/apache/hadoop/streaming/TestUlimit.java
+index b14ce30..a1bdb90 100644
+--- a/hadoop-mapreduce1-project/src/contrib/streaming/src/test/org/apache/hadoop/streaming/TestUlimit.java
++++ b/hadoop-mapreduce1-project/src/contrib/streaming/src/test/org/apache/hadoop/streaming/TestUlimit.java
+@@ -46,7 +46,7 @@
+   MiniDFSCluster dfs = null;
+   MiniMRCluster mr = null;
+   FileSystem fs = null;
+-  private static String SET_MEMORY_LIMIT = "1786432"; // 1768MB
++  private static String SET_MEMORY_LIMIT = "3145728"; // 3GB
+ 
+   String[] genArgs(String memLimit) {
+     return new String[] {
+-- 
+1.7.9.5
+

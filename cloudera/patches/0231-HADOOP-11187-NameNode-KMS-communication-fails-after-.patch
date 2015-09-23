@@ -1,0 +1,308 @@
+From 44a73a84d50612f44192a1856bfec1530e2644e9 Mon Sep 17 00:00:00 2001
+From: "Aaron T. Myers" <atm@apache.org>
+Date: Wed, 5 Nov 2014 18:15:12 -0800
+Subject: [PATCH 231/596] HADOOP-11187 NameNode - KMS communication fails
+ after a long period of inactivity. Contributed by
+ Arun Suresh.
+
+(cherry picked from commit ef5af4f8de91fbe7891ae3471eb03397e74e1811)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit 543b930bd06f23fa31a080c8fa0eeb3bb3fa283b)
+(cherry picked from commit 3ab72b3544ef3dfb5dcf851a3ead44a56267750d)
+---
+ .../server/AuthenticationFilter.java               |    9 ++++++
+ .../server/AuthenticationHandler.java              |    3 ++
+ .../server/KerberosAuthenticationHandler.java      |    2 +-
+ .../server/PseudoAuthenticationHandler.java        |    9 ++++--
+ .../client/TestPseudoAuthenticator.java            |    5 +--
+ .../server/TestAuthenticationFilter.java           |    4 ++-
+ .../server/TestPseudoAuthenticationHandler.java    |    9 ++----
+ .../hadoop/crypto/key/kms/KMSClientProvider.java   |    5 ++-
+ .../hadoop/crypto/key/kms/server/TestKMS.java      |   32 ++++++++------------
+ 9 files changed, 46 insertions(+), 32 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/AuthenticationFilter.java b/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/AuthenticationFilter.java
+index 58d97ca..0ac352b 100644
+--- a/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/AuthenticationFilter.java
++++ b/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/AuthenticationFilter.java
+@@ -17,6 +17,7 @@
+ import org.apache.hadoop.classification.InterfaceStability;
+ import org.apache.hadoop.security.authentication.client.AuthenticatedURL;
+ import org.apache.hadoop.security.authentication.client.AuthenticationException;
++import org.apache.hadoop.security.authentication.client.KerberosAuthenticator;
+ import org.apache.hadoop.security.authentication.util.Signer;
+ import org.apache.hadoop.security.authentication.util.SignerException;
+ import org.apache.hadoop.security.authentication.util.RandomSignerSecretProvider;
+@@ -36,6 +37,7 @@
+ import javax.servlet.http.HttpServletRequest;
+ import javax.servlet.http.HttpServletRequestWrapper;
+ import javax.servlet.http.HttpServletResponse;
++
+ import java.io.IOException;
+ import java.security.Principal;
+ import java.text.SimpleDateFormat;
+@@ -565,6 +567,13 @@ public Principal getUserPrincipal() {
+       if (!httpResponse.isCommitted()) {
+         createAuthCookie(httpResponse, "", getCookieDomain(),
+                 getCookiePath(), 0, isHttps);
++        // If response code is 401. Then WWW-Authenticate Header should be
++        // present.. reset to 403 if not found..
++        if ((errCode == HttpServletResponse.SC_UNAUTHORIZED)
++            && (!httpResponse.containsHeader(
++                KerberosAuthenticator.WWW_AUTHENTICATE))) {
++          errCode = HttpServletResponse.SC_FORBIDDEN;
++        }
+         if (authenticationEx == null) {
+           httpResponse.sendError(errCode, "Authentication required");
+         } else {
+diff --git a/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/AuthenticationHandler.java b/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/AuthenticationHandler.java
+index 7cafe8b..04984be 100644
+--- a/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/AuthenticationHandler.java
++++ b/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/AuthenticationHandler.java
+@@ -18,6 +18,7 @@
+ import javax.servlet.ServletException;
+ import javax.servlet.http.HttpServletRequest;
+ import javax.servlet.http.HttpServletResponse;
++
+ import java.io.IOException;
+ import java.util.Properties;
+ 
+@@ -30,6 +31,8 @@
+  */
+ public interface AuthenticationHandler {
+ 
++  public static final String WWW_AUTHENTICATE = "WWW-Authenticate";
++
+   /**
+    * Returns the authentication type of the authentication handler.
+    * <p/>
+diff --git a/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/KerberosAuthenticationHandler.java b/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/KerberosAuthenticationHandler.java
+index 9852460..92bc57c 100644
+--- a/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/KerberosAuthenticationHandler.java
++++ b/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/KerberosAuthenticationHandler.java
+@@ -331,7 +331,7 @@ public AuthenticationToken authenticate(HttpServletRequest request, final HttpSe
+     String authorization = request.getHeader(KerberosAuthenticator.AUTHORIZATION);
+ 
+     if (authorization == null || !authorization.startsWith(KerberosAuthenticator.NEGOTIATE)) {
+-      response.setHeader(KerberosAuthenticator.WWW_AUTHENTICATE, KerberosAuthenticator.NEGOTIATE);
++      response.setHeader(WWW_AUTHENTICATE, KerberosAuthenticator.NEGOTIATE);
+       response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+       if (authorization == null) {
+         LOG.trace("SPNEGO starting");
+diff --git a/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/PseudoAuthenticationHandler.java b/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/PseudoAuthenticationHandler.java
+index 0b329e0..2c7db88 100644
+--- a/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/PseudoAuthenticationHandler.java
++++ b/hadoop-common-project/hadoop-auth/src/main/java/org/apache/hadoop/security/authentication/server/PseudoAuthenticationHandler.java
+@@ -15,13 +15,13 @@
+ 
+ import org.apache.hadoop.security.authentication.client.AuthenticationException;
+ import org.apache.hadoop.security.authentication.client.PseudoAuthenticator;
+-
+ import org.apache.http.client.utils.URLEncodedUtils;
+ import org.apache.http.NameValuePair;
+ 
+ import javax.servlet.ServletException;
+ import javax.servlet.http.HttpServletRequest;
+ import javax.servlet.http.HttpServletResponse;
++
+ import java.io.IOException;
+ import java.nio.charset.Charset;
+ import java.util.List;
+@@ -54,6 +54,9 @@
+   public static final String ANONYMOUS_ALLOWED = TYPE + ".anonymous.allowed";
+ 
+   private static final Charset UTF8_CHARSET = Charset.forName("UTF-8");
++
++  private static final String PSEUDO_AUTH = "PseudoAuth";
++
+   private boolean acceptAnonymous;
+   private String type;
+ 
+@@ -181,7 +184,9 @@ public AuthenticationToken authenticate(HttpServletRequest request, HttpServletR
+       if (getAcceptAnonymous()) {
+         token = AuthenticationToken.ANONYMOUS;
+       } else {
+-        throw new AuthenticationException("Anonymous requests are disallowed");
++        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
++        response.setHeader(WWW_AUTHENTICATE, PSEUDO_AUTH);
++        token = null;
+       }
+     } else {
+       token = new AuthenticationToken(userName, userName, getType());
+diff --git a/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/client/TestPseudoAuthenticator.java b/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/client/TestPseudoAuthenticator.java
+index 4a33fa9..3a5764b 100644
+--- a/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/client/TestPseudoAuthenticator.java
++++ b/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/client/TestPseudoAuthenticator.java
+@@ -63,8 +63,9 @@ public void testAnonymousDisallowed() throws Exception {
+       URL url = new URL(auth.getBaseURL());
+       HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+       conn.connect();
+-      Assert.assertEquals(HttpURLConnection.HTTP_FORBIDDEN, conn.getResponseCode());
+-      Assert.assertEquals("Anonymous requests are disallowed", conn.getResponseMessage());
++      Assert.assertEquals(HttpURLConnection.HTTP_UNAUTHORIZED, conn.getResponseCode());
++      Assert.assertTrue(conn.getHeaderFields().containsKey("WWW-Authenticate"));
++      Assert.assertEquals("Authentication required", conn.getResponseMessage());
+     } finally {
+       auth.stop();
+     }
+diff --git a/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/server/TestAuthenticationFilter.java b/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/server/TestAuthenticationFilter.java
+index 3b6b958..c01c182 100644
+--- a/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/server/TestAuthenticationFilter.java
++++ b/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/server/TestAuthenticationFilter.java
+@@ -537,11 +537,11 @@ public Object answer(InvocationOnMock invocation) throws Throwable {
+         }
+       ).when(chain).doFilter(Mockito.<ServletRequest>anyObject(), Mockito.<ServletResponse>anyObject());
+ 
++      Mockito.when(response.containsHeader("WWW-Authenticate")).thenReturn(true);
+       filter.doFilter(request, response, chain);
+ 
+       Mockito.verify(response).sendError(
+           HttpServletResponse.SC_UNAUTHORIZED, "Authentication required");
+-      Mockito.verify(response).setHeader("WWW-Authenticate", "dummyauth");
+     } finally {
+       filter.destroy();
+     }
+@@ -852,6 +852,7 @@ public void testDoFilterAuthenticatedExpired() throws Exception {
+       Mockito.when(request.getCookies()).thenReturn(new Cookie[]{cookie});
+ 
+       HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
++      Mockito.when(response.containsHeader("WWW-Authenticate")).thenReturn(true);
+       FilterChain chain = Mockito.mock(FilterChain.class);
+ 
+       verifyUnauthorized(filter, request, response, chain);
+@@ -930,6 +931,7 @@ public void testDoFilterAuthenticatedInvalidType() throws Exception {
+       Mockito.when(request.getCookies()).thenReturn(new Cookie[]{cookie});
+ 
+       HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
++      Mockito.when(response.containsHeader("WWW-Authenticate")).thenReturn(true);
+       FilterChain chain = Mockito.mock(FilterChain.class);
+ 
+       verifyUnauthorized(filter, request, response, chain);
+diff --git a/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/server/TestPseudoAuthenticationHandler.java b/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/server/TestPseudoAuthenticationHandler.java
+index 91c1103..b52915d 100644
+--- a/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/server/TestPseudoAuthenticationHandler.java
++++ b/hadoop-common-project/hadoop-auth/src/test/java/org/apache/hadoop/security/authentication/server/TestPseudoAuthenticationHandler.java
+@@ -21,6 +21,7 @@
+ 
+ import javax.servlet.http.HttpServletRequest;
+ import javax.servlet.http.HttpServletResponse;
++
+ import java.util.Properties;
+ 
+ public class TestPseudoAuthenticationHandler {
+@@ -74,12 +75,8 @@ public void testAnonymousOff() throws Exception {
+       HttpServletRequest request = Mockito.mock(HttpServletRequest.class);
+       HttpServletResponse response = Mockito.mock(HttpServletResponse.class);
+ 
+-      handler.authenticate(request, response);
+-      Assert.fail();
+-    } catch (AuthenticationException ex) {
+-      // Expected
+-    } catch (Exception ex) {
+-      Assert.fail();
++      AuthenticationToken token = handler.authenticate(request, response);
++      Assert.assertNull(token);
+     } finally {
+       handler.destroy();
+     }
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
+index a6dbb70..357f419 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/key/kms/KMSClientProvider.java
+@@ -81,6 +81,8 @@
+ public class KMSClientProvider extends KeyProvider implements CryptoExtension,
+     KeyProviderDelegationTokenExtension.DelegationTokenExtension {
+ 
++  private static final String INVALID_SIGNATURE = "Invalid signature";
++
+   private static final String ANONYMOUS_REQUESTS_DISALLOWED = "Anonymous requests are disallowed";
+ 
+   public static final String TOKEN_KIND = "kms-dt";
+@@ -453,7 +455,8 @@ public HttpURLConnection run() throws Exception {
+       throw ex;
+     }
+     if ((conn.getResponseCode() == HttpURLConnection.HTTP_FORBIDDEN
+-        && conn.getResponseMessage().equals(ANONYMOUS_REQUESTS_DISALLOWED))
++        && (conn.getResponseMessage().equals(ANONYMOUS_REQUESTS_DISALLOWED) ||
++            conn.getResponseMessage().contains(INVALID_SIGNATURE)))
+         || conn.getResponseCode() == HttpURLConnection.HTTP_UNAUTHORIZED) {
+       // Ideally, this should happen only when there is an Authentication
+       // failure. Unfortunately, the AuthenticationFilter returns 403 when it
+diff --git a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+index 9e76178..86e6484 100644
+--- a/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
++++ b/hadoop-common-project/hadoop-kms/src/test/java/org/apache/hadoop/crypto/key/kms/server/TestKMS.java
+@@ -900,6 +900,7 @@ public void testKMSAuthFailureRetry() throws Exception {
+         keytab.getAbsolutePath());
+     conf.set("hadoop.kms.authentication.kerberos.principal", "HTTP/localhost");
+     conf.set("hadoop.kms.authentication.kerberos.name.rules", "DEFAULT");
++    conf.set("hadoop.kms.authentication.token.validity", "1");
+ 
+     for (KMSACLs.Type type : KMSACLs.Type.values()) {
+       conf.set(type.getAclConfigKey(), type.toString());
+@@ -930,11 +931,16 @@ public Void call() throws Exception {
+                   @Override
+                   public Void run() throws Exception {
+                     KMSClientProvider kp = new KMSClientProvider(uri, conf);
++
++                    kp.createKey("k0", new byte[16],
++                        new KeyProvider.Options(conf));
++                    // This happens before rollover
+                     kp.createKey("k1", new byte[16],
+                         new KeyProvider.Options(conf));
+-                    makeAuthTokenStale(kp);
++                    // Atleast 2 rollovers.. so should induce signer Exception
++                    Thread.sleep(3500);
+                     kp.createKey("k2", new byte[16],
+-                        new KeyProvider.Options(conf));
++                      new KeyProvider.Options(conf));
+                     return null;
+                   }
+                 });
+@@ -958,15 +964,16 @@ public Void run() throws Exception {
+                     KMSClientProvider kp = new KMSClientProvider(uri, conf);
+                     kp.createKey("k3", new byte[16],
+                         new KeyProvider.Options(conf));
+-                    makeAuthTokenStale(kp);
++                    // Atleast 2 rollovers.. so should induce signer Exception
++                    Thread.sleep(3500);
+                     try {
+                       kp.createKey("k4", new byte[16],
+                           new KeyProvider.Options(conf));
+-                      Assert.fail("Shoud fail since retry count == 0");
++                      Assert.fail("This should not succeed..");
+                     } catch (IOException e) {
+                       Assert.assertTrue(
+-                          "HTTP exception must be a 403 : " + e.getMessage(), e
+-                              .getMessage().contains("403"));
++                          "HTTP exception must be a 401 : " + e.getMessage(), e
++                              .getMessage().contains("401"));
+                     }
+                     return null;
+                   }
+@@ -976,19 +983,6 @@ public Void run() throws Exception {
+         });
+   }
+ 
+-  private void makeAuthTokenStale(KMSClientProvider kp) throws Exception {
+-    Field tokF = KMSClientProvider.class.getDeclaredField("authToken");
+-    tokF.setAccessible(true);
+-    DelegationTokenAuthenticatedURL.Token delToken =
+-        (DelegationTokenAuthenticatedURL.Token) tokF.get(kp);
+-    String oldTokStr = delToken.toString();
+-    Method setM =
+-        AuthenticatedURL.Token.class.getDeclaredMethod("set", String.class);
+-    setM.setAccessible(true);
+-    String newTokStr = oldTokStr.replaceAll("e=[^&]*", "e=1000");
+-    setM.invoke(((AuthenticatedURL.Token)delToken), newTokStr);
+-  }
+-
+   @Test
+   public void testACLs() throws Exception {
+     Configuration conf = new Configuration();
+-- 
+1.7.9.5
+

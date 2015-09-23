@@ -1,0 +1,57 @@
+From 3fa18d58a8f21c0e8c7fc05c589b3b2e1902fde1 Mon Sep 17 00:00:00 2001
+From: Konstantin Shvachko <shv@apache.org>
+Date: Fri, 30 Sep 2011 19:16:54 +0000
+Subject: [PATCH 128/596] MR1: MAPREDUCE-2779. JobSplitWriter.java can't
+ handle large job.split file. Contributed by Ming
+ Ma.
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-0.23@1177783 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit ccb3b5595a234c9894c115d65f7054064798f852)
+(cherry picked from commit 61a7e586697e4d5ce3382570df0c23f8572e8409)
+(cherry picked from commit 4d1741e804659dddd25b2079fd092e4b3f889b31)
+---
+ .../hadoop/mapreduce/split/JobSplitWriter.java     |   12 ++++++------
+ 1 file changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/split/JobSplitWriter.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/split/JobSplitWriter.java
+index 9b2327c..757dece 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/split/JobSplitWriter.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/split/JobSplitWriter.java
+@@ -110,15 +110,15 @@ private static void writeSplitHeader(FSDataOutputStream out)
+     if (array.length != 0) {
+       SerializationFactory factory = new SerializationFactory(conf);
+       int i = 0;
+-      long offset = out.size();
++      long offset = out.getPos();
+       for(T split: array) {
+-        int prevCount = out.size();
++        long prevCount = out.getPos();
+         Text.writeString(out, split.getClass().getName());
+         Serializer<T> serializer = 
+           factory.getSerializer((Class<T>) split.getClass());
+         serializer.open(out);
+         serializer.serialize(split);
+-        int currCount = out.size();
++        long currCount = out.getPos();
+         info[i++] = 
+           new JobSplit.SplitMetaInfo( 
+               split.getLocations(), offset,
+@@ -135,12 +135,12 @@ private static void writeSplitHeader(FSDataOutputStream out)
+     SplitMetaInfo[] info = new SplitMetaInfo[splits.length];
+     if (splits.length != 0) {
+       int i = 0;
+-      long offset = out.size();
++      long offset = out.getPos();
+       for(org.apache.hadoop.mapred.InputSplit split: splits) {
+-        int prevLen = out.size();
++        long prevLen = out.getPos();
+         Text.writeString(out, split.getClass().getName());
+         split.write(out);
+-        int currLen = out.size();
++        long currLen = out.getPos();
+         info[i++] = new JobSplit.SplitMetaInfo( 
+             split.getLocations(), offset,
+             split.getLength());
+-- 
+1.7.9.5
+

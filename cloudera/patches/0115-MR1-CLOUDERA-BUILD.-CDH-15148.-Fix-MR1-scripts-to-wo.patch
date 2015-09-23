@@ -1,0 +1,88 @@
+From 5734c6e584aa0ecadf2cc726104afaa4f27e9ebb Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Tue, 5 Nov 2013 16:45:17 +0530
+Subject: [PATCH 115/596] MR1: CLOUDERA-BUILD. CDH-15148. Fix MR1 scripts to
+ work in a consolidated tarball.
+
+(cherry picked from commit 455d2fa9f2a44b2c178d4a51c8466566abeba90b)
+(cherry picked from commit 4b006486a6996a0e5b053e294dcc0c70c26cab04)
+(cherry picked from commit 01abda3b4699e12cd8cca6ca69e701f48d72623d)
+(cherry picked from commit c7f545b9d841988fec81094af9040d5abc853328)
+---
+ hadoop-mapreduce1-project/bin/hadoop           |    2 +-
+ hadoop-mapreduce1-project/bin/hadoop-config.sh |   17 ++++++++++++++---
+ hadoop-mapreduce1-project/bin/hadoop-daemon.sh |    2 +-
+ 3 files changed, 16 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/bin/hadoop b/hadoop-mapreduce1-project/bin/hadoop
+index 167a890..246d7fe 100755
+--- a/hadoop-mapreduce1-project/bin/hadoop
++++ b/hadoop-mapreduce1-project/bin/hadoop
+@@ -153,7 +153,7 @@ IFS=
+ if [ -d "$HADOOP_HOME/webapps" ]; then
+   CLASSPATH=${CLASSPATH}:$HADOOP_HOME
+ fi
+-for f in $HADOOP_HOME/hadoop-core-*.jar; do
++for f in $HADOOP_MR1_HOME/hadoop-core-*.jar; do
+   CLASSPATH=${CLASSPATH}:$f;
+ done
+ 
+diff --git a/hadoop-mapreduce1-project/bin/hadoop-config.sh b/hadoop-mapreduce1-project/bin/hadoop-config.sh
+index 96addf0..61367be 100644
+--- a/hadoop-mapreduce1-project/bin/hadoop-config.sh
++++ b/hadoop-mapreduce1-project/bin/hadoop-config.sh
+@@ -30,16 +30,23 @@ if [ -z "$HADOOP_HOME" ]; then
+   export HADOOP_HOME=`dirname "$this"`/..
+ fi
+ 
++if [ -f $HADOOP_HOME/hadoop-core-*.jar ]; then
++  HADOOP_MR1_HOME=$HADOOP_HOME
++else
++  HADOOP_MR1_HOME=$HADOOP_HOME/share/hadoop/mapreduce1
++fi
++
+ # double check that our HADOOP_HOME looks reasonable.
+ # cding to / here verifies that we have an absolute path, which is
+ # necessary for the daemons to function properly
+-if [ -z "$(cd / && ls $HADOOP_HOME/hadoop-core-*.jar $HADOOP_HOME/build 2>/dev/null)" ]; then
++if [ -z "$(cd / && ls $HADOOP_MR1_HOME/hadoop-core-*.jar $HADOOP_MR1_HOME/build 2>/dev/null)" ]; then
+   cat 1>&2 <<EOF
+ +================================================================+
+ |      Error: HADOOP_HOME is not set correctly                   |
+ +----------------------------------------------------------------+
+ | Please set your HADOOP_HOME variable to the absolute path of   |
+-| the directory that contains hadoop-core-VERSION.jar            |
++| the directory that contains hadoop-core-VERSION.jar or         |
++| share/hadoop/mapreduce1/hadoop-core-VERSION.jar.               |
+ +================================================================+
+ EOF
+   exit 1
+@@ -58,7 +65,11 @@ then
+ fi
+  
+ # Allow alternate conf dir location.
+-HADOOP_CONF_DIR="${HADOOP_CONF_DIR:-$HADOOP_HOME/conf}"
++if [ "$HADOOP_MR1_HOME" = "$HADOOP_HOME" ]; then
++  HADOOP_CONF_DIR="${HADOOP_CONF_DIR:-$HADOOP_HOME/conf}"
++else
++  HADOOP_CONF_DIR="${HADOOP_CONF_DIR:-$HADOOP_HOME/etc/hadoop}"
++fi
+ 
+ if [ -f "${HADOOP_CONF_DIR}/hadoop-env.sh" ]; then
+   . "${HADOOP_CONF_DIR}/hadoop-env.sh"
+diff --git a/hadoop-mapreduce1-project/bin/hadoop-daemon.sh b/hadoop-mapreduce1-project/bin/hadoop-daemon.sh
+index d502099..b2e1d42 100755
+--- a/hadoop-mapreduce1-project/bin/hadoop-daemon.sh
++++ b/hadoop-mapreduce1-project/bin/hadoop-daemon.sh
+@@ -117,7 +117,7 @@ case $startStop in
+     echo starting $command, logging to $_HADOOP_DAEMON_OUT
+     cd "$HADOOP_HOME"
+ 
+-    nice -n $HADOOP_NICENESS "$HADOOP_HOME"/bin/hadoop --config $HADOOP_CONF_DIR $command "$@" < /dev/null
++    nice -n $HADOOP_NICENESS $bin/hadoop --config $HADOOP_CONF_DIR $command "$@" < /dev/null
+     ;;
+           
+   (stop)
+-- 
+1.7.9.5
+

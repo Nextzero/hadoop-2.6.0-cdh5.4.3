@@ -1,0 +1,388 @@
+From cfc8d5e1c297d6bfbd2471bae2093b5a6bb7249f Mon Sep 17 00:00:00 2001
+From: Todd Lipcon <todd@apache.org>
+Date: Tue, 22 Jul 2014 19:55:03 +0000
+Subject: [PATCH 327/596] MAPREDUCE-5985. native-task: Fix build on macosx.
+ Contributed by Binglin Chang
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/MR-2841@1612659 13f79535-47bb-0310-9956-ffa450edef68
+(cherry picked from commit e788e8b6eeafc1d20b5d51f5e2374610bc37304b)
+(cherry picked from commit 07a26696fcc8e54e01b4cf4ad7cbf9d93fe49247)
+---
+ .../CHANGES.MAPREDUCE-2841.txt                     |    4 +
+ .../hadoop-mapreduce-client-nativetask/pom.xml     |   77 ++++++------
+ .../src/CMakeLists.txt                             |  126 ++++++++++----------
+ .../src/main/native/src/lib/commons.h              |    1 +
+ .../src/main/native/test/TestIFile.cc              |    5 +-
+ 5 files changed, 111 insertions(+), 102 deletions(-)
+ create mode 100644 hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+
+diff --git a/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+new file mode 100644
+index 0000000..18bf029
+--- /dev/null
++++ b/hadoop-mapreduce-project/CHANGES.MAPREDUCE-2841.txt
+@@ -0,0 +1,4 @@
++Changes for Hadoop Native Map Output Collector
++------------------------------------------------
++
++MAPREDUCE-5985. native-task: Fix build on macosx. Contributed by Binglin Chang
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+index 92e3504..ea0fd41 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/pom.xml
+@@ -1,4 +1,4 @@
+-<?xml version="1.0"?>
++<?xml version="1.0" encoding="UTF-8"?>
+ <!--
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+@@ -12,7 +12,8 @@
+   See the License for the specific language governing permissions and
+   limitations under the License. See accompanying LICENSE file.
+ -->
+-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
++<project xmlns="http://maven.apache.org/POM/4.0.0"
++  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                       http://maven.apache.org/xsd/maven-4.0.0.xsd">
+   <parent>
+@@ -29,7 +30,7 @@
+   <properties>
+     <!-- Needed for generating FindBugs warnings using parent pom -->
+     <mr.basedir>${project.parent.basedir}/../</mr.basedir>
+-  </properties>  
++  </properties>
+ 
+ 
+   <dependencies>
+@@ -53,7 +54,7 @@
+     </dependency>
+     <dependency>
+       <groupId>org.mockito</groupId>
+-        <artifactId>mockito-all</artifactId>
++      <artifactId>mockito-all</artifactId>
+       <scope>test</scope>
+     </dependency>
+     <dependency>
+@@ -85,7 +86,7 @@
+             <include>**/compresstest/*Test.java</include>
+             <include>**/nonsorttest/*Test.java</include>
+             <include>**/kvtest/*Test.java</include>
+-          </includes> 
++          </includes>
+           <additionalClasspathElements>
+             <additionalClasspathElement>${basedir}/../hadoop-mapreduce-client-common/target/classes</additionalClasspathElement>
+           </additionalClasspathElements>
+@@ -131,26 +132,26 @@
+               </execution>
+             </executions>
+           </plugin>
+-            <plugin>
+-                <groupId>org.codehaus.mojo</groupId>
+-                <artifactId>native-maven-plugin</artifactId>
+-                <executions>
+-                    <execution>
+-                      <phase>compile</phase>
+-                        <goals>
+-                          <goal>javah</goal>
+-                        </goals>
+-                        <configuration>        
+-                            <javahPath>${env.JAVA_HOME}/bin/javah</javahPath>
+-                            <javahClassNames>
+-                                <javaClassName>org.apache.hadoop.mapred.nativetask.NativeBatchProcessor</javaClassName>
+-                                <javaClassName>org.apache.hadoop.mapred.nativetask.NativeRuntime</javaClassName>
+-                            </javahClassNames>
+-                            <javahOutputDirectory>${project.build.directory}/native/javah</javahOutputDirectory>
+-                        </configuration>
+-                  </execution>
+-              </executions>
+-            </plugin>
++          <plugin>
++            <groupId>org.codehaus.mojo</groupId>
++            <artifactId>native-maven-plugin</artifactId>
++            <executions>
++              <execution>
++                <phase>compile</phase>
++                <goals>
++                  <goal>javah</goal>
++                </goals>
++                <configuration>
++                  <javahPath>${env.JAVA_HOME}/bin/javah</javahPath>
++                  <javahClassNames>
++                    <javaClassName>org.apache.hadoop.mapred.nativetask.NativeBatchProcessor</javaClassName>
++                    <javaClassName>org.apache.hadoop.mapred.nativetask.NativeRuntime</javaClassName>
++                  </javahClassNames>
++                  <javahOutputDirectory>${project.build.directory}/native/javah</javahOutputDirectory>
++                </configuration>
++              </execution>
++            </executions>
++          </plugin>
+           <plugin>
+             <groupId>org.apache.maven.plugins</groupId>
+             <artifactId>maven-antrun-plugin</artifactId>
+@@ -158,23 +159,27 @@
+               <execution>
+                 <id>make</id>
+                 <phase>compile</phase>
+-                <goals><goal>run</goal></goals>
++                <goals>
++                  <goal>run</goal>
++                </goals>
+                 <configuration>
+                   <target>
+-					<copy todir="${project.build.directory}/native/test/testData" overwrite="true">
+-						<fileset dir="${basedir}/src/main/native/testData" />
+-					</copy>
+-					<copy file="${basedir}/src/main/native/test.sh" todir="${project.build.directory}/native/test" />
+-                    <exec executable="cmake" dir="${project.build.directory}/native" failonerror="true">
+-						<arg line="${basedir}/src/ -DGENERATED_JAVAH=${project.build.directory}/native/javah -DJVM_ARCH_DATA_MODEL=${sun.arch.data.model} -DREQUIRE_SNAPPY=${require.snappy} -DCUSTOM_SNAPPY_PREFIX=${snappy.prefix} -DCUSTOM_SNAPPY_LIB=${snappy.lib} -DCUSTOM_SNAPPY_INCLUDE=${snappy.include}"/>
++                    <copy todir="${project.build.directory}/native/test/testData"
++                      overwrite="true">
++                      <fileset dir="${basedir}/src/main/native/testData" />
++                    </copy>
++                    <copy file="${basedir}/src/main/native/test.sh" todir="${project.build.directory}/native/test" />
++                    <exec executable="cmake" dir="${project.build.directory}/native"
++                      failonerror="true">
++                      <arg line="${basedir}/src/ -DGENERATED_JAVAH=${project.build.directory}/native/javah -DJVM_ARCH_DATA_MODEL=${sun.arch.data.model} -DREQUIRE_SNAPPY=${require.snappy} -DCUSTOM_SNAPPY_PREFIX=${snappy.prefix} -DCUSTOM_SNAPPY_LIB=${snappy.lib} -DCUSTOM_SNAPPY_INCLUDE=${snappy.include}" />
+                     </exec>
+                     <exec executable="make" dir="${project.build.directory}/native" failonerror="true">
+-                      <arg line="VERBOSE=1"/>
++                      <arg line="VERBOSE=1" />
+                     </exec>
+-                    <!-- The second make is a workaround for HADOOP-9215.  It can
+-                         be removed when version 2.6 of cmake is no longer supported . -->
++                    <!-- The second make is a workaround for HADOOP-9215. It can be 
++                      removed when version 2.6 of cmake is no longer supported . -->
+                     <exec executable="make" dir="${project.build.directory}/native" failonerror="true"></exec>
+-                   </target>
++                  </target>
+                 </configuration>
+               </execution>
+             </executions>
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/CMakeLists.txt b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/CMakeLists.txt
+index 0247a54..3094162 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/CMakeLists.txt
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/CMakeLists.txt
+@@ -52,7 +52,7 @@ endfunction(dual_output_directory TGT DIR)
+ 
+ #
+ # This macro alters the behavior of find_package and find_library.
+-# It does this by setting the CMAKE_FIND_LIBRARY_SUFFIXES global variable. 
++# It does this by setting the CMAKE_FIND_LIBRARY_SUFFIXES global variable.
+ # You should save that variable before calling this function and restore it
+ # after you have accomplished your goal.
+ #
+@@ -79,8 +79,8 @@ macro(set_find_shared_library_version LVERS)
+ endmacro(set_find_shared_library_version LVERS)
+ 
+ if (NOT GENERATED_JAVAH)
+-	#Must identify where the generated headers have been placed
+-	  MESSAGE(FATAL_ERROR "You must set the cmake variable GENERATED_JAVAH")
++    #Must identify where the generated headers have been placed
++    MESSAGE(FATAL_ERROR "You must set the cmake variable GENERATED_JAVAH")
+ endif (NOT GENERATED_JAVAH)
+ find_package(JNI REQUIRED)
+ 
+@@ -91,8 +91,8 @@ SET(CMAKE_FIND_LIBRARY_SUFFIXES STORED_CMAKE_FIND_LIBRARY_SUFFIXES)
+ # primitive configs
+ set(PRFLAGS "-DSIMPLE_MEMCPY")
+ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${PRFLAGS} -Wall")
+-set(CMAKE_LD_FLAGS "${CMAKE_LD_FLAGS} -no-undefined -version-info 0:1:0 
+-		-L${_JAVA_HOME}/jre/lib/amd64/server -ljvm")
++set(CMAKE_LD_FLAGS "${CMAKE_LD_FLAGS} -no-undefined -version-info 0:1:0
++    -L${_JAVA_HOME}/jre/lib/amd64/server -ljvm")
+ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_C_FLAGS} -g -O2 -DNDEBUG -fPIC")
+ set(D main/native/)
+ 
+@@ -125,12 +125,12 @@ CHECK_FUNCTION_EXISTS(strtoul HAVE_STRTOUL)
+ 
+ SET(STORED_CMAKE_FIND_LIBRARY_SUFFIXES CMAKE_FIND_LIBRARY_SUFFIXES)
+ set_find_shared_library_version("1")
+-find_library(SNAPPY_LIBRARY 
++find_library(SNAPPY_LIBRARY
+     NAMES snappy
+     PATHS ${CUSTOM_SNAPPY_PREFIX} ${CUSTOM_SNAPPY_PREFIX}/lib
+           ${CUSTOM_SNAPPY_PREFIX}/lib64 ${CUSTOM_SNAPPY_LIB})
+ SET(CMAKE_FIND_LIBRARY_SUFFIXES STORED_CMAKE_FIND_LIBRARY_SUFFIXES)
+-find_path(SNAPPY_INCLUDE_DIR 
++find_path(SNAPPY_INCLUDE_DIR
+     NAMES snappy.h
+     PATHS ${CUSTOM_SNAPPY_PREFIX} ${CUSTOM_SNAPPY_PREFIX}/include
+           ${CUSTOM_SNAPPY_INCLUDE})
+@@ -147,15 +147,15 @@ else (SNAPPY_LIBRARY AND SNAPPY_INCLUDE_DIR)
+ endif (SNAPPY_LIBRARY AND SNAPPY_INCLUDE_DIR)
+ 
+ include_directories(
+-	  ${GENERATED_JAVAH}
+-		${D}
++    ${GENERATED_JAVAH}
++    ${D}
+     ${D}/src
+-		${D}/src/util
+-		${D}/src/lib
+-		${D}/test
++    ${D}/src/util
++    ${D}/src/lib
++    ${D}/test
+     ${CMAKE_CURRENT_SOURCE_DIR}
+-		#${CMAKE_CURRENT_SOURCE_DIR}/src
+-		#${CMAKE_BINARY_DIR}
++    #${CMAKE_CURRENT_SOURCE_DIR}/src
++    #${CMAKE_BINARY_DIR}
+     ${JNI_INCLUDE_DIRS}
+     ${SNAPPY_INCLUDE_DIR}
+ )
+@@ -166,6 +166,13 @@ CONFIGURE_FILE(${CMAKE_SOURCE_DIR}/config.h.cmake ${CMAKE_BINARY_DIR}/config.h)
+ 
+ SET(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+ 
++if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
++    # macosx does not have -lrt
++    set(NT_DEPEND_LIBRARY dl pthread z ${SNAPPY_LIBRARY} ${JAVA_JVM_LIBRARY})
++else (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
++    set(NT_DEPEND_LIBRARY dl rt pthread z ${SNAPPY_LIBRARY} ${JAVA_JVM_LIBRARY})
++endif (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
++
+ add_dual_library(nativetask
+     ${D}/lz4/lz4.c
+     ${D}/cityhash/city.cc
+@@ -208,60 +215,51 @@ add_dual_library(nativetask
+     ${D}/src/util/Timer.cc
+     ${D}/src/util/WritableUtils.cc
+ )
+-target_link_libraries(nativetask
+-	#${LIB_DL}
+-	  dl
+-		rt
+-		pthread
+-		z
+-		${SNAPPY_LIBRARY}
+-		${JAVA_JVM_LIBRARY}
+-)
+ 
+-add_executable(nttest 
++target_link_libraries(nativetask ${NT_DEPEND_LIBRARY})
++
++add_executable(nttest
+     ${D}/gtest/gtest-all.cc
+-    ${D}/test/lib/TestByteArray.cc      
+-    ${D}/test/lib/TestByteBuffer.cc      
+-    ${D}/test/lib/TestComparatorForDualPivotQuickSort.cc 
+-    ${D}/test/lib/TestComparatorForStdSort.cc 
+-    ${D}/test/lib/TestFixSizeContainer.cc 
+-    ${D}/test/lib/TestMemoryPool.cc 
+-    ${D}/test/lib/TestIterator.cc 
+-    ${D}/test/lib/TestKVBuffer.cc 
+-    ${D}/test/lib/TestMemBlockIterator.cc 
+-    ${D}/test/lib/TestMemoryBlock.cc 
+-    ${D}/test/lib/TestPartitionBucket.cc 
+-    ${D}/test/lib/TestReadBuffer.cc 
+-    ${D}/test/lib/TestReadWriteBuffer.cc 
+-    ${D}/test/lib/TestTrackingCollector.cc 
+-    ${D}/test/util/TestChecksum.cc             
+-    ${D}/test/util/TestHash.cc                 
+-    ${D}/test/util/TestStringUtil.cc           
+-    ${D}/test/util/TestSyncUtils.cc            
+-    ${D}/test/util/TestWritableUtils.cc        
+-    ${D}/test/TestCommand.cc                   
+-    ${D}/test/TestConfig.cc                   
+-    ${D}/test/TestCounter.cc                   
+-    ${D}/test/TestCompressions.cc              
+-    ${D}/test/TestFileSystem.cc                
+-    ${D}/test/TestIFile.cc                     
+-    ${D}/test/TestPrimitives.cc                
+-    ${D}/test/TestSort.cc                      
+-    ${D}/test/TestMain.cc                      
++    ${D}/test/lib/TestByteArray.cc
++    ${D}/test/lib/TestByteBuffer.cc
++    ${D}/test/lib/TestComparatorForDualPivotQuickSort.cc
++    ${D}/test/lib/TestComparatorForStdSort.cc
++    ${D}/test/lib/TestFixSizeContainer.cc
++    ${D}/test/lib/TestMemoryPool.cc
++    ${D}/test/lib/TestIterator.cc
++    ${D}/test/lib/TestKVBuffer.cc
++    ${D}/test/lib/TestMemBlockIterator.cc
++    ${D}/test/lib/TestMemoryBlock.cc
++    ${D}/test/lib/TestPartitionBucket.cc
++    ${D}/test/lib/TestReadBuffer.cc
++    ${D}/test/lib/TestReadWriteBuffer.cc
++    ${D}/test/lib/TestTrackingCollector.cc
++    ${D}/test/util/TestChecksum.cc
++    ${D}/test/util/TestHash.cc
++    ${D}/test/util/TestStringUtil.cc
++    ${D}/test/util/TestSyncUtils.cc
++    ${D}/test/util/TestWritableUtils.cc
++    ${D}/test/TestCommand.cc
++    ${D}/test/TestConfig.cc
++    ${D}/test/TestCounter.cc
++    ${D}/test/TestCompressions.cc
++    ${D}/test/TestFileSystem.cc
++    ${D}/test/TestIFile.cc
++    ${D}/test/TestPrimitives.cc
++    ${D}/test/TestSort.cc
++    ${D}/test/TestMain.cc
+     ${D}/test/test_commons.cc)
+-set(CMAKE_EXE_LINKER_FLAGS "-L${_JAVA_HOME}/jre/lib/amd64/server -ljvm")
+-target_link_libraries(nttest 
+-   	nativetask_static
+-	  dl
+-	  rt
+-	  pthread
+-	  z
+-	  ${SNAPPY_LIBRARY}
+-		#	  ${JAVA_JVM_LIBRARY}
++
++
++IF (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
++    # macos clang with libc++ does not have tr1/tuple, just tuple
++    SET_TARGET_PROPERTIES(nttest PROPERTIES COMPILE_FLAGS "-DGTEST_USE_OWN_TR1_TUPLE=1")
++ENDIF()
++
++target_link_libraries(nttest
++     nativetask_static
++     ${NT_DEPEND_LIBRARY}
+ )
+-#if (NEED_LINK_DL)
+-#   set(LIB_DL dl)
+-#endif (NEED_LINK_DL)
+ 
+ IF (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+     #
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/lib/commons.h b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/lib/commons.h
+index 07b2cf1..89770ad 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/lib/commons.h
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/src/lib/commons.h
+@@ -25,6 +25,7 @@
+ #include <stdlib.h>
+ #include <assert.h>
+ #include <string.h>
++#include <unistd.h>
+ #include <stdio.h>
+ #include <memory.h>
+ #include <fcntl.h>
+diff --git a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test/TestIFile.cc b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test/TestIFile.cc
+index 1e0bae4..02afbc0 100644
+--- a/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test/TestIFile.cc
++++ b/hadoop-mapreduce-project/hadoop-mapreduce-client/hadoop-mapreduce-client-nativetask/src/main/native/test/TestIFile.cc
+@@ -166,7 +166,7 @@ TEST(Perf, IFile) {
+ TEST(IFile, TestGlibCBug) {
+   std::string path("./testData/testGlibCBugSpill.out");
+ 
+-  uint32_t expect[5] = {-1538241715, -1288088794, -192294464, 563552421, 1661521654};
++  int32_t expect[5] = {-1538241715, -1288088794, -192294464, 563552421, 1661521654};
+ 
+   LOG("TestGlibCBug %s", path.c_str());
+   IFileSegment * segments = new IFileSegment [1];
+@@ -182,7 +182,8 @@ TEST(IFile, TestGlibCBug) {
+   reader->nextPartition();
+   uint32_t index = 0;
+   while(NULL != (key = reader->nextKey(length))) {
+-    int realKey = bswap(*(uint32_t *)(key));
++    int32_t realKey = (int32_t)bswap(*(uint32_t *)(key));
++    ASSERT_LT(index, 5);
+     ASSERT_EQ(expect[index], realKey);
+     index++;
+   }
+-- 
+1.7.9.5
+

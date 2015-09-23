@@ -1,0 +1,73 @@
+From a93b1a8ffe0da77c43158a8d135037d5cd325fae Mon Sep 17 00:00:00 2001
+From: Yongjun Zhang <yzhang@cloudera.com>
+Date: Tue, 23 Sep 2014 13:38:03 -0700
+Subject: [PATCH 185/596] CLOUDERA-BUILD. Relax HDFS-6776 requirement so user
+ doesn't need to upgrade insecure cluster
+
+(cherry picked from commit 91007d2020e671bc9f1cdbf78b7a480093c974c0)
+---
+ .../apache/hadoop/hdfs/web/WebHdfsFileSystem.java  |   45 +++++++++++++-------
+ 1 file changed, 30 insertions(+), 15 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/web/WebHdfsFileSystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/web/WebHdfsFileSystem.java
+index db606dc..b36fbf2 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/web/WebHdfsFileSystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/web/WebHdfsFileSystem.java
+@@ -1294,24 +1294,39 @@ protected URL getResolvedUrl(final HttpURLConnection connection
+   @Override
+   public Token<DelegationTokenIdentifier> getDelegationToken(
+       final String renewer) throws IOException {
+-    final HttpOpParam.Op op = GetOpParam.Op.GETDELEGATIONTOKEN;
+-    Token<DelegationTokenIdentifier> token =
+-        new FsPathResponseRunner<Token<DelegationTokenIdentifier>>(
+-            op, null, new RenewerParam(renewer)) {
+-      @Override
+-      Token<DelegationTokenIdentifier> decodeResponse(Map<?,?> json)
+-          throws IOException {
+-        return JsonUtil.toDelegationToken(json);
++    try {
++      final HttpOpParam.Op op = GetOpParam.Op.GETDELEGATIONTOKEN;
++      Token<DelegationTokenIdentifier> token =
++          new FsPathResponseRunner<Token<DelegationTokenIdentifier>>(
++              op, null, new RenewerParam(renewer)) {
++        @Override
++        Token<DelegationTokenIdentifier> decodeResponse(Map<?,?> json)
++            throws IOException {
++          return JsonUtil.toDelegationToken(json);
++        }
++      }.run();
++      if (token != null) {
++        token.setService(tokenServiceName);
++      } else {
++        if (disallowFallbackToInsecureCluster) {
++          throw new AccessControlException(CANT_FALLBACK_TO_INSECURE_MSG);
++        }
+       }
+-    }.run();
+-    if (token != null) {
+-      token.setService(tokenServiceName);
+-    } else {
+-      if (disallowFallbackToInsecureCluster) {
+-        throw new AccessControlException(CANT_FALLBACK_TO_INSECURE_MSG);
++      return token;
++    } catch (IOException ioe) {
++      if (ioe.getMessage().startsWith("Failed to get the token for")) {
++        // cluster that is insecure and doesn't have the fix of HDFS-6776
++        // throws IOException with msg that starts with
++        // ""Failed to get the token for" when requested for delegation
++        // token. Catch it here and return null delegation token if 
++        // fallback is allowed
++        if (disallowFallbackToInsecureCluster) {
++          throw new AccessControlException(CANT_FALLBACK_TO_INSECURE_MSG);
++        }
++        return null;
+       }
++      throw ioe;
+     }
+-    return token;
+   }
+ 
+   @Override
+-- 
+1.7.9.5
+

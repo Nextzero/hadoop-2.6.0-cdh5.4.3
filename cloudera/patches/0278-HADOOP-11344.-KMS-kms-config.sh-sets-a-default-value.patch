@@ -1,0 +1,48 @@
+From 68cdfd00365868221ede69d2e826e470cef600e4 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Tue, 2 Dec 2014 19:04:20 -0800
+Subject: [PATCH 278/596] HADOOP-11344. KMS kms-config.sh sets a default value
+ for the keystore password even in non-ssl setup.
+ Contributed by Arun Suresh.
+
+(cherry picked from commit 3d48ad7eb424206dd1528179b35de4cdf51afdf3)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit 4c2b4be85a3ba32425c8b882d05bfce30e34467b)
+---
+ .../hadoop-kms/src/main/libexec/kms-config.sh      |    3 +++
+ .../hadoop-kms/src/main/sbin/kms.sh                |    2 +-
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-common-project/hadoop-kms/src/main/libexec/kms-config.sh b/hadoop-common-project/hadoop-kms/src/main/libexec/kms-config.sh
+index dcf96bc..3ac929a 100644
+--- a/hadoop-common-project/hadoop-kms/src/main/libexec/kms-config.sh
++++ b/hadoop-common-project/hadoop-kms/src/main/libexec/kms-config.sh
+@@ -150,6 +150,9 @@ else
+   print "Using   KMS_SSL_KEYSTORE_FILE:     ${KMS_SSL_KEYSTORE_FILE}"
+ fi
+ 
++# If KMS_SSL_KEYSTORE_PASS is explicitly set to ""
++# then reset to "password". DO NOT set to "password" if
++# variable is NOT defined.
+ if [ "${KMS_SSL_KEYSTORE_PASS}" = "" ]; then
+   if [ -n "${KMS_SSL_KEYSTORE_PASS+1}" ]; then
+     export KMS_SSL_KEYSTORE_PASS=password
+diff --git a/hadoop-common-project/hadoop-kms/src/main/sbin/kms.sh b/hadoop-common-project/hadoop-kms/src/main/sbin/kms.sh
+index 423d423..edee10f 100644
+--- a/hadoop-common-project/hadoop-kms/src/main/sbin/kms.sh
++++ b/hadoop-common-project/hadoop-kms/src/main/sbin/kms.sh
+@@ -54,7 +54,7 @@ catalina_opts="${catalina_opts} -Dkms.ssl.keystore.file=${KMS_SSL_KEYSTORE_FILE}
+ print "Adding to CATALINA_OPTS:     ${catalina_opts}"
+ print "Found KMS_SSL_KEYSTORE_PASS:     `echo ${KMS_SSL_KEYSTORE_PASS} | sed 's/./*/g'`"
+ 
+-export CATALINA_OPTS="${CATALINA_OPTS_DISP} ${catalina_opts}"
++export CATALINA_OPTS="${CATALINA_OPTS} ${catalina_opts}"
+ 
+ # A bug in catalina.sh script does not use CATALINA_OPTS for stopping the server
+ #
+-- 
+1.7.9.5
+

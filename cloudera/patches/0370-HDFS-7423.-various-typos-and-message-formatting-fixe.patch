@@ -1,0 +1,919 @@
+From 6551cb9388681db0db4d3f1a2f602e2c773371a3 Mon Sep 17 00:00:00 2001
+From: yliu <yliu@apache.org>
+Date: Thu, 29 Jan 2015 04:20:14 +0800
+Subject: [PATCH 370/596] HDFS-7423. various typos and message formatting
+ fixes in nfs daemon and doc. (Charles Lamb via
+ yliu)
+
+(cherry picked from commit dc7950ef186cf928674fc3067ea7871ea443c322)
+
+Conflicts:
+  hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/OpenFileCtx.java
+  hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+  hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
+---
+ .../hadoop/hdfs/nfs/nfs3/AsyncDataService.java     |   16 ++-
+ .../apache/hadoop/hdfs/nfs/nfs3/OpenFileCtx.java   |   78 +++++++--------
+ .../hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java       |  102 ++++++++++----------
+ .../apache/hadoop/hdfs/nfs/nfs3/WriteManager.java  |   26 ++---
+ .../org/apache/hadoop/hdfs/DFSOutputStream.java    |   10 +-
+ 5 files changed, 115 insertions(+), 117 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/AsyncDataService.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/AsyncDataService.java
+index 429a457..ee3f90a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/AsyncDataService.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/AsyncDataService.java
+@@ -22,12 +22,11 @@
+ import java.util.concurrent.ThreadPoolExecutor;
+ import java.util.concurrent.TimeUnit;
+ 
+-import org.apache.commons.lang.exception.ExceptionUtils;
+ import org.apache.commons.logging.Log;
+ import org.apache.commons.logging.LogFactory;
+ 
+ /**
+- * This class is a thread pool to easily schedule async data operations.Current
++ * This class is a thread pool to easily schedule async data operations. Current
+  * async data operation is write back operation. In the future, we could use it
+  * for readahead operations too.
+  */
+@@ -69,8 +68,8 @@ synchronized void execute(Runnable task) {
+     }
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("Current active thread number: " + executor.getActiveCount()
+-          + " queue size:" + executor.getQueue().size()
+-          + " scheduled task number:" + executor.getTaskCount());
++          + " queue size: " + executor.getQueue().size()
++          + " scheduled task number: " + executor.getTaskCount());
+     }
+     executor.execute(task);
+   }
+@@ -105,10 +104,9 @@ void writeAsync(OpenFileCtx openFileCtx) {
+   }
+ 
+   /**
+-   * A task for write data back to HDFS for a file. Since only one thread can
+-   * write for a file, any time there should be only one task(in queue or
+-   * executing) for one file existing, and this should be guaranteed by the
+-   * caller.
++   * A task to write data back to HDFS for a file. Since only one thread can
++   * write to a file, there should only be one task at any time for a file
++   * (in queue or executing), and this should be guaranteed by the caller.
+    */
+   static class WriteBackTask implements Runnable {
+ 
+@@ -135,7 +133,7 @@ public void run() {
+       try {
+         openFileCtx.executeWriteBack();
+       } catch (Throwable t) {
+-        LOG.error("Asyn data service got error:", t);
++        LOG.error("Async data service got error: ", t);
+       }
+     }
+   }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/OpenFileCtx.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/OpenFileCtx.java
+index 4777b2e..573780f 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/OpenFileCtx.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/OpenFileCtx.java
+@@ -212,7 +212,7 @@ boolean hasPendingWork() {
+   private long updateNonSequentialWriteInMemory(long count) {
+     long newValue = nonSequentialWriteInMemory.addAndGet(count);
+     if (LOG.isDebugEnabled()) {
+-      LOG.debug("Update nonSequentialWriteInMemory by " + count + " new value:"
++      LOG.debug("Update nonSequentialWriteInMemory by " + count + " new value: "
+           + newValue);
+     }
+ 
+@@ -315,7 +315,7 @@ private void waitForDump() {
+     private void dump() {
+       // Create dump outputstream for the first time
+       if (dumpOut == null) {
+-        LOG.info("Create dump file:" + dumpFilePath);
++        LOG.info("Create dump file: " + dumpFilePath);
+         File dumpFile = new File(dumpFilePath);
+         try {
+           synchronized (this) {
+@@ -370,8 +370,8 @@ private void dump() {
+             updateNonSequentialWriteInMemory(-dumpedDataSize);
+           }
+         } catch (IOException e) {
+-          LOG.error("Dump data failed:" + writeCtx + " with error:" + e
+-              + " OpenFileCtx state:" + activeState);
++          LOG.error("Dump data failed: " + writeCtx + " with error: " + e
++              + " OpenFileCtx state: " + activeState);
+           // Disable dump
+           enabledDump = false;
+           return;
+@@ -431,8 +431,8 @@ private WriteCtx checkRepeatedWriteRequest(WRITE3Request request,
+       return null;
+     } else {
+       if (xid != writeCtx.getXid()) {
+-        LOG.warn("Got a repeated request, same range, with a different xid:"
+-            + xid + " xid in old request:" + writeCtx.getXid());
++        LOG.warn("Got a repeated request, same range, with a different xid: "
++            + xid + " xid in old request: " + writeCtx.getXid());
+         //TODO: better handling.
+       }
+       return writeCtx;  
+@@ -444,7 +444,7 @@ public void receivedNewWrite(DFSClient dfsClient, WRITE3Request request,
+       IdMappingServiceProvider iug) {
+     
+     if (!activeState) {
+-      LOG.info("OpenFileCtx is inactive, fileId:"
++      LOG.info("OpenFileCtx is inactive, fileId: "
+           + request.getHandle().getFileId());
+       WccData fileWcc = new WccData(latestAttr.getWccAttr(), latestAttr);
+       WRITE3Response response = new WRITE3Response(Nfs3Status.NFS3ERR_IO,
+@@ -526,7 +526,7 @@ private synchronized WriteCtx addWritesToCache(WRITE3Request request,
+     int originalCount = WriteCtx.INVALID_ORIGINAL_COUNT;
+     
+     if (LOG.isDebugEnabled()) {
+-      LOG.debug("requesed offset=" + offset + " and current offset="
++      LOG.debug("requested offset=" + offset + " and current offset="
+           + cachedOffset);
+     }
+ 
+@@ -559,7 +559,7 @@ private synchronized WriteCtx addWritesToCache(WRITE3Request request,
+     
+     // Fail non-append call
+     if (offset < cachedOffset) {
+-      LOG.warn("(offset,count,nextOffset):" + "(" + offset + "," + count + ","
++      LOG.warn("(offset,count,nextOffset): " + "(" + offset + "," + count + ","
+           + nextOffset + ")");
+       return null;
+     } else {
+@@ -571,7 +571,7 @@ private synchronized WriteCtx addWritesToCache(WRITE3Request request,
+           dataState);
+       if (LOG.isDebugEnabled()) {
+         LOG.debug("Add new write to the list with nextOffset " + cachedOffset
+-            + " and requesed offset=" + offset);
++            + " and requested offset=" + offset);
+       }
+       if (writeCtx.getDataState() == WriteCtx.DataState.ALLOW_DUMP) {
+         // update the memory size
+@@ -587,7 +587,7 @@ private synchronized WriteCtx addWritesToCache(WRITE3Request request,
+               + pendingWrites.size());
+         }
+       } else {
+-        LOG.warn("Got a repeated request, same range, with xid:" + xid
++        LOG.warn("Got a repeated request, same range, with xid: " + xid
+             + " nextOffset " + +cachedOffset + " req offset=" + offset);
+       }
+       return writeCtx;
+@@ -665,7 +665,7 @@ private void receivedNewWriteInternal(DFSClient dfsClient,
+       // offset < nextOffset
+       processOverWrite(dfsClient, request, channel, xid, iug);
+     } else {
+-      // The writes is added to pendingWrites.
++      // The write is added to pendingWrites.
+       // Check and start writing back if necessary
+       boolean startWriting = checkAndStartWrite(asyncDataService, writeCtx);
+       if (!startWriting) {
+@@ -677,7 +677,7 @@ private void receivedNewWriteInternal(DFSClient dfsClient,
+         // responses of the previous batch. So here send response immediately
+         // for unstable non-sequential write
+         if (stableHow != WriteStableHow.UNSTABLE) {
+-          LOG.info("Have to change stable write to unstable write:"
++          LOG.info("Have to change stable write to unstable write: "
+               + request.getStableHow());
+           stableHow = WriteStableHow.UNSTABLE;
+         }
+@@ -720,7 +720,7 @@ private WRITE3Response processPerfectOverWrite(DFSClient dfsClient,
+           + "Continue processing the perfect overwrite.");
+     } catch (IOException e) {
+       LOG.info("hsync failed when processing possible perfect overwrite, path="
+-          + path + " error:" + e);
++          + path + " error: " + e);
+       return new WRITE3Response(Nfs3Status.NFS3ERR_IO, wccData, 0, stableHow,
+           Nfs3Constant.WRITE_COMMIT_VERF);
+     }
+@@ -729,7 +729,7 @@ private WRITE3Response processPerfectOverWrite(DFSClient dfsClient,
+       fis = dfsClient.createWrappedInputStream(dfsClient.open(path));
+       readCount = fis.read(offset, readbuffer, 0, count);
+       if (readCount < count) {
+-        LOG.error("Can't read back " + count + " bytes, partial read size:"
++        LOG.error("Can't read back " + count + " bytes, partial read size: "
+             + readCount);
+         return new WRITE3Response(Nfs3Status.NFS3ERR_IO, wccData, 0, stableHow,
+             Nfs3Constant.WRITE_COMMIT_VERF);
+@@ -758,7 +758,7 @@ private WRITE3Response processPerfectOverWrite(DFSClient dfsClient,
+         postOpAttr = Nfs3Utils.getFileAttr(dfsClient, path, iug);
+       } catch (IOException e) {
+         LOG.info("Got error when processing perfect overwrite, path=" + path
+-            + " error:" + e);
++            + " error: " + e);
+         return new WRITE3Response(Nfs3Status.NFS3ERR_IO, wccData, 0, stableHow,
+             Nfs3Constant.WRITE_COMMIT_VERF);
+       }
+@@ -809,7 +809,7 @@ public COMMIT_STATUS checkCommit(DFSClient dfsClient, long commitOffset,
+           ret = COMMIT_STATUS.COMMIT_ERROR;
+         }
+       } catch (IOException e) {
+-        LOG.error("Got stream error during data sync:" + e);
++        LOG.error("Got stream error during data sync: " + e);
+         // Do nothing. Stream will be closed eventually by StreamMonitor.
+         // status = Nfs3Status.NFS3ERR_IO;
+         ret = COMMIT_STATUS.COMMIT_ERROR;
+@@ -980,7 +980,7 @@ public synchronized boolean streamCleanup(long fileId, long streamTimeout) {
+     // Check the stream timeout
+     if (checkStreamTimeout(streamTimeout)) {
+       if (LOG.isDebugEnabled()) {
+-        LOG.debug("stream can be closed for fileId:" + fileId);
++        LOG.debug("stream can be closed for fileId: " + fileId);
+       }
+       flag = true;
+     }
+@@ -996,7 +996,7 @@ public synchronized boolean streamCleanup(long fileId, long streamTimeout) {
+   private synchronized WriteCtx offerNextToWrite() {
+     if (pendingWrites.isEmpty()) {
+       if (LOG.isDebugEnabled()) {
+-        LOG.debug("The asyn write task has no pending writes, fileId: "
++        LOG.debug("The async write task has no pending writes, fileId: "
+             + latestAttr.getFileId());
+       }
+       // process pending commit again to handle this race: a commit is added
+@@ -1029,7 +1029,7 @@ private synchronized WriteCtx offerNextToWrite() {
+         this.asyncStatus = false;
+       } else if (range.getMin() < offset && range.getMax() > offset) {
+         // shouldn't happen since we do sync for overlapped concurrent writers
+-        LOG.warn("Got a overlapping write (" + range.getMin() + ","
++        LOG.warn("Got an overlapping write (" + range.getMin() + ", "
+             + range.getMax() + "), nextOffset=" + offset
+             + ". Silently drop it now");
+         pendingWrites.remove(range);
+@@ -1052,10 +1052,10 @@ private synchronized WriteCtx offerNextToWrite() {
+     return null;
+   }
+   
+-  /** Invoked by AsynDataService to write back to HDFS */
++  /** Invoked by AsyncDataService to write back to HDFS */
+   void executeWriteBack() {
+     Preconditions.checkState(asyncStatus,
+-        "openFileCtx has false asyncStatus, fileId:" + latestAttr.getFileId());
++        "openFileCtx has false asyncStatus, fileId: " + latestAttr.getFileId());
+     final long startOffset = asyncWriteBackStartOffset;  
+     try {
+       while (activeState) {
+@@ -1080,10 +1080,10 @@ void executeWriteBack() {
+         if (startOffset == asyncWriteBackStartOffset) {
+           asyncStatus = false;
+         } else {
+-          LOG.info("Another asyn task is already started before this one"
+-              + " is finalized. fileId:" + latestAttr.getFileId()
+-              + " asyncStatus:" + asyncStatus + " original startOffset:"
+-              + startOffset + " new startOffset:" + asyncWriteBackStartOffset
++          LOG.info("Another async task is already started before this one"
++              + " is finalized. fileId: " + latestAttr.getFileId()
++              + " asyncStatus: " + asyncStatus + " original startOffset: "
++              + startOffset + " new startOffset: " + asyncWriteBackStartOffset
+               + ". Won't change asyncStatus here.");
+         }
+       }
+@@ -1114,7 +1114,7 @@ private void processCommits(long offset) {
+       }
+       status = Nfs3Status.NFS3ERR_IO;
+     } catch (IOException e) {
+-      LOG.error("Got stream error during data sync:", e);
++      LOG.error("Got stream error during data sync: ", e);
+       // Do nothing. Stream will be closed eventually by StreamMonitor.
+       status = Nfs3Status.NFS3ERR_IO;
+     }
+@@ -1147,9 +1147,9 @@ private void processCommits(long offset) {
+               new VerifierNone()), commit.getXid());
+       
+       if (LOG.isDebugEnabled()) {
+-        LOG.debug("FileId: " + latestAttr.getFileId() + " Service time:"
++        LOG.debug("FileId: " + latestAttr.getFileId() + " Service time: "
+             + (Time.monotonicNow() - commit.getStartTime())
+-            + "ms. Sent response for commit:" + commit);
++            + "ms. Sent response for commit: " + commit);
+       }
+       entry = pendingCommits.firstEntry();
+     }
+@@ -1166,7 +1166,7 @@ private void doSingleWrite(final WriteCtx writeCtx) {
+     FileHandle handle = writeCtx.getHandle();
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("do write, fileId: " + handle.getFileId() + " offset: "
+-          + offset + " length:" + count + " stableHow:" + stableHow.name());
++          + offset + " length: " + count + " stableHow: " + stableHow.name());
+     }
+ 
+     try {
+@@ -1190,7 +1190,7 @@ private void doSingleWrite(final WriteCtx writeCtx) {
+             updateNonSequentialWriteInMemory(-count);
+             if (LOG.isDebugEnabled()) {
+               LOG.debug("After writing " + handle.getFileId() + " at offset "
+-                  + offset + ", updated the memory count, new value:"
++                  + offset + ", updated the memory count, new value: "
+                   + nonSequentialWriteInMemory.get());
+             }
+           }
+@@ -1199,18 +1199,18 @@ private void doSingleWrite(final WriteCtx writeCtx) {
+       
+       if (!writeCtx.getReplied()) {
+         if (stableHow != WriteStableHow.UNSTABLE) {
+-          LOG.info("Do sync for stable write:" + writeCtx);
++          LOG.info("Do sync for stable write: " + writeCtx);
+           try {
+             if (stableHow == WriteStableHow.DATA_SYNC) {
+               fos.hsync();
+             } else {
+               Preconditions.checkState(stableHow == WriteStableHow.FILE_SYNC,
+-                  "Unknown WriteStableHow:" + stableHow);
++                  "Unknown WriteStableHow: " + stableHow);
+               // Sync file data and length
+               fos.hsync(EnumSet.of(SyncFlag.UPDATE_LENGTH));
+             }
+           } catch (IOException e) {
+-            LOG.error("hsync failed with writeCtx:" + writeCtx, e);
++            LOG.error("hsync failed with writeCtx: " + writeCtx, e);
+             throw e;
+           }
+         }
+@@ -1218,8 +1218,8 @@ private void doSingleWrite(final WriteCtx writeCtx) {
+         WccAttr preOpAttr = latestAttr.getWccAttr();
+         WccData fileWcc = new WccData(preOpAttr, latestAttr);
+         if (writeCtx.getOriginalCount() != WriteCtx.INVALID_ORIGINAL_COUNT) {
+-          LOG.warn("Return original count:" + writeCtx.getOriginalCount()
+-              + " instead of real data count:" + count);
++          LOG.warn("Return original count: " + writeCtx.getOriginalCount()
++              + " instead of real data count: " + count);
+           count = writeCtx.getOriginalCount();
+         }
+         WRITE3Response response = new WRITE3Response(Nfs3Status.NFS3_OK,
+@@ -1269,8 +1269,8 @@ synchronized void cleanup() {
+         fos.close();
+       }
+     } catch (IOException e) {
+-      LOG.info("Can't close stream for fileId:" + latestAttr.getFileId()
+-          + ", error:" + e);
++      LOG.info("Can't close stream for fileId: " + latestAttr.getFileId()
++          + ", error: " + e);
+     }
+     
+     // Reply error for pending writes
+@@ -1278,7 +1278,7 @@ synchronized void cleanup() {
+     WccAttr preOpAttr = latestAttr.getWccAttr();
+     while (!pendingWrites.isEmpty()) {
+       OffsetRange key = pendingWrites.firstKey();
+-      LOG.info("Fail pending write: (" + key.getMin() + "," + key.getMax()
++      LOG.info("Fail pending write: (" + key.getMin() + ", " + key.getMax()
+           + "), nextOffset=" + nextOffset.get());
+       
+       WriteCtx writeCtx = pendingWrites.remove(key);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+index f86dbec..62c92c9 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/RpcProgramNfs3.java
+@@ -157,7 +157,6 @@
+   private final long blockSize;
+   private final int bufferSize;
+   private final boolean aixCompatMode;
+-  private Statistics statistics;
+   private String writeDumpDir; // The dir save dump files
+ 
+   private final RpcCallCache rpcCallCache;
+@@ -227,7 +226,7 @@ public void startDaemons() {
+       pauseMonitor = new JvmPauseMonitor(config);
+       pauseMonitor.start();
+     }
+-    writeManager.startAsyncDataSerivce();
++    writeManager.startAsyncDataService();
+   }
+ 
+   @Override
+@@ -319,7 +318,7 @@ GETATTR3Response getattr(XDR xdr, SecurityHandler securityHandler,
+       return response;
+     }
+     if (attrs == null) {
+-      LOG.error("Can't get path for fileId:" + handle.getFileId());
++      LOG.error("Can't get path for fileId: " + handle.getFileId());
+       response.setStatus(Nfs3Status.NFS3ERR_STALE);
+       return response;
+     }
+@@ -335,7 +334,7 @@ private void setattrInternal(DFSClient dfsClient, String fileIdPath,
+ 
+     if (setMode && updateFields.contains(SetAttrField.MODE)) {
+       if (LOG.isDebugEnabled()) {
+-        LOG.debug("set new mode:" + newAttr.getMode());
++        LOG.debug("set new mode: " + newAttr.getMode());
+       }
+       dfsClient.setPermission(fileIdPath,
+           new FsPermission((short) (newAttr.getMode())));
+@@ -355,7 +354,7 @@ private void setattrInternal(DFSClient dfsClient, String fileIdPath,
+         .getMilliSeconds() : -1;
+     if (atime != -1 || mtime != -1) {
+       if (LOG.isDebugEnabled()) {
+-        LOG.debug("set atime:" + +atime + " mtime:" + mtime);
++        LOG.debug("set atime: " + +atime + " mtime: " + mtime);
+       }
+       dfsClient.setTimes(fileIdPath, mtime, atime);
+     }
+@@ -402,7 +401,7 @@ SETATTR3Response setattr(XDR xdr, SecurityHandler securityHandler,
+     try {
+       preOpAttr = Nfs3Utils.getFileAttr(dfsClient, fileIdPath, iug);
+       if (preOpAttr == null) {
+-        LOG.info("Can't get path for fileId:" + handle.getFileId());
++        LOG.info("Can't get path for fileId: " + handle.getFileId());
+         response.setStatus(Nfs3Status.NFS3ERR_STALE);
+         return response;
+       }
+@@ -482,7 +481,7 @@ LOOKUP3Response lookup(XDR xdr, SecurityHandler securityHandler,
+           dirHandle, fileName);
+       if (postOpObjAttr == null) {
+         if (LOG.isDebugEnabled()) {
+-          LOG.debug("NFS LOOKUP fileId: " + dirHandle.getFileId() + " name:"
++          LOG.debug("NFS LOOKUP fileId: " + dirHandle.getFileId() + " name: "
+               + fileName + " does not exist");
+         }
+         Nfs3FileAttributes postOpDirAttr = Nfs3Utils.getFileAttr(dfsClient,
+@@ -494,7 +493,7 @@ LOOKUP3Response lookup(XDR xdr, SecurityHandler securityHandler,
+       Nfs3FileAttributes postOpDirAttr = Nfs3Utils.getFileAttr(dfsClient,
+           dirFileIdPath, iug);
+       if (postOpDirAttr == null) {
+-        LOG.info("Can't get path for dir fileId:" + dirHandle.getFileId());
++        LOG.info("Can't get path for dir fileId: " + dirHandle.getFileId());
+         return new LOOKUP3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+       FileHandle fileHandle = new FileHandle(postOpObjAttr.getFileId());
+@@ -549,7 +548,7 @@ ACCESS3Response access(XDR xdr, SecurityHandler securityHandler,
+       attrs = writeManager.getFileAttr(dfsClient, handle, iug);
+ 
+       if (attrs == null) {
+-        LOG.error("Can't get path for fileId:" + handle.getFileId());
++        LOG.error("Can't get path for fileId: " + handle.getFileId());
+         return new ACCESS3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+       int access = Nfs3Utils.getAccessRightsForUserGroup(
+@@ -617,15 +616,15 @@ READLINK3Response readlink(XDR xdr, SecurityHandler securityHandler,
+       Nfs3FileAttributes postOpAttr = Nfs3Utils.getFileAttr(dfsClient,
+           fileIdPath, iug);
+       if (postOpAttr == null) {
+-        LOG.info("Can't get path for fileId:" + handle.getFileId());
++        LOG.info("Can't get path for fileId: " + handle.getFileId());
+         return new READLINK3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+       if (postOpAttr.getType() != NfsFileType.NFSLNK.toValue()) {
+-        LOG.error("Not a symlink, fileId:" + handle.getFileId());
++        LOG.error("Not a symlink, fileId: " + handle.getFileId());
+         return new READLINK3Response(Nfs3Status.NFS3ERR_INVAL);
+       }
+       if (target == null) {
+-        LOG.error("Symlink target should not be null, fileId:"
++        LOG.error("Symlink target should not be null, fileId: "
+             + handle.getFileId());
+         return new READLINK3Response(Nfs3Status.NFS3ERR_SERVERFAULT);
+       }
+@@ -698,13 +697,13 @@ READ3Response read(XDR xdr, SecurityHandler securityHandler,
+             Nfs3Utils.getFileIdPath(handle), iug);
+       } catch (IOException e) {
+         if (LOG.isDebugEnabled()) {
+-          LOG.debug("Get error accessing file, fileId:" + handle.getFileId(), e);
++          LOG.debug("Get error accessing file, fileId: " + handle.getFileId(), e);
+         }
+         return new READ3Response(Nfs3Status.NFS3ERR_IO);
+       }
+       if (attrs == null) {
+         if (LOG.isDebugEnabled()) {
+-          LOG.debug("Can't get path for fileId:" + handle.getFileId());
++          LOG.debug("Can't get path for fileId: " + handle.getFileId());
+         }
+         return new READ3Response(Nfs3Status.NFS3ERR_NOENT);
+       }
+@@ -764,8 +763,9 @@ READ3Response read(XDR xdr, SecurityHandler securityHandler,
+       attrs = Nfs3Utils.getFileAttr(dfsClient, Nfs3Utils.getFileIdPath(handle),
+           iug);
+       if (readCount < count) {
+-        LOG.info("Partical read. Asked offset:" + offset + " count:" + count
+-            + " and read back:" + readCount + "file size:" + attrs.getSize());
++        LOG.info("Partical read. Asked offset: " + offset + " count: " + count
++            + " and read back: " + readCount + " file size: "
++            + attrs.getSize());
+       }
+       // HDFS returns -1 for read beyond file size.
+       if (readCount < 0) {
+@@ -824,15 +824,15 @@ WRITE3Response write(XDR xdr, Channel channel, int xid,
+     FileHandle handle = request.getHandle();
+     if (LOG.isDebugEnabled()) {
+       LOG.debug("NFS WRITE fileId: " + handle.getFileId() + " offset: "
+-          + offset + " length:" + count + " stableHow:" + stableHow.getValue()
+-          + " xid:" + xid);
++          + offset + " length: " + count + " stableHow: " + stableHow.getValue()
++          + " xid: " + xid);
+     }
+ 
+     Nfs3FileAttributes preOpAttr = null;
+     try {
+       preOpAttr = writeManager.getFileAttr(dfsClient, handle, iug);
+       if (preOpAttr == null) {
+-        LOG.error("Can't get path for fileId:" + handle.getFileId());
++        LOG.error("Can't get path for fileId: " + handle.getFileId());
+         return new WRITE3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+@@ -843,7 +843,7 @@ WRITE3Response write(XDR xdr, Channel channel, int xid,
+       }
+ 
+       if (LOG.isDebugEnabled()) {
+-        LOG.debug("requesed offset=" + offset + " and current filesize="
++        LOG.debug("requested offset=" + offset + " and current filesize="
+             + preOpAttr.getSize());
+       }
+ 
+@@ -906,7 +906,7 @@ CREATE3Response create(XDR xdr, SecurityHandler securityHandler,
+         && request.getObjAttr().getUpdateFields().contains(SetAttrField.SIZE)
+         && request.getObjAttr().getSize() != 0) {
+       LOG.error("Setting file size is not supported when creating file: "
+-          + fileName + " dir fileId:" + dirHandle.getFileId());
++          + fileName + " dir fileId: " + dirHandle.getFileId());
+       return new CREATE3Response(Nfs3Status.NFS3ERR_INVAL);
+     }
+ 
+@@ -919,7 +919,7 @@ CREATE3Response create(XDR xdr, SecurityHandler securityHandler,
+     try {
+       preOpDirAttr = Nfs3Utils.getFileAttr(dfsClient, dirFileIdPath, iug);
+       if (preOpDirAttr == null) {
+-        LOG.error("Can't get path for dirHandle:" + dirHandle);
++        LOG.error("Can't get path for dirHandle: " + dirHandle);
+         return new CREATE3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+@@ -943,7 +943,7 @@ CREATE3Response create(XDR xdr, SecurityHandler securityHandler,
+       fos = dfsClient.createWrappedOutputStream(
+           dfsClient.create(fileIdPath, permission, flag, false, replication,
+               blockSize, null, bufferSize, null),
+-          statistics);
++          null);
+ 
+       if ((createMode == Nfs3Constant.CREATE_UNCHECKED)
+           || (createMode == Nfs3Constant.CREATE_GUARDED)) {
+@@ -971,7 +971,7 @@ CREATE3Response create(XDR xdr, SecurityHandler securityHandler,
+         fos = null;
+       } else {
+         if (LOG.isDebugEnabled()) {
+-          LOG.debug("Opened stream for file:" + fileName + ", fileId:"
++          LOG.debug("Opened stream for file: " + fileName + ", fileId: "
+               + fileHandle.getFileId());
+         }
+       }
+@@ -982,7 +982,7 @@ CREATE3Response create(XDR xdr, SecurityHandler securityHandler,
+         try {
+           fos.close();
+         } catch (IOException e1) {
+-          LOG.error("Can't close stream for dirFileId:" + dirHandle.getFileId()
++          LOG.error("Can't close stream for dirFileId: " + dirHandle.getFileId()
+               + " filename: " + fileName, e1);
+         }
+       }
+@@ -991,7 +991,7 @@ CREATE3Response create(XDR xdr, SecurityHandler securityHandler,
+           dirWcc = Nfs3Utils.createWccData(Nfs3Utils.getWccAttr(preOpDirAttr),
+               dfsClient, dirFileIdPath, iug);
+         } catch (IOException e1) {
+-          LOG.error("Can't get postOpDirAttr for dirFileId:"
++          LOG.error("Can't get postOpDirAttr for dirFileId: "
+               + dirHandle.getFileId(), e1);
+         }
+       }
+@@ -1044,7 +1044,7 @@ MKDIR3Response mkdir(XDR xdr, SecurityHandler securityHandler,
+     try {
+       preOpDirAttr = Nfs3Utils.getFileAttr(dfsClient, dirFileIdPath, iug);
+       if (preOpDirAttr == null) {
+-        LOG.info("Can't get path for dir fileId:" + dirHandle.getFileId());
++        LOG.info("Can't get path for dir fileId: " + dirHandle.getFileId());
+         return new MKDIR3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+@@ -1136,7 +1136,7 @@ REMOVE3Response remove(XDR xdr, SecurityHandler securityHandler,
+     try {
+       preOpDirAttr =  Nfs3Utils.getFileAttr(dfsClient, dirFileIdPath, iug);
+       if (preOpDirAttr == null) {
+-        LOG.info("Can't get path for dir fileId:" + dirHandle.getFileId());
++        LOG.info("Can't get path for dir fileId: " + dirHandle.getFileId());
+         return new REMOVE3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+@@ -1217,7 +1217,7 @@ RMDIR3Response rmdir(XDR xdr, SecurityHandler securityHandler,
+     try {
+       preOpDirAttr = Nfs3Utils.getFileAttr(dfsClient, dirFileIdPath, iug);
+       if (preOpDirAttr == null) {
+-        LOG.info("Can't get path for dir fileId:" + dirHandle.getFileId());
++        LOG.info("Can't get path for dir fileId: " + dirHandle.getFileId());
+         return new RMDIR3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+@@ -1307,14 +1307,14 @@ RENAME3Response rename(XDR xdr, SecurityHandler securityHandler,
+     try {
+       fromPreOpAttr = Nfs3Utils.getFileAttr(dfsClient, fromDirFileIdPath, iug);
+       if (fromPreOpAttr == null) {
+-        LOG.info("Can't get path for fromHandle fileId:"
++        LOG.info("Can't get path for fromHandle fileId: "
+             + fromHandle.getFileId());
+         return new RENAME3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+       toPreOpAttr = Nfs3Utils.getFileAttr(dfsClient, toDirFileIdPath, iug);
+       if (toPreOpAttr == null) {
+-        LOG.info("Can't get path for toHandle fileId:" + toHandle.getFileId());
++        LOG.info("Can't get path for toHandle fileId: " + toHandle.getFileId());
+         return new RENAME3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+@@ -1415,7 +1415,7 @@ SYMLINK3Response symlink(XDR xdr, SecurityHandler securityHandler,
+           objAttr.getFileId()), objAttr, dirWcc);
+ 
+     } catch (IOException e) {
+-      LOG.warn("Exception:" + e);
++      LOG.warn("Exception: " + e);
+       int status = mapErrorStatus(e);
+       response.setStatus(status);
+       return response;
+@@ -1480,12 +1480,12 @@ public READDIR3Response readdir(XDR xdr, SecurityHandler securityHandler,
+     FileHandle handle = request.getHandle();
+     long cookie = request.getCookie();
+     if (cookie < 0) {
+-      LOG.error("Invalid READDIR request, with negitve cookie:" + cookie);
++      LOG.error("Invalid READDIR request, with negative cookie: " + cookie);
+       return new READDIR3Response(Nfs3Status.NFS3ERR_INVAL);
+     }
+     long count = request.getCount();
+     if (count <= 0) {
+-      LOG.info("Nonpositive count in invalid READDIR request:" + count);
++      LOG.info("Nonpositive count in invalid READDIR request: " + count);
+       return new READDIR3Response(Nfs3Status.NFS3_OK);
+     }
+ 
+@@ -1502,11 +1502,11 @@ public READDIR3Response readdir(XDR xdr, SecurityHandler securityHandler,
+       String dirFileIdPath = Nfs3Utils.getFileIdPath(handle);
+       dirStatus = dfsClient.getFileInfo(dirFileIdPath);
+       if (dirStatus == null) {
+-        LOG.info("Can't get path for fileId:" + handle.getFileId());
++        LOG.info("Can't get path for fileId: " + handle.getFileId());
+         return new READDIR3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+       if (!dirStatus.isDir()) {
+-        LOG.error("Can't readdir for regular file, fileId:"
++        LOG.error("Can't readdir for regular file, fileId: "
+             + handle.getFileId());
+         return new READDIR3Response(Nfs3Status.NFS3ERR_NOTDIR);
+       }
+@@ -1539,7 +1539,7 @@ public READDIR3Response readdir(XDR xdr, SecurityHandler securityHandler,
+ 
+         if (dotdotStatus == null) {
+           // This should not happen
+-          throw new IOException("Can't get path for handle path:"
++          throw new IOException("Can't get path for handle path: "
+               + dotdotFileIdPath);
+         }
+         dotdotFileId = dotdotStatus.getFileId();
+@@ -1557,7 +1557,7 @@ public READDIR3Response readdir(XDR xdr, SecurityHandler securityHandler,
+       dlisting = listPaths(dfsClient, dirFileIdPath, startAfter);
+       postOpAttr = Nfs3Utils.getFileAttr(dfsClient, dirFileIdPath, iug);
+       if (postOpAttr == null) {
+-        LOG.error("Can't get path for fileId:" + handle.getFileId());
++        LOG.error("Can't get path for fileId: " + handle.getFileId());
+         return new READDIR3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+     } catch (IOException e) {
+@@ -1638,17 +1638,17 @@ READDIRPLUS3Response readdirplus(XDR xdr, SecurityHandler securityHandler,
+     FileHandle handle = request.getHandle();
+     long cookie = request.getCookie();
+     if (cookie < 0) {
+-      LOG.error("Invalid READDIRPLUS request, with negitve cookie:" + cookie);
++      LOG.error("Invalid READDIRPLUS request, with negative cookie: " + cookie);
+       return new READDIRPLUS3Response(Nfs3Status.NFS3ERR_INVAL);
+     }
+     long dirCount = request.getDirCount();
+     if (dirCount <= 0) {
+-      LOG.info("Nonpositive dircount in invalid READDIRPLUS request:" + dirCount);
++      LOG.info("Nonpositive dircount in invalid READDIRPLUS request: " + dirCount);
+       return new READDIRPLUS3Response(Nfs3Status.NFS3ERR_INVAL);
+     }
+     int maxCount = request.getMaxCount();
+     if (maxCount <= 0) {
+-      LOG.info("Nonpositive maxcount in invalid READDIRPLUS request:" + maxCount);
++      LOG.info("Nonpositive maxcount in invalid READDIRPLUS request: " + maxCount);
+       return new READDIRPLUS3Response(Nfs3Status.NFS3ERR_INVAL);
+     }
+ 
+@@ -1666,11 +1666,11 @@ READDIRPLUS3Response readdirplus(XDR xdr, SecurityHandler securityHandler,
+       String dirFileIdPath = Nfs3Utils.getFileIdPath(handle);
+       dirStatus = dfsClient.getFileInfo(dirFileIdPath);
+       if (dirStatus == null) {
+-        LOG.info("Can't get path for fileId:" + handle.getFileId());
++        LOG.info("Can't get path for fileId: " + handle.getFileId());
+         return new READDIRPLUS3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+       if (!dirStatus.isDir()) {
+-        LOG.error("Can't readdirplus for regular file, fileId:"
++        LOG.error("Can't readdirplus for regular file, fileId: "
+             + handle.getFileId());
+         return new READDIRPLUS3Response(Nfs3Status.NFS3ERR_NOTDIR);
+       }
+@@ -1701,7 +1701,7 @@ READDIRPLUS3Response readdirplus(XDR xdr, SecurityHandler securityHandler,
+ 
+         if (dotdotStatus == null) {
+           // This should not happen
+-          throw new IOException("Can't get path for handle path:"
++          throw new IOException("Can't get path for handle path: "
+               + dotdotFileIdPath);
+         }
+         dotdotFileId = dotdotStatus.getFileId();
+@@ -1719,7 +1719,7 @@ READDIRPLUS3Response readdirplus(XDR xdr, SecurityHandler securityHandler,
+       dlisting = listPaths(dfsClient, dirFileIdPath, startAfter);
+       postOpDirAttr = Nfs3Utils.getFileAttr(dfsClient, dirFileIdPath, iug);
+       if (postOpDirAttr == null) {
+-        LOG.info("Can't get path for fileId:" + handle.getFileId());
++        LOG.info("Can't get path for fileId: " + handle.getFileId());
+         return new READDIRPLUS3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+     } catch (IOException e) {
+@@ -1751,7 +1751,7 @@ READDIRPLUS3Response readdirplus(XDR xdr, SecurityHandler securityHandler,
+         try {
+           attr = writeManager.getFileAttr(dfsClient, childHandle, iug);
+         } catch (IOException e) {
+-          LOG.error("Can't get file attributes for fileId:" + fileId, e);
++          LOG.error("Can't get file attributes for fileId: " + fileId, e);
+           continue;
+         }
+         entries[i] = new READDIRPLUS3Response.EntryPlus3(fileId,
+@@ -1768,7 +1768,7 @@ READDIRPLUS3Response readdirplus(XDR xdr, SecurityHandler securityHandler,
+         try {
+           attr = writeManager.getFileAttr(dfsClient, childHandle, iug);
+         } catch (IOException e) {
+-          LOG.error("Can't get file attributes for fileId:" + fileId, e);
++          LOG.error("Can't get file attributes for fileId: " + fileId, e);
+           continue;
+         }
+         entries[i] = new READDIRPLUS3Response.EntryPlus3(fileId,
+@@ -1824,7 +1824,7 @@ FSSTAT3Response fsstat(XDR xdr, SecurityHandler securityHandler,
+       Nfs3FileAttributes attrs = writeManager.getFileAttr(dfsClient, handle,
+           iug);
+       if (attrs == null) {
+-        LOG.info("Can't get path for fileId:" + handle.getFileId());
++        LOG.info("Can't get path for fileId: " + handle.getFileId());
+         return new FSSTAT3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+@@ -1904,7 +1904,7 @@ FSINFO3Response fsinfo(XDR xdr, SecurityHandler securityHandler,
+       Nfs3FileAttributes attrs = Nfs3Utils.getFileAttr(dfsClient,
+           Nfs3Utils.getFileIdPath(handle), iug);
+       if (attrs == null) {
+-        LOG.info("Can't get path for fileId:" + handle.getFileId());
++        LOG.info("Can't get path for fileId: " + handle.getFileId());
+         return new FSINFO3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+@@ -1960,7 +1960,7 @@ PATHCONF3Response pathconf(XDR xdr, SecurityHandler securityHandler,
+       attrs = Nfs3Utils.getFileAttr(dfsClient, Nfs3Utils.getFileIdPath(handle),
+           iug);
+       if (attrs == null) {
+-        LOG.info("Can't get path for fileId:" + handle.getFileId());
++        LOG.info("Can't get path for fileId: " + handle.getFileId());
+         return new PATHCONF3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+@@ -2012,7 +2012,7 @@ COMMIT3Response commit(XDR xdr, Channel channel, int xid,
+     try {
+       preOpAttr = Nfs3Utils.getFileAttr(dfsClient, fileIdPath, iug);
+       if (preOpAttr == null) {
+-        LOG.info("Can't get path for fileId:" + handle.getFileId());
++        LOG.info("Can't get path for fileId: " + handle.getFileId());
+         return new COMMIT3Response(Nfs3Status.NFS3ERR_STALE);
+       }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/WriteManager.java b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/WriteManager.java
+index e71eaa5..ca24d8a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/WriteManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs-nfs/src/main/java/org/apache/hadoop/hdfs/nfs/nfs3/WriteManager.java
+@@ -99,7 +99,7 @@ boolean addOpenFileStream(FileHandle h, OpenFileCtx ctx) {
+     this.fileContextCache = new OpenFileCtxCache(config, streamTimeout);
+   }
+ 
+-  void startAsyncDataSerivce() {
++  void startAsyncDataService() {
+     if (asyncDataServiceStarted) {
+       return;
+     }
+@@ -137,7 +137,7 @@ void handleWrite(DFSClient dfsClient, WRITE3Request request, Channel channel,
+     FileHandle fileHandle = request.getHandle();
+     OpenFileCtx openFileCtx = fileContextCache.get(fileHandle);
+     if (openFileCtx == null) {
+-      LOG.info("No opened stream for fileId:" + fileHandle.getFileId());
++      LOG.info("No opened stream for fileId: " + fileHandle.getFileId());
+ 
+       String fileIdPath = Nfs3Utils.getFileIdPath(fileHandle.getFileId());
+       HdfsDataOutputStream fos = null;
+@@ -153,14 +153,14 @@ void handleWrite(DFSClient dfsClient, WRITE3Request request, Channel channel,
+       } catch (RemoteException e) {
+         IOException io = e.unwrapRemoteException();
+         if (io instanceof AlreadyBeingCreatedException) {
+-          LOG.warn("Can't append file:" + fileIdPath
+-              + ". Possibly the file is being closed. Drop the request:"
++          LOG.warn("Can't append file: " + fileIdPath
++              + ". Possibly the file is being closed. Drop the request: "
+               + request + ", wait for the client to retry...");
+           return;
+         }
+         throw e;
+       } catch (IOException e) {
+-        LOG.error("Can't apapend to file:" + fileIdPath, e);
++        LOG.error("Can't append to file: " + fileIdPath, e);
+         if (fos != null) {
+           fos.close();
+         }
+@@ -185,7 +185,7 @@ void handleWrite(DFSClient dfsClient, WRITE3Request request, Channel channel,
+         try {
+           fos.close();
+         } catch (IOException e) {
+-          LOG.error("Can't close stream for fileId:" + handle.getFileId(), e);
++          LOG.error("Can't close stream for fileId: " + handle.getFileId(), e);
+         }
+         // Notify client to retry
+         WccData fileWcc = new WccData(latestAttr.getWccAttr(), latestAttr);
+@@ -198,7 +198,7 @@ void handleWrite(DFSClient dfsClient, WRITE3Request request, Channel channel,
+       }
+ 
+       if (LOG.isDebugEnabled()) {
+-        LOG.debug("Opened stream for appending file:" + fileHandle.getFileId());
++        LOG.debug("Opened stream for appending file: " + fileHandle.getFileId());
+       }
+     }
+ 
+@@ -217,7 +217,7 @@ int commitBeforeRead(DFSClient dfsClient, FileHandle fileHandle,
+ 
+     if (openFileCtx == null) {
+       if (LOG.isDebugEnabled()) {
+-        LOG.debug("No opened stream for fileId:" + fileHandle.getFileId()
++        LOG.debug("No opened stream for fileId: " + fileHandle.getFileId()
+             + " commitOffset=" + commitOffset
+             + ". Return success in this case.");
+       }
+@@ -250,8 +250,8 @@ int commitBeforeRead(DFSClient dfsClient, FileHandle fileHandle,
+         status = Nfs3Status.NFS3_OK;
+         break;
+       default:
+-        LOG.error("Should not get commit return code:" + ret.name());
+-        throw new RuntimeException("Should not get commit return code:"
++        LOG.error("Should not get commit return code: " + ret.name());
++        throw new RuntimeException("Should not get commit return code: "
+             + ret.name());
+       }
+     }
+@@ -264,7 +264,7 @@ void handleCommit(DFSClient dfsClient, FileHandle fileHandle,
+     OpenFileCtx openFileCtx = fileContextCache.get(fileHandle);
+ 
+     if (openFileCtx == null) {
+-      LOG.info("No opened stream for fileId:" + fileHandle.getFileId()
++      LOG.info("No opened stream for fileId: " + fileHandle.getFileId()
+           + " commitOffset=" + commitOffset + ". Return success in this case.");
+       status = Nfs3Status.NFS3_OK;
+       
+@@ -290,8 +290,8 @@ void handleCommit(DFSClient dfsClient, FileHandle fileHandle,
+         status = Nfs3Status.NFS3_OK;
+         break;
+       default:
+-        LOG.error("Should not get commit return code:" + ret.name());
+-        throw new RuntimeException("Should not get commit return code:"
++        LOG.error("Should not get commit return code: " + ret.name());
++        throw new RuntimeException("Should not get commit return code: "
+             + ret.name());
+       }
+     }
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
+index 92dbc8e..e6cc43c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSOutputStream.java
+@@ -346,9 +346,9 @@ private boolean isHeartbeatPacket() {
+     
+     @Override
+     public String toString() {
+-      return "packet seqno:" + this.seqno +
+-      " offsetInBlock:" + this.offsetInBlock + 
+-      " lastPacketInBlock:" + this.lastPacketInBlock +
++      return "packet seqno: " + this.seqno +
++      " offsetInBlock: " + this.offsetInBlock +
++      " lastPacketInBlock: " + this.lastPacketInBlock +
+       " lastByteOffsetInBlock: " + this.getLastByteOffsetBlock();
+     }
+   }
+@@ -1995,7 +1995,7 @@ private void flushOrSync(boolean isSync, EnumSet<SyncFlag> syncFlags)
+ 
+         if (DFSClient.LOG.isDebugEnabled()) {
+           DFSClient.LOG.debug(
+-            "DFSClient flush() :" +
++            "DFSClient flush(): " +
+             " bytesCurBlock " + bytesCurBlock +
+             " lastFlushOffset " + lastFlushOffset);
+         }
+@@ -2078,7 +2078,7 @@ private void flushOrSync(boolean isSync, EnumSet<SyncFlag> syncFlags)
+       DFSClient.LOG.warn("Error while syncing", e);
+       synchronized (this) {
+         if (!closed) {
+-          lastException.set(new IOException("IOException flush:" + e));
++          lastException.set(new IOException("IOException flush: " + e));
+           closeThreads(true);
+         }
+       }
+-- 
+1.7.9.5
+

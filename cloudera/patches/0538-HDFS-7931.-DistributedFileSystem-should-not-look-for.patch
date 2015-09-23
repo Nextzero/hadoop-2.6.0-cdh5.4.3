@@ -1,0 +1,48 @@
+From 90675b5e8d83cb9a212b294ba6e36abf73c5aea4 Mon Sep 17 00:00:00 2001
+From: Arun Suresh <asuresh@apache.org>
+Date: Fri, 10 Apr 2015 11:40:25 -0700
+Subject: [PATCH 538/596] HDFS-7931. DistributedFileSystem should not look for
+ keyProvider in cache if Encryption is disabled
+ (asuresh)
+
+(cherry picked from commit 7660da95cb67cbfe034aa8fa2a5bf0f8c9fdf41a)
+(cherry picked from commit 3d17c5017604d59b029278a920da3e4606ac3f51)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../java/org/apache/hadoop/hdfs/DFSClient.java     |    4 ++++
+ .../apache/hadoop/hdfs/DistributedFileSystem.java  |    2 +-
+ 2 files changed, 5 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java
+index d110748..4cbc3ba 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DFSClient.java
+@@ -3192,6 +3192,10 @@ public void setKeyProvider(KeyProvider provider) {
+     }
+   }
+ 
++  public boolean isHDFSEncryptionEnabled() {
++    return conf.get(
++        DFSConfigKeys.DFS_ENCRYPTION_KEY_PROVIDER_URI, null) != null;
++  }
+   /**
+    * Returns the SaslDataTransferClient configured for this DFSClient.
+    *
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DistributedFileSystem.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DistributedFileSystem.java
+index 067adce..673db89 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DistributedFileSystem.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/DistributedFileSystem.java
+@@ -2049,7 +2049,7 @@ public Void next(final FileSystem fs, final Path p)
+   public Token<?>[] addDelegationTokens(
+       final String renewer, Credentials credentials) throws IOException {
+     Token<?>[] tokens = super.addDelegationTokens(renewer, credentials);
+-    if (dfs.getKeyProvider() != null) {
++    if (dfs.isHDFSEncryptionEnabled()) {
+       KeyProviderDelegationTokenExtension keyProviderDelegationTokenExtension =
+           KeyProviderDelegationTokenExtension.
+               createKeyProviderDelegationTokenExtension(dfs.getKeyProvider());
+-- 
+1.7.9.5
+

@@ -1,0 +1,245 @@
+From 5711692b8ebb15c1a13ee8a203c937d8af2ed34f Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Thu, 12 Mar 2015 12:00:18 -0700
+Subject: [PATCH 578/596] HDFS-7722. DataNode#checkDiskError should also
+ remove Storage when error is found. (Lei Xu via
+ Colin P. McCabe)
+
+(cherry picked from commit b49c3a1813aa8c5b05fe6c02a653286c573137ca)
+(cherry picked from commit 7455412a241486a86ad4232f2eaa666c6454329e)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
+	hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeHotSwapVolumes.java
+---
+ .../hadoop/hdfs/server/datanode/DataNode.java      |    1 +
+ .../datanode/fsdataset/impl/FsVolumeList.java      |   14 +++-
+ .../server/datanode/TestDataNodeVolumeFailure.java |   70 ++++++++++++++++++++
+ .../TestDataNodeVolumeFailureReporting.java        |   36 +++++-----
+ 4 files changed, 101 insertions(+), 20 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+index a19a012..0000c9e 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/DataNode.java
+@@ -699,6 +699,7 @@ private synchronized void removeVolumes(
+     }
+   }
+ 
++
+   private synchronized void setClusterId(final String nsCid, final String bpid
+       ) throws IOException {
+     if(clusterId != null && !clusterId.equals(nsCid)) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
+index 67a7c6f..681265c 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/datanode/fsdataset/impl/FsVolumeList.java
+@@ -30,6 +30,7 @@
+ import java.util.Set;
+ import java.util.Map;
+ import java.util.TreeMap;
++import java.util.Set;
+ import java.util.concurrent.atomic.AtomicReference;
+ 
+ import com.google.common.collect.Lists;
+@@ -243,8 +244,8 @@ public void run() {
+             failedVols = new HashSet<>(1);
+           }
+           failedVols.add(new File(fsv.getBasePath()).getAbsoluteFile());
+-          removeVolume(fsv);
+           addVolumeFailureInfo(fsv);
++          removeVolume(fsv);
+         } catch (ClosedChannelException e) {
+           FsDatasetImpl.LOG.debug("Caught exception when obtaining " +
+             "reference count on closed volume", e);
+@@ -291,6 +292,9 @@ void addVolume(FsVolumeReference ref) {
+     if (blockScanner != null) {
+       blockScanner.addVolumeScanner(ref);
+     }
++    // If the volume is used to replace a failed volume, it needs to reset the
++    // volume failure info for this volume.
++    removeVolumeFailureInfo(new File(ref.getVolume().getBasePath()));
+     FsDatasetImpl.LOG.info("Added new volume: " +
+         ref.getVolume().getStorageID());
+   }
+@@ -354,7 +358,9 @@ void removeVolume(File volume, boolean clearFailure) {
+         removeVolume(fsVolume);
+       }
+     }
+-    removeVolumeFailureInfo(volume);
++    if (clearFailure) {
++      removeVolumeFailureInfo(volume);
++    }
+   }
+ 
+   VolumeFailureInfo[] getVolumeFailureInfos() {
+@@ -368,7 +374,9 @@ void addVolumeFailureInfo(VolumeFailureInfo volumeFailureInfo) {
+   }
+ 
+   private void addVolumeFailureInfo(FsVolumeImpl vol) {
+-    addVolumeFailureInfo(new VolumeFailureInfo(vol.getBasePath(), Time.now(),
++    addVolumeFailureInfo(new VolumeFailureInfo(
++        new File(vol.getBasePath()).getAbsolutePath(),
++        Time.now(),
+         vol.getCapacity()));
+   }
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailure.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailure.java
+index 8256ccd..ec8463d 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailure.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailure.java
+@@ -18,6 +18,8 @@
+ package org.apache.hadoop.hdfs.server.datanode;
+ 
+ import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertNotEquals;
+ import static org.junit.Assert.assertNotNull;
+ import static org.junit.Assert.assertTrue;
+ import static org.junit.Assume.assumeTrue;
+@@ -31,6 +33,7 @@
+ import java.util.HashMap;
+ import java.util.List;
+ import java.util.Map;
++import java.util.concurrent.TimeoutException;
+ 
+ import org.apache.hadoop.conf.Configuration;
+ import org.apache.hadoop.fs.FileSystem;
+@@ -57,6 +60,10 @@
+ import org.apache.hadoop.hdfs.server.blockmanagement.BlockManager;
+ import org.apache.hadoop.hdfs.server.blockmanagement.BlockManagerTestUtil;
+ import org.apache.hadoop.hdfs.server.common.HdfsServerConstants;
++import org.apache.hadoop.hdfs.server.common.Storage;
++import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsDatasetSpi;
++import org.apache.hadoop.hdfs.server.datanode.fsdataset.FsVolumeSpi;
++import org.apache.hadoop.hdfs.server.datanode.fsdataset.impl.FsDatasetTestUtil;
+ import org.apache.hadoop.hdfs.server.namenode.FSNamesystem;
+ import org.apache.hadoop.hdfs.server.protocol.BlockReportContext;
+ import org.apache.hadoop.hdfs.server.protocol.DatanodeRegistration;
+@@ -202,6 +209,69 @@ public void testVolumeFailure() throws Exception {
+   }
+ 
+   /**
++   * Test that DataStorage and BlockPoolSliceStorage remove the failed volume
++   * after failure.
++   */
++  @Test(timeout=150000)
++  public void testFailedVolumeBeingRemovedFromDataNode()
++      throws InterruptedException, IOException, TimeoutException {
++    Path file1 = new Path("/test1");
++    DFSTestUtil.createFile(fs, file1, 1024, (short) 2, 1L);
++    DFSTestUtil.waitReplication(fs, file1, (short) 2);
++
++    File dn0Vol1 = new File(dataDir, "data" + (2 * 0 + 1));
++    assertTrue(FileUtil.setExecutable(dn0Vol1, false));
++    DataNode dn0 = cluster.getDataNodes().get(0);
++    long lastDiskErrorCheck = dn0.getLastDiskErrorCheck();
++    dn0.checkDiskErrorAsync();
++    // Wait checkDiskError thread finish to discover volume failure.
++    while (dn0.getLastDiskErrorCheck() == lastDiskErrorCheck) {
++      Thread.sleep(100);
++    }
++
++    // Verify dn0Vol1 has been completely removed from DN0.
++    // 1. dn0Vol1 is removed from DataStorage.
++    DataStorage storage = dn0.getStorage();
++    assertEquals(1, storage.getNumStorageDirs());
++    for (int i = 0; i < storage.getNumStorageDirs(); i++) {
++      Storage.StorageDirectory sd = storage.getStorageDir(i);
++      assertFalse(sd.getRoot().getAbsolutePath().startsWith(
++          dn0Vol1.getAbsolutePath()
++      ));
++    }
++    final String bpid = cluster.getNamesystem().getBlockPoolId();
++    BlockPoolSliceStorage bpsStorage = storage.getBPStorage(bpid);
++    assertEquals(1, bpsStorage.getNumStorageDirs());
++    for (int i = 0; i < bpsStorage.getNumStorageDirs(); i++) {
++      Storage.StorageDirectory sd = bpsStorage.getStorageDir(i);
++      assertFalse(sd.getRoot().getAbsolutePath().startsWith(
++          dn0Vol1.getAbsolutePath()
++      ));
++    }
++
++    // 2. dn0Vol1 is removed from FsDataset
++    FsDatasetSpi<? extends FsVolumeSpi> data = dn0.getFSDataset();
++    for (FsVolumeSpi volume : data.getVolumes()) {
++      assertNotEquals(new File(volume.getBasePath()).getAbsoluteFile(),
++          dn0Vol1.getAbsoluteFile());
++    }
++
++    // 3. all blocks on dn0Vol1 have been removed.
++    for (ReplicaInfo replica : FsDatasetTestUtil.getReplicas(data, bpid)) {
++      assertNotNull(replica.getVolume());
++      assertNotEquals(
++          new File(replica.getVolume().getBasePath()).getAbsoluteFile(),
++          dn0Vol1.getAbsoluteFile());
++    }
++
++    // 4. dn0Vol1 is not in DN0's configuration and dataDirs anymore.
++    String[] dataDirStrs =
++        dn0.getConf().get(DFSConfigKeys.DFS_DATANODE_DATA_DIR_KEY).split(",");
++    assertEquals(1, dataDirStrs.length);
++    assertFalse(dataDirStrs[0].contains(dn0Vol1.getAbsolutePath()));
++  }
++
++  /**
+    * Test that there are under replication blocks after vol failures
+    */
+   @Test
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailureReporting.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailureReporting.java
+index a8f7990..788ddb3 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailureReporting.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/datanode/TestDataNodeVolumeFailureReporting.java
+@@ -403,23 +403,6 @@ public void testDataNodeReconfigureWithVolumeFailures() throws Exception {
+     checkFailuresAtNameNode(dm, dns.get(0), true, dn1Vol1.getAbsolutePath());
+     checkFailuresAtNameNode(dm, dns.get(1), true, dn2Vol1.getAbsolutePath());
+ 
+-    // Reconfigure each DataNode to remove its failed volumes.
+-    reconfigureDataNode(dns.get(0), dn1Vol2);
+-    reconfigureDataNode(dns.get(1), dn2Vol2);
+-
+-    DataNodeTestUtils.triggerHeartbeat(dns.get(0));
+-    DataNodeTestUtils.triggerHeartbeat(dns.get(1));
+-
+-    checkFailuresAtDataNode(dns.get(0), 1, true);
+-    checkFailuresAtDataNode(dns.get(1), 1, true);
+-
+-    // NN sees reduced capacity, but no volume failures.
+-    DFSTestUtil.waitForDatanodeStatus(dm, 3, 0, 0,
+-        origCapacity - (1*dnCapacity), WAIT_FOR_HEARTBEATS);
+-    checkAggregateFailuresAtNameNode(true, 0);
+-    checkFailuresAtNameNode(dm, dns.get(0), true);
+-    checkFailuresAtNameNode(dm, dns.get(1), true);
+-
+     // Reconfigure again to try to add back the failed volumes.
+     reconfigureDataNode(dns.get(0), dn1Vol1, dn1Vol2);
+     reconfigureDataNode(dns.get(1), dn2Vol1, dn2Vol2);
+@@ -460,6 +443,25 @@ public void testDataNodeReconfigureWithVolumeFailures() throws Exception {
+     checkAggregateFailuresAtNameNode(false, 2);
+     checkFailuresAtNameNode(dm, dns.get(0), false, dn1Vol1.getAbsolutePath());
+     checkFailuresAtNameNode(dm, dns.get(1), false, dn2Vol1.getAbsolutePath());
++
++    // Replace failed volume with healthy volume and run reconfigure DataNode.
++    // The failed volume information should be cleared.
++    assertTrue("Couldn't chmod local vol", FileUtil.setExecutable(dn1Vol1, true));
++    assertTrue("Couldn't chmod local vol", FileUtil.setExecutable(dn2Vol1, true));
++    reconfigureDataNode(dns.get(0), dn1Vol1, dn1Vol2);
++    reconfigureDataNode(dns.get(1), dn2Vol1, dn2Vol2);
++
++    DataNodeTestUtils.triggerHeartbeat(dns.get(0));
++    DataNodeTestUtils.triggerHeartbeat(dns.get(1));
++
++    checkFailuresAtDataNode(dns.get(0), 1, true);
++    checkFailuresAtDataNode(dns.get(1), 1, true);
++
++    DFSTestUtil.waitForDatanodeStatus(dm, 3, 0, 0,
++        origCapacity, WAIT_FOR_HEARTBEATS);
++    checkAggregateFailuresAtNameNode(true, 0);
++    checkFailuresAtNameNode(dm, dns.get(0), true);
++    checkFailuresAtNameNode(dm, dns.get(1), true);
+   }
+ 
+   /**
+-- 
+1.7.9.5
+

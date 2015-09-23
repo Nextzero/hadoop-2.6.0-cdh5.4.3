@@ -1,0 +1,51 @@
+From 51a5ea0f0ff3181ba0ef7dbcf6712449230d2857 Mon Sep 17 00:00:00 2001
+From: Arun Suresh <asuresh@apache.org>
+Date: Thu, 30 Apr 2015 13:59:43 -0700
+Subject: [PATCH 553/596] HADOOP-11891. OsSecureRandom should lazily fill its
+ reservoir (asuresh)
+
+(cherry picked from commit f0db797be28ca221d540c6a3accd6bff9a7996fa)
+---
+ .../hadoop/crypto/random/OsSecureRandom.java       |   19 ++++---------------
+ 1 file changed, 4 insertions(+), 15 deletions(-)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/random/OsSecureRandom.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/random/OsSecureRandom.java
+index fee4186..2010e6d 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/random/OsSecureRandom.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/crypto/random/OsSecureRandom.java
+@@ -58,6 +58,9 @@
+   private void fillReservoir(int min) {
+     if (pos >= reservoir.length - min) {
+       try {
++        if (stream == null) {
++          stream = new FileInputStream(new File(randomDevPath));
++        }
+         IOUtils.readFully(stream, reservoir, 0, reservoir.length);
+       } catch (IOException e) {
+         throw new RuntimeException("failed to fill reservoir", e);
+@@ -75,21 +78,7 @@ synchronized public void setConf(Configuration conf) {
+     this.randomDevPath = conf.get(
+         HADOOP_SECURITY_SECURE_RANDOM_DEVICE_FILE_PATH_KEY,
+         HADOOP_SECURITY_SECURE_RANDOM_DEVICE_FILE_PATH_DEFAULT);
+-    File randomDevFile = new File(randomDevPath);
+-
+-    try {
+-      close();
+-      this.stream = new FileInputStream(randomDevFile);
+-    } catch (IOException e) {
+-      throw new RuntimeException(e);
+-    }
+-
+-    try {
+-      fillReservoir(0);
+-    } catch (RuntimeException e) {
+-      close();
+-      throw e;
+-    }
++    close();
+   }
+ 
+   @Override
+-- 
+1.7.9.5
+

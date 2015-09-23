@@ -1,0 +1,31 @@
+From af0538c494da8384306e6407e5a61c1142b04e8d Mon Sep 17 00:00:00 2001
+From: junping_du <junping_du@apache.org>
+Date: Thu, 2 Oct 2014 08:02:59 -0700
+Subject: [PATCH 355/596] YARN-1979. TestDirectoryCollection fails when the
+ umask is unusual. (Contributed by Vinod Kumar
+ Vavilapalli and Tsuyoshi OZAWA)
+
+(cherry picked from commit c7cee9b4551918d5d35bf4e9dc73982a050c73ba)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+	hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/TestDirectoryCollection.java
+---
+ .../nodemanager/TestDirectoryCollection.java       |    1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/TestDirectoryCollection.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/TestDirectoryCollection.java
+index e435375..0dfc54e 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/TestDirectoryCollection.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/test/java/org/apache/hadoop/yarn/server/nodemanager/TestDirectoryCollection.java
+@@ -34,7 +34,6 @@
+ import org.junit.After;
+ import org.junit.Assert;
+ import org.junit.Before;
+-import org.junit.BeforeClass;
+ import org.junit.Before;
+ import org.junit.Test;
+ 
+-- 
+1.7.9.5
+

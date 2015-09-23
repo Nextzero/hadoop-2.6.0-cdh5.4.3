@@ -1,0 +1,209 @@
+From d5c48aababe994a1d0be7d23f3b2566872db7eb3 Mon Sep 17 00:00:00 2001
+From: Haohui Mai <wheat9@apache.org>
+Date: Wed, 5 Nov 2014 17:50:01 -0800
+Subject: [PATCH 415/596] HDFS-7366. BlockInfo should take replication as an
+ short in the constructor. Contributed by Li Lu.
+
+(cherry picked from commit 0f9d0d9d8f3f91af7406168f241f9233b3f3c647)
+---
+ .../hdfs/server/blockmanagement/BlockInfo.java     |    4 ++--
+ .../BlockInfoUnderConstruction.java                |    4 ++--
+ .../hdfs/server/blockmanagement/BlockManager.java  |    2 +-
+ .../hdfs/server/blockmanagement/TestBlockInfo.java |    6 +++---
+ .../TestBlockInfoUnderConstruction.java            |    2 +-
+ .../server/blockmanagement/TestBlockManager.java   |    2 +-
+ .../blockmanagement/TestDatanodeDescriptor.java    |    4 ++--
+ .../blockmanagement/TestHeartbeatHandling.java     |    6 +++---
+ .../namenode/TestCommitBlockSynchronization.java   |    6 +++---
+ 9 files changed, 18 insertions(+), 18 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfo.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfo.java
+index a89db99..00ae5c1 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfo.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfo.java
+@@ -59,12 +59,12 @@
+    * Construct an entry for blocksmap
+    * @param replication the block's replication factor
+    */
+-  public BlockInfo(int replication) {
++  public BlockInfo(short replication) {
+     this.triplets = new Object[3*replication];
+     this.bc = null;
+   }
+   
+-  public BlockInfo(Block blk, int replication) {
++  public BlockInfo(Block blk, short replication) {
+     super(blk);
+     this.triplets = new Object[3*replication];
+     this.bc = null;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfoUnderConstruction.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfoUnderConstruction.java
+index dd3593f..5513322 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfoUnderConstruction.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockInfoUnderConstruction.java
+@@ -153,14 +153,14 @@ public void appendStringTo(StringBuilder sb) {
+    * Create block and set its state to
+    * {@link BlockUCState#UNDER_CONSTRUCTION}.
+    */
+-  public BlockInfoUnderConstruction(Block blk, int replication) {
++  public BlockInfoUnderConstruction(Block blk, short replication) {
+     this(blk, replication, BlockUCState.UNDER_CONSTRUCTION, null);
+   }
+ 
+   /**
+    * Create a block that is currently being constructed.
+    */
+-  public BlockInfoUnderConstruction(Block blk, int replication,
++  public BlockInfoUnderConstruction(Block blk, short replication,
+                              BlockUCState state,
+                              DatanodeStorageInfo[] targets) {
+     super(blk, replication);
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+index 2cf4854..3129dd0 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/blockmanagement/BlockManager.java
+@@ -2030,7 +2030,7 @@ private void reportDiff(DatanodeStorageInfo storageInfo,
+ 
+     // place a delimiter in the list which separates blocks 
+     // that have been reported from those that have not
+-    BlockInfo delimiter = new BlockInfo(new Block(), 1);
++    BlockInfo delimiter = new BlockInfo(new Block(), (short) 1);
+     boolean added = storageInfo.addBlock(delimiter);
+     assert added : "Delimiting block cannot be present in the node";
+     int headIndex = 0; //currently the delimiter is in the head of the list
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockInfo.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockInfo.java
+index 61094df..f8c583a 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockInfo.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockInfo.java
+@@ -48,7 +48,7 @@
+ 
+   @Test
+   public void testAddStorage() throws Exception {
+-    BlockInfo blockInfo = new BlockInfo(3);
++    BlockInfo blockInfo = new BlockInfo((short) 3);
+ 
+     final DatanodeStorageInfo storage = DFSTestUtil.createDatanodeStorageInfo("storageID", "127.0.0.1");
+ 
+@@ -70,7 +70,7 @@ public void testReplaceStorage() throws Exception {
+ 
+     // Create a few dummy blocks and add them to the first storage.
+     for (int i = 0; i < NUM_BLOCKS; ++i) {
+-      blockInfos[i] = new BlockInfo(3);
++      blockInfos[i] = new BlockInfo((short) 3);
+       storage1.addBlock(blockInfos[i]);
+     }
+ 
+@@ -95,7 +95,7 @@ public void testBlockListMoveToHead() throws Exception {
+     LOG.info("Building block list...");
+     for (int i = 0; i < MAX_BLOCKS; i++) {
+       blockList.add(new Block(i, 0, GenerationStamp.LAST_RESERVED_STAMP));
+-      blockInfoList.add(new BlockInfo(blockList.get(i), 3));
++      blockInfoList.add(new BlockInfo(blockList.get(i), (short) 3));
+       dd.addBlock(blockInfoList.get(i));
+ 
+       // index of the datanode should be 0
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockInfoUnderConstruction.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockInfoUnderConstruction.java
+index 703d344..4c36448 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockInfoUnderConstruction.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockInfoUnderConstruction.java
+@@ -41,7 +41,7 @@ public void testInitializeBlockRecovery() throws Exception {
+     dd1.isAlive = dd2.isAlive = dd3.isAlive = true;
+     BlockInfoUnderConstruction blockInfo = new BlockInfoUnderConstruction(
+         new Block(0, 0, GenerationStamp.LAST_RESERVED_STAMP),
+-        3,
++        (short) 3,
+         BlockUCState.UNDER_CONSTRUCTION,
+         new DatanodeStorageInfo[] {s1, s2, s3});
+ 
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockManager.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockManager.java
+index b444ccc..14f2b59 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockManager.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestBlockManager.java
+@@ -385,7 +385,7 @@ private void fulfillPipeline(BlockInfo blockInfo,
+ 
+   private BlockInfo blockOnNodes(long blkId, List<DatanodeDescriptor> nodes) {
+     Block block = new Block(blkId);
+-    BlockInfo blockInfo = new BlockInfo(block, 3);
++    BlockInfo blockInfo = new BlockInfo(block, (short) 3);
+ 
+     for (DatanodeDescriptor dn : nodes) {
+       for (DatanodeStorageInfo storage : dn.getStorageInfos()) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestDatanodeDescriptor.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestDatanodeDescriptor.java
+index 2d7eaf3..e00a4c3 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestDatanodeDescriptor.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestDatanodeDescriptor.java
+@@ -57,8 +57,8 @@ public void testGetInvalidateBlocks() throws Exception {
+   public void testBlocksCounter() throws Exception {
+     DatanodeDescriptor dd = BlockManagerTestUtil.getLocalDatanodeDescriptor(true);
+     assertEquals(0, dd.numBlocks());
+-    BlockInfo blk = new BlockInfo(new Block(1L), 1);
+-    BlockInfo blk1 = new BlockInfo(new Block(2L), 2);
++    BlockInfo blk = new BlockInfo(new Block(1L), (short) 1);
++    BlockInfo blk1 = new BlockInfo(new Block(2L), (short) 2);
+     DatanodeStorageInfo[] storages = dd.getStorageInfos();
+     assertTrue(storages.length > 0);
+     final String storageID = storages[0].getStorageID();
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestHeartbeatHandling.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestHeartbeatHandling.java
+index 510f159..988a0ed 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestHeartbeatHandling.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/blockmanagement/TestHeartbeatHandling.java
+@@ -172,7 +172,7 @@ public void testHeartbeatBlockRecovery() throws Exception {
+               dd2.getStorageInfos()[0],
+               dd3.getStorageInfos()[0]};
+           BlockInfoUnderConstruction blockInfo = new BlockInfoUnderConstruction(
+-              new Block(0, 0, GenerationStamp.LAST_RESERVED_STAMP), 3,
++              new Block(0, 0, GenerationStamp.LAST_RESERVED_STAMP), (short) 3,
+               BlockUCState.UNDER_RECOVERY, storages);
+           dd1.addBlockToBeRecovered(blockInfo);
+           DatanodeCommand[] cmds =
+@@ -194,7 +194,7 @@ public void testHeartbeatBlockRecovery() throws Exception {
+           dd2.setLastUpdate(System.currentTimeMillis() - 40 * 1000);
+           dd3.setLastUpdate(System.currentTimeMillis());
+           blockInfo = new BlockInfoUnderConstruction(
+-              new Block(0, 0, GenerationStamp.LAST_RESERVED_STAMP), 3,
++              new Block(0, 0, GenerationStamp.LAST_RESERVED_STAMP), (short) 3,
+               BlockUCState.UNDER_RECOVERY, storages);
+           dd1.addBlockToBeRecovered(blockInfo);
+           cmds = NameNodeAdapter.sendHeartBeat(nodeReg1, dd1, namesystem).getCommands();
+@@ -215,7 +215,7 @@ public void testHeartbeatBlockRecovery() throws Exception {
+           dd2.setLastUpdate(System.currentTimeMillis() - 40 * 1000);
+           dd3.setLastUpdate(System.currentTimeMillis() - 80 * 1000);
+           blockInfo = new BlockInfoUnderConstruction(
+-              new Block(0, 0, GenerationStamp.LAST_RESERVED_STAMP), 3,
++              new Block(0, 0, GenerationStamp.LAST_RESERVED_STAMP), (short) 3,
+               BlockUCState.UNDER_RECOVERY, storages);
+           dd1.addBlockToBeRecovered(blockInfo);
+           cmds = NameNodeAdapter.sendHeartBeat(nodeReg1, dd1, namesystem).getCommands();
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestCommitBlockSynchronization.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestCommitBlockSynchronization.java
+index 816c7c8..365520d 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestCommitBlockSynchronization.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestCommitBlockSynchronization.java
+@@ -65,7 +65,7 @@ private FSNamesystem makeNameSystemSpy(Block block, INodeFile file)
+ 
+     FSNamesystem namesystemSpy = spy(namesystem);
+     BlockInfoUnderConstruction blockInfo = new BlockInfoUnderConstruction(
+-        block, 1, HdfsServerConstants.BlockUCState.UNDER_CONSTRUCTION, targets);
++        block, (short) 1, HdfsServerConstants.BlockUCState.UNDER_CONSTRUCTION, targets);
+     blockInfo.setBlockCollection(file);
+     blockInfo.setGenerationStamp(genStamp);
+     blockInfo.initializeBlockRecovery(genStamp);
+@@ -102,7 +102,7 @@ public void testCommitBlockSynchronization() throws IOException {
+         lastBlock, genStamp, length, false, false, newTargets, null);
+ 
+     // Simulate 'completing' the block.
+-    BlockInfo completedBlockInfo = new BlockInfo(block, 1);
++    BlockInfo completedBlockInfo = new BlockInfo(block, (short) 1);
+     completedBlockInfo.setBlockCollection(file);
+     completedBlockInfo.setGenerationStamp(genStamp);
+     doReturn(completedBlockInfo).when(namesystemSpy)
+@@ -173,7 +173,7 @@ public void testCommitBlockSynchronizationWithClose() throws IOException {
+     namesystemSpy.commitBlockSynchronization(
+         lastBlock, genStamp, length, true, false, newTargets, null);
+ 
+-    BlockInfo completedBlockInfo = new BlockInfo(block, 1);
++    BlockInfo completedBlockInfo = new BlockInfo(block, (short) 1);
+     completedBlockInfo.setBlockCollection(file);
+     completedBlockInfo.setGenerationStamp(genStamp);
+     doReturn(completedBlockInfo).when(namesystemSpy)
+-- 
+1.7.9.5
+

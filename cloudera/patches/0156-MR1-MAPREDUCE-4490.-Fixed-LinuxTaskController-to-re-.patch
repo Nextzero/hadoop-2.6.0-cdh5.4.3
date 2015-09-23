@@ -1,0 +1,164 @@
+From 0e5971e56b4d9d0938573fafd550af193addb9df Mon Sep 17 00:00:00 2001
+From: Eric Yang <eyang@apache.org>
+Date: Fri, 13 Jun 2014 21:36:15 +0000
+Subject: [PATCH 156/596] MR1: MAPREDUCE-4490. Fixed LinuxTaskController to
+ re-initialize user log directory when JVM reuse
+ option is enabled.  (Sam Liu via eyang)
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-1@1602528 13f79535-47bb-0310-9956-ffa450edef68
+
+(cherry picked from 484c4fd41398b3a9110fb1e2f0744799ab19933d)
+
+(cherry picked from commit c963206070b212e7270b8551e3851ee341afda94)
+---
+ .../src/c++/task-controller/impl/main.c            |   11 ++++++++++
+ .../src/c++/task-controller/impl/task-controller.c |   10 ++++++---
+ .../src/c++/task-controller/impl/task-controller.h |    9 +++++++-
+ .../apache/hadoop/mapred/LinuxTaskController.java  |   22 +++++++++++++++++++-
+ 4 files changed, 47 insertions(+), 5 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/c++/task-controller/impl/main.c b/hadoop-mapreduce1-project/src/c++/task-controller/impl/main.c
+index 75b1b25..10f37cc 100644
+--- a/hadoop-mapreduce1-project/src/c++/task-controller/impl/main.c
++++ b/hadoop-mapreduce1-project/src/c++/task-controller/impl/main.c
+@@ -52,6 +52,8 @@ void display_usage(FILE *stream) {
+ 	  DELETE_LOG_AS_USER);
+   fprintf(stream, "   run command as user:  %2d cmd args\n",
+ 	  RUN_COMMAND_AS_USER);
++  fprintf(stream, "   initialize task:      %2d user relative-path jobid taskid\n",
++	  INITIALIZE_TASK);
+ }
+ 
+ /**
+@@ -239,6 +241,15 @@ int main(int argc, char **argv) {
+   case RUN_COMMAND_AS_USER:
+     exit_code = run_command_as_user(user_detail->pw_name, argv + optind);
+     break;
++  case INITIALIZE_TASK:
++    if (argc < 6) {
++      fprintf(LOGFILE, "Too few arguments (%d vs 6) for initializing task\n", argc);
++      return INVALID_ARGUMENT_NUMBER;
++    }
++    job_id = argv[optind++];
++    task_id = argv[optind++];
++    exit_code = initialize_task(user_detail->pw_name, good_local_dirs, job_id, task_id);
++    break;
+   default:
+     exit_code = INVALID_COMMAND_PROVIDED;
+   }
+diff --git a/hadoop-mapreduce1-project/src/c++/task-controller/impl/task-controller.c b/hadoop-mapreduce1-project/src/c++/task-controller/impl/task-controller.c
+index 563932a..bb00143 100644
+--- a/hadoop-mapreduce1-project/src/c++/task-controller/impl/task-controller.c
++++ b/hadoop-mapreduce1-project/src/c++/task-controller/impl/task-controller.c
+@@ -507,6 +507,13 @@ int create_attempt_directories(const char* user,
+   return result;
+ }
+ 
++int initialize_task(const char* user,
++  const char * good_local_dirs, const char *job_id, const char *task_id) {
++  // Prepare the attempt directories for the task JVM.
++  int result = create_attempt_directories(user, good_local_dirs, job_id, task_id);
++  return result;
++}
++
+ /**
+  * Load the user information for a given user name.
+  */
+@@ -883,9 +890,6 @@ int run_task_as_user(const char *user, const char * good_local_dirs,
+                      const char *work_dir, const char *script_name) {
+   int exit_code = -1;
+   char *task_script_path = NULL;
+-  if (create_attempt_directories(user, good_local_dirs, job_id, task_id) != 0) {
+-    goto cleanup;
+-  }
+   int task_file_source = open_file_as_task_tracker(script_name);
+   if (task_file_source == -1) {
+     goto cleanup;
+diff --git a/hadoop-mapreduce1-project/src/c++/task-controller/impl/task-controller.h b/hadoop-mapreduce1-project/src/c++/task-controller/impl/task-controller.h
+index 06213dd..1599546 100644
+--- a/hadoop-mapreduce1-project/src/c++/task-controller/impl/task-controller.h
++++ b/hadoop-mapreduce1-project/src/c++/task-controller/impl/task-controller.h
+@@ -26,7 +26,8 @@ enum command {
+   SIGNAL_TASK = 2,
+   DELETE_AS_USER = 3,
+   DELETE_LOG_AS_USER = 4,
+-  RUN_COMMAND_AS_USER = 5
++  RUN_COMMAND_AS_USER = 5,
++  INITIALIZE_TASK = 6
+ };
+ 
+ enum errorcodes {
+@@ -160,3 +161,9 @@ int change_user(uid_t user, gid_t group);
+  */
+ int create_attempt_directories(const char* user,
+ 	const char * good_local_dirs, const char *job_id, const char *task_id);
++
++/**
++ * Initialize the task directory
++ */
++int initialize_task(const char* user,
++ 	const char * good_local_dirs, const char *job_id, const char *task_id);
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LinuxTaskController.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LinuxTaskController.java
+index 4f33c8b..55b88b1 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LinuxTaskController.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/LinuxTaskController.java
+@@ -24,6 +24,8 @@
+ import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.List;
++import java.util.HashMap;
++import java.util.Map;
+ import java.util.Map.Entry;
+ 
+ import org.apache.commons.logging.Log;
+@@ -73,6 +75,9 @@
+   private static final String TASK_CONTROLLER_EXEC_KEY =
+     "mapreduce.tasktracker.task-controller.exe";
+   
++  private static Map<String, String> jobUserMap = new HashMap<String, String>(); 
++  private static File currentWorkDirectory; 
++  
+   @Override
+   public void setConf(Configuration conf) {
+     super.setConf(conf);
+@@ -97,7 +102,8 @@ public LinuxTaskController() {
+     SIGNAL_TASK(2),
+     DELETE_AS_USER(3),
+     DELETE_LOG_AS_USER(4),
+-    RUN_COMMAND_AS_USER(5);
++    RUN_COMMAND_AS_USER(5),
++    INITIALIZE_TASK(6);
+ 
+     private int value;
+     Commands(int value) {
+@@ -158,6 +164,8 @@ public void initializeJob(String user, String jobid, Path credentials,
+                             Path jobConf, TaskUmbilicalProtocol taskTracker,
+                             InetSocketAddress ttAddr
+                             ) throws IOException {
++    jobUserMap.put(jobid, user);
++
+     List<String> command = new ArrayList<String>(
+       Arrays.asList(taskControllerExe, 
+                     user,
+@@ -291,6 +299,18 @@ public void deleteAsUser(String user, String subDir) throws IOException {
+   public void createLogDir(TaskAttemptID taskID,
+                            boolean isCleanup) throws IOException {
+     // Log dirs are created during attempt dir creation when running the task
++    String[] command = 
++      new String[]{taskControllerExe, 
++          jobUserMap.get(taskID.getJobID().toString()),
++                   localStorage.getDirsString(),
++                   Integer.toString(Commands.INITIALIZE_TASK.getValue()),
++                   taskID.getJobID().toString(),
++                   taskID.toString()};
++    ShellCommandExecutor shExec = new ShellCommandExecutor(command);
++    if (LOG.isDebugEnabled()) {
++      LOG.debug("createLogDir: " + Arrays.toString(command));
++    }
++    shExec.execute();
+   }
+ 
+   @Override
+-- 
+1.7.9.5
+

@@ -1,0 +1,679 @@
+From 964d8e24f473f51a73cf63e422524a974dce3610 Mon Sep 17 00:00:00 2001
+From: cnauroth <cnauroth@apache.org>
+Date: Tue, 18 Nov 2014 16:56:44 -0800
+Subject: [PATCH 407/596] HDFS-7398. Reset cached thread-local FSEditLogOp's
+ on every FSEditLog#logEdit. Contributed by Gera
+ Shegalov.
+
+(cherry picked from commit 9e81be01144d5cf520313608e85cdc1d8063aa15)
+(cherry picked from commit 69eb56ad6de09f0bdb6c41803431d8728d97e0c2)
+---
+ .../hadoop/hdfs/server/namenode/FSEditLog.java     |    4 +-
+ .../hadoop/hdfs/server/namenode/FSEditLogOp.java   |  297 +++++++++++++++++++-
+ .../hadoop/hdfs/server/namenode/TestEditLog.java   |    5 +
+ 3 files changed, 290 insertions(+), 16 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLog.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLog.java
+index 20aaf07..00d26fa 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLog.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLog.java
+@@ -422,6 +422,8 @@ assert isOpenForWrite() :
+         editLogStream.write(op);
+       } catch (IOException ex) {
+         // All journals failed, it is handled in logSync.
++      } finally {
++        op.reset();
+       }
+ 
+       endTransaction(start);
+@@ -708,7 +710,6 @@ public void logOpenFile(String path, INodeFile newNode, boolean overwrite,
+     Preconditions.checkArgument(newNode.isUnderConstruction());
+     PermissionStatus permissions = newNode.getPermissionStatus();
+     AddOp op = AddOp.getInstance(cache.get())
+-      .reset()
+       .setInodeId(newNode.getId())
+       .setPath(path)
+       .setReplication(newNode.getFileReplication())
+@@ -779,7 +780,6 @@ public void logUpdateBlocks(String path, INodeFile file, boolean toLogRpcIds) {
+   public void logMkDir(String path, INode newNode) {
+     PermissionStatus permissions = newNode.getPermissionStatus();
+     MkdirOp op = MkdirOp.getInstance(cache.get())
+-      .reset()
+       .setInodeId(newNode.getId())
+       .setPath(path)
+       .setTimestamp(newNode.getModificationTime())
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLogOp.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLogOp.java
+index 45ea168..ae40667 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLogOp.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/FSEditLogOp.java
+@@ -138,9 +138,18 @@
+ @InterfaceStability.Unstable
+ public abstract class FSEditLogOp {
+   public final FSEditLogOpCodes opCode;
+-  long txid = HdfsConstants.INVALID_TXID;
+-  byte[] rpcClientId = RpcConstants.DUMMY_CLIENT_ID;
+-  int rpcCallId = RpcConstants.INVALID_CALL_ID;
++  long txid;
++  byte[] rpcClientId;
++  int rpcCallId;
++
++  final void reset() {
++    txid = HdfsConstants.INVALID_TXID;
++    rpcClientId = RpcConstants.DUMMY_CLIENT_ID;
++    rpcCallId = RpcConstants.INVALID_CALL_ID;
++    resetSubFields();
++  }
++
++  abstract void resetSubFields();
+ 
+   final public static class OpInstanceCache {
+     private final EnumMap<FSEditLogOpCodes, FSEditLogOp> inst =
+@@ -222,6 +231,7 @@ public FSEditLogOp get(FSEditLogOpCodes opcode) {
+   @VisibleForTesting
+   protected FSEditLogOp(FSEditLogOpCodes opCode) {
+     this.opCode = opCode;
++    reset();
+   }
+ 
+   public long getTransactionId() {
+@@ -420,11 +430,24 @@ private AddCloseOp(FSEditLogOpCodes opCode) {
+       storagePolicyId = BlockStoragePolicySuite.ID_UNSPECIFIED;
+       assert(opCode == OP_ADD || opCode == OP_CLOSE);
+     }
+-    
+-    <T extends AddCloseOp> T reset() {
+-      this.aclEntries = null;
+-      this.xAttrs = null;
+-      return (T)this;
++
++    @Override
++    void resetSubFields() {
++      length = 0;
++      inodeId = 0L;
++      path = null;
++      replication = 0;
++      mtime = 0L;
++      atime = 0L;
++      blockSize = 0L;
++      blocks = null;
++      permissions = null;
++      aclEntries = null;
++      xAttrs = null;
++      clientName = null;
++      clientMachine = null;
++      overwrite = false;
++      storagePolicyId = 0;
+     }
+ 
+     <T extends AddCloseOp> T setInodeId(long inodeId) {
+@@ -804,6 +827,13 @@ private AddBlockOp() {
+     static AddBlockOp getInstance(OpInstanceCache cache) {
+       return (AddBlockOp) cache.get(OP_ADD_BLOCK);
+     }
++
++    @Override
++    void resetSubFields() {
++      path = null;
++      penultimateBlock = null;
++      lastBlock = null;
++    }
+     
+     AddBlockOp setPath(String path) {
+       this.path = path;
+@@ -845,7 +875,7 @@ public void writeFields(DataOutputStream out) throws IOException {
+       // clientId and callId
+       writeRpcIds(rpcClientId, rpcCallId, out);
+     }
+-    
++
+     @Override
+     void readFields(DataInputStream in, int logVersion) throws IOException {
+       path = FSImageSerialization.readString(in);
+@@ -909,6 +939,12 @@ private UpdateBlocksOp() {
+     static UpdateBlocksOp getInstance(OpInstanceCache cache) {
+       return (UpdateBlocksOp)cache.get(OP_UPDATE_BLOCKS);
+     }
++
++    @Override
++    void resetSubFields() {
++      path = null;
++      blocks = null;
++    }
+     
+     UpdateBlocksOp setPath(String path) {
+       this.path = path;
+@@ -997,6 +1033,12 @@ static SetReplicationOp getInstance(OpInstanceCache cache) {
+       return (SetReplicationOp)cache.get(OP_SET_REPLICATION);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      path = null;
++      replication = 0;
++    }
++
+     SetReplicationOp setPath(String path) {
+       this.path = path;
+       return this;
+@@ -1070,6 +1112,14 @@ static ConcatDeleteOp getInstance(OpInstanceCache cache) {
+       return (ConcatDeleteOp)cache.get(OP_CONCAT_DELETE);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      length = 0;
++      trg = null;
++      srcs = null;
++      timestamp = 0L;
++    }
++
+     ConcatDeleteOp setTarget(String trg) {
+       this.trg = trg;
+       return this;
+@@ -1220,6 +1270,14 @@ static RenameOldOp getInstance(OpInstanceCache cache) {
+       return (RenameOldOp)cache.get(OP_RENAME_OLD);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      length = 0;
++      src = null;
++      dst = null;
++      timestamp = 0L;
++    }
++
+     RenameOldOp setSource(String src) {
+       this.src = src;
+       return this;
+@@ -1324,6 +1382,13 @@ static DeleteOp getInstance(OpInstanceCache cache) {
+       return (DeleteOp)cache.get(OP_DELETE);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      length = 0;
++      path = null;
++      timestamp = 0L;
++    }
++
+     DeleteOp setPath(String path) {
+       this.path = path;
+       return this;
+@@ -1418,10 +1483,15 @@ static MkdirOp getInstance(OpInstanceCache cache) {
+       return (MkdirOp)cache.get(OP_MKDIR);
+     }
+ 
+-    MkdirOp reset() {
+-      this.aclEntries = null;
+-      this.xAttrs = null;
+-      return this;
++    @Override
++    void resetSubFields() {
++      length = 0;
++      inodeId = 0L;
++      path = null;
++      timestamp = 0L;
++      permissions = null;
++      aclEntries = null;
++      xAttrs = null;
+     }
+ 
+     MkdirOp setInodeId(long inodeId) {
+@@ -1586,6 +1656,11 @@ static SetGenstampV1Op getInstance(OpInstanceCache cache) {
+       return (SetGenstampV1Op)cache.get(OP_SET_GENSTAMP_V1);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      genStampV1 = 0L;
++    }
++
+     SetGenstampV1Op setGenerationStamp(long genStamp) {
+       this.genStampV1 = genStamp;
+       return this;
+@@ -1639,6 +1714,11 @@ static SetGenstampV2Op getInstance(OpInstanceCache cache) {
+       return (SetGenstampV2Op)cache.get(OP_SET_GENSTAMP_V2);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      genStampV2 = 0L;
++    }
++
+     SetGenstampV2Op setGenerationStamp(long genStamp) {
+       this.genStampV2 = genStamp;
+       return this;
+@@ -1692,6 +1772,11 @@ static AllocateBlockIdOp getInstance(OpInstanceCache cache) {
+       return (AllocateBlockIdOp)cache.get(OP_ALLOCATE_BLOCK_ID);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      blockId = 0L;
++    }
++
+     AllocateBlockIdOp setBlockId(long blockId) {
+       this.blockId = blockId;
+       return this;
+@@ -1746,6 +1831,12 @@ static SetPermissionsOp getInstance(OpInstanceCache cache) {
+       return (SetPermissionsOp)cache.get(OP_SET_PERMISSIONS);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      src = null;
++      permissions = null;
++    }
++
+     SetPermissionsOp setSource(String src) {
+       this.src = src;
+       return this;
+@@ -1813,6 +1904,13 @@ static SetOwnerOp getInstance(OpInstanceCache cache) {
+       return (SetOwnerOp)cache.get(OP_SET_OWNER);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      src = null;
++      username = null;
++      groupname = null;
++    }
++
+     SetOwnerOp setSource(String src) {
+       this.src = src;
+       return this;
+@@ -1894,6 +1992,12 @@ static SetNSQuotaOp getInstance(OpInstanceCache cache) {
+     }
+ 
+     @Override
++    void resetSubFields() {
++      src = null;
++      nsQuota = 0L;
++    }
++
++    @Override
+     public 
+     void writeFields(DataOutputStream out) throws IOException {
+       throw new IOException("Deprecated");      
+@@ -1946,6 +2050,11 @@ static ClearNSQuotaOp getInstance(OpInstanceCache cache) {
+     }
+ 
+     @Override
++    void resetSubFields() {
++      src = null;
++    }
++
++    @Override
+     public 
+     void writeFields(DataOutputStream out) throws IOException {
+       throw new IOException("Deprecated");      
+@@ -1994,6 +2103,13 @@ static SetQuotaOp getInstance(OpInstanceCache cache) {
+       return (SetQuotaOp)cache.get(OP_SET_QUOTA);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      src = null;
++      nsQuota = 0L;
++      dsQuota = 0L;
++    }
++
+     SetQuotaOp setSource(String src) {
+       this.src = src;
+       return this;
+@@ -2073,6 +2189,14 @@ static TimesOp getInstance(OpInstanceCache cache) {
+       return (TimesOp)cache.get(OP_TIMES);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      length = 0;
++      path = null;
++      mtime = 0L;
++      atime = 0L;
++    }
++
+     TimesOp setPath(String path) {
+       this.path = path;
+       return this;
+@@ -2174,6 +2298,17 @@ static SymlinkOp getInstance(OpInstanceCache cache) {
+       return (SymlinkOp)cache.get(OP_SYMLINK);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      length = 0;
++      inodeId = 0L;
++      path = null;
++      value = null;
++      mtime = 0L;
++      atime = 0L;
++      permissionStatus = null;
++    }
++
+     SymlinkOp setId(long inodeId) {
+       this.inodeId = inodeId;
+       return this;
+@@ -2322,6 +2457,15 @@ static RenameOp getInstance(OpInstanceCache cache) {
+       return (RenameOp)cache.get(OP_RENAME);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      length = 0;
++      src = null;
++      dst = null;
++      timestamp = 0L;
++      options = null;
++    }
++
+     RenameOp setSource(String src) {
+       this.src = src;
+       return this;
+@@ -2479,6 +2623,13 @@ static ReassignLeaseOp getInstance(OpInstanceCache cache) {
+       return (ReassignLeaseOp)cache.get(OP_REASSIGN_LEASE);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      leaseHolder = null;
++      path = null;
++      newHolder = null;
++    }
++
+     ReassignLeaseOp setLeaseHolder(String leaseHolder) {
+       this.leaseHolder = leaseHolder;
+       return this;
+@@ -2554,6 +2705,12 @@ static GetDelegationTokenOp getInstance(OpInstanceCache cache) {
+       return (GetDelegationTokenOp)cache.get(OP_GET_DELEGATION_TOKEN);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      token = null;
++      expiryTime = 0L;
++    }
++
+     GetDelegationTokenOp setDelegationTokenIdentifier(
+         DelegationTokenIdentifier token) {
+       this.token = token;
+@@ -2627,6 +2784,12 @@ static RenewDelegationTokenOp getInstance(OpInstanceCache cache) {
+       return (RenewDelegationTokenOp)cache.get(OP_RENEW_DELEGATION_TOKEN);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      token = null;
++      expiryTime = 0L;
++    }
++
+     RenewDelegationTokenOp setDelegationTokenIdentifier(
+         DelegationTokenIdentifier token) {
+       this.token = token;
+@@ -2699,6 +2862,11 @@ static CancelDelegationTokenOp getInstance(OpInstanceCache cache) {
+       return (CancelDelegationTokenOp)cache.get(OP_CANCEL_DELEGATION_TOKEN);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      token = null;
++    }
++
+     CancelDelegationTokenOp setDelegationTokenIdentifier(
+         DelegationTokenIdentifier token) {
+       this.token = token;
+@@ -2753,6 +2921,11 @@ static UpdateMasterKeyOp getInstance(OpInstanceCache cache) {
+       return (UpdateMasterKeyOp)cache.get(OP_UPDATE_MASTER_KEY);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      key = null;
++    }
++
+     UpdateMasterKeyOp setDelegationKey(DelegationKey key) {
+       this.key = key;
+       return this;
+@@ -2808,6 +2981,11 @@ static LogSegmentOp getInstance(OpInstanceCache cache,
+     }
+ 
+     @Override
++    void resetSubFields() {
++      // no data stored in these ops yet
++    }
++
++    @Override
+     public void readFields(DataInputStream in, int logVersion)
+         throws IOException {
+       // no data stored in these ops yet
+@@ -2850,6 +3028,10 @@ static InvalidOp getInstance(OpInstanceCache cache) {
+     }
+ 
+     @Override
++    void resetSubFields() {
++    }
++
++    @Override
+     public 
+     void writeFields(DataOutputStream out) throws IOException {
+     }
+@@ -2895,7 +3077,13 @@ public CreateSnapshotOp() {
+     static CreateSnapshotOp getInstance(OpInstanceCache cache) {
+       return (CreateSnapshotOp)cache.get(OP_CREATE_SNAPSHOT);
+     }
+-    
++
++    @Override
++    void resetSubFields() {
++      snapshotRoot = null;
++      snapshotName = null;
++    }
++
+     CreateSnapshotOp setSnapshotName(String snapName) {
+       this.snapshotName = snapName;
+       return this;
+@@ -2965,6 +3153,12 @@ public String toString() {
+     static DeleteSnapshotOp getInstance(OpInstanceCache cache) {
+       return (DeleteSnapshotOp)cache.get(OP_DELETE_SNAPSHOT);
+     }
++
++    @Override
++    void resetSubFields() {
++      snapshotRoot = null;
++      snapshotName = null;
++    }
+     
+     DeleteSnapshotOp setSnapshotName(String snapName) {
+       this.snapshotName = snapName;
+@@ -3036,6 +3230,13 @@ public String toString() {
+     static RenameSnapshotOp getInstance(OpInstanceCache cache) {
+       return (RenameSnapshotOp) cache.get(OP_RENAME_SNAPSHOT);
+     }
++
++    @Override
++    void resetSubFields() {
++      snapshotRoot = null;
++      snapshotOldName = null;
++      snapshotNewName = null;
++    }
+     
+     RenameSnapshotOp setSnapshotOldName(String snapshotOldName) {
+       this.snapshotOldName = snapshotOldName;
+@@ -3122,6 +3323,11 @@ static AllowSnapshotOp getInstance(OpInstanceCache cache) {
+       return (AllowSnapshotOp) cache.get(OP_ALLOW_SNAPSHOT);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      snapshotRoot = null;
++    }
++
+     public AllowSnapshotOp setSnapshotRoot(String snapRoot) {
+       snapshotRoot = snapRoot;
+       return this;
+@@ -3176,6 +3382,10 @@ static DisallowSnapshotOp getInstance(OpInstanceCache cache) {
+       return (DisallowSnapshotOp) cache.get(OP_DISALLOW_SNAPSHOT);
+     }
+ 
++    void resetSubFields() {
++      snapshotRoot = null;
++    }
++
+     public DisallowSnapshotOp setSnapshotRoot(String snapRoot) {
+       snapshotRoot = snapRoot;
+       return this;
+@@ -3227,6 +3437,11 @@ static AddCacheDirectiveInfoOp getInstance(OpInstanceCache cache) {
+           .get(OP_ADD_CACHE_DIRECTIVE);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      directive = null;
++    }
++
+     public AddCacheDirectiveInfoOp setDirective(
+         CacheDirectiveInfo directive) {
+       this.directive = directive;
+@@ -3293,6 +3508,11 @@ static ModifyCacheDirectiveInfoOp getInstance(OpInstanceCache cache) {
+           .get(OP_MODIFY_CACHE_DIRECTIVE);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      directive = null;
++    }
++
+     public ModifyCacheDirectiveInfoOp setDirective(
+         CacheDirectiveInfo directive) {
+       this.directive = directive;
+@@ -3365,6 +3585,11 @@ static RemoveCacheDirectiveInfoOp getInstance(OpInstanceCache cache) {
+           .get(OP_REMOVE_CACHE_DIRECTIVE);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      id = 0L;
++    }
++
+     public RemoveCacheDirectiveInfoOp setId(long id) {
+       this.id = id;
+       return this;
+@@ -3417,6 +3642,11 @@ static AddCachePoolOp getInstance(OpInstanceCache cache) {
+       return (AddCachePoolOp) cache.get(OP_ADD_CACHE_POOL);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      info = null;
++    }
++
+     public AddCachePoolOp setPool(CachePoolInfo info) {
+       this.info = info;
+       assert(info.getPoolName() != null);
+@@ -3478,6 +3708,11 @@ static ModifyCachePoolOp getInstance(OpInstanceCache cache) {
+       return (ModifyCachePoolOp) cache.get(OP_MODIFY_CACHE_POOL);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      info = null;
++    }
++
+     public ModifyCachePoolOp setInfo(CachePoolInfo info) {
+       this.info = info;
+       return this;
+@@ -3546,6 +3781,11 @@ static RemoveCachePoolOp getInstance(OpInstanceCache cache) {
+       return (RemoveCachePoolOp) cache.get(OP_REMOVE_CACHE_POOL);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      poolName = null;
++    }
++
+     public RemoveCachePoolOp setPoolName(String poolName) {
+       this.poolName = poolName;
+       return this;
+@@ -3599,6 +3839,12 @@ static RemoveXAttrOp getInstance() {
+     }
+ 
+     @Override
++    void resetSubFields() {
++      xAttrs = null;
++      src = null;
++    }
++
++    @Override
+     void readFields(DataInputStream in, int logVersion) throws IOException {
+       XAttrEditLogProto p = XAttrEditLogProto.parseDelimitedFrom(in);
+       src = p.getSrc();
+@@ -3646,6 +3892,12 @@ static SetXAttrOp getInstance() {
+     }
+ 
+     @Override
++    void resetSubFields() {
++      xAttrs = null;
++      src = null;
++    }
++
++    @Override
+     void readFields(DataInputStream in, int logVersion) throws IOException {
+       XAttrEditLogProto p = XAttrEditLogProto.parseDelimitedFrom(in);
+       src = p.getSrc();
+@@ -3693,6 +3945,12 @@ static SetAclOp getInstance() {
+     }
+ 
+     @Override
++    void resetSubFields() {
++      aclEntries = null;
++      src = null;
++    }
++
++    @Override
+     void readFields(DataInputStream in, int logVersion) throws IOException {
+       AclEditLogProto p = AclEditLogProto.parseDelimitedFrom(in);
+       if (p == null) {
+@@ -3792,6 +4050,11 @@ static RollingUpgradeOp getFinalizeInstance(OpInstanceCache cache) {
+       return (RollingUpgradeOp) cache.get(OP_ROLLING_UPGRADE_FINALIZE);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      time = 0L;
++    }
++
+     long getTime() {
+       return time;
+     }
+@@ -3845,6 +4108,12 @@ static SetStoragePolicyOp getInstance(OpInstanceCache cache) {
+       return (SetStoragePolicyOp) cache.get(OP_SET_STORAGE_POLICY);
+     }
+ 
++    @Override
++    void resetSubFields() {
++      path = null;
++      policyId = 0;
++    }
++
+     SetStoragePolicyOp setPath(String path) {
+       this.path = path;
+       return this;
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestEditLog.java b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestEditLog.java
+index 8575df1..fd759cd 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestEditLog.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/test/java/org/apache/hadoop/hdfs/server/namenode/TestEditLog.java
+@@ -111,6 +111,11 @@ public GarbageMkdirOp() {
+     }
+ 
+     @Override
++    void resetSubFields() {
++      // nop
++    }
++
++    @Override
+     void readFields(DataInputStream in, int logVersion) throws IOException {
+       throw new IOException("cannot decode GarbageMkdirOp");
+     }
+-- 
+1.7.9.5
+

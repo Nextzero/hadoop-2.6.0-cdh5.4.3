@@ -1,0 +1,41 @@
+From 7d37d26188940ea15c7bca93f9b505c5efc49581 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Fri, 25 Jan 2013 15:12:51 -0800
+Subject: [PATCH 016/596] MR1: CLOUDERA-BUILD. oozie distcp fails on secure
+ mr1 cluster
+
+  Reason: bug, this is a backport of a functionality present in distcp-v2 (Hadoop2)
+  Author: Alejandro Abdelnur
+  Ref: CDH-9905
+(cherry picked from commit fafd3187b67b53363c2eebfe7ab5ad56fc4d9684)
+
+(cherry picked from commit cc711abe1b340a0bdf01bfabaf4d5f898ead0bc8)
+(cherry picked from commit a6b1530beb8e918701beebf1c58abc1f182942bf)
+(cherry picked from commit 67ffacd7fc33861e8880a4477a9556c67a23676c)
+---
+ .../src/tools/org/apache/hadoop/tools/DistCp.java  |    9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java b/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
+index ea1d205..db2b0e5 100644
+--- a/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
++++ b/hadoop-mapreduce1-project/src/tools/org/apache/hadoop/tools/DistCp.java
+@@ -982,6 +982,15 @@ private static JobConf createJobConf(Configuration conf) {
+ 
+     jobconf.setMapperClass(CopyFilesMapper.class);
+     jobconf.setNumReduceTasks(0);
++
++    //propagate token file, if present and if running within Oozie distcp action
++    if (System.getProperty("oozie.launcher.job.id") != null) {
++      // propagate delegation related props from launcher job to MR job
++      if (System.getenv("HADOOP_TOKEN_FILE_LOCATION") != null) {
++        jobconf.set("mapreduce.job.credentials.binary", System.getenv("HADOOP_TOKEN_FILE_LOCATION"));
++      }
++    }
++    
+     return jobconf;
+   }
+ 
+-- 
+1.7.9.5
+

@@ -1,0 +1,32 @@
+From 6a727e778d497fc48b168803430b63026b246763 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Thu, 20 Nov 2014 11:05:42 -0800
+Subject: [PATCH 247/596] HADOOP-11323. WritableComparator#compare keeps
+ reference to byte array. Contributed by Wilfred
+ Spiegelenburg.
+
+(cherry picked from commit eb4045e7652be6ceaf9dfd33e9139d67774b99ab)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit 1183fe32cc455ad22031fdb899c572d0b241a6a5)
+---
+ .../org/apache/hadoop/io/WritableComparator.java   |    1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/WritableComparator.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/WritableComparator.java
+index b2738ff..35c6ef9 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/WritableComparator.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/io/WritableComparator.java
+@@ -160,6 +160,7 @@ public int compare(byte[] b1, int s1, int l1, byte[] b2, int s2, int l2) {
+       buffer.reset(b2, s2, l2);                   // parse key2
+       key2.readFields(buffer);
+       
++      buffer.reset(null, 0, 0);                   // clean up reference
+     } catch (IOException e) {
+       throw new RuntimeException(e);
+     }
+-- 
+1.7.9.5
+

@@ -1,0 +1,176 @@
+From 0d2cd2e925ca22cf24249eb18eadb6f1ee34d8c9 Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@apache.org>
+Date: Mon, 12 Jan 2015 10:47:52 -0800
+Subject: [PATCH 305/596] YARN-3027. Scheduler should use totalAvailable
+ resource from node instead of availableResource for
+ maxAllocation. (adhoot via rkanter)
+
+(cherry picked from commit ae7bf31fe1c63f323ba5271e50fd0e4425a7510f)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+
+(cherry picked from commit 3eb14f22f7ef76536f9adf81c47e8c6563b5bbd3)
+---
+ .../scheduler/AbstractYarnScheduler.java           |   12 +--
+ .../scheduler/TestAbstractYarnScheduler.java       |   81 +++++++++++++++++++-
+ 2 files changed, 86 insertions(+), 7 deletions(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/AbstractYarnScheduler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/AbstractYarnScheduler.java
+index bf720ae..4dadefc 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/AbstractYarnScheduler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/main/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/AbstractYarnScheduler.java
+@@ -576,23 +576,23 @@ protected void updateMaximumAllocation(SchedulerNode node, boolean add) {
+     writeLock.lock();
+     try {
+       if (add) { // added node
+-        int nodeMemory = node.getAvailableResource().getMemory();
++        int nodeMemory = node.getTotalResource().getMemory();
+         if (nodeMemory > maxNodeMemory) {
+           maxNodeMemory = nodeMemory;
+           maximumAllocation.setMemory(Math.min(
+               configuredMaximumAllocation.getMemory(), maxNodeMemory));
+         }
+-        int nodeVCores = node.getAvailableResource().getVirtualCores();
++        int nodeVCores = node.getTotalResource().getVirtualCores();
+         if (nodeVCores > maxNodeVCores) {
+           maxNodeVCores = nodeVCores;
+           maximumAllocation.setVirtualCores(Math.min(
+               configuredMaximumAllocation.getVirtualCores(), maxNodeVCores));
+         }
+       } else {  // removed node
+-        if (maxNodeMemory == node.getAvailableResource().getMemory()) {
++        if (maxNodeMemory == node.getTotalResource().getMemory()) {
+           maxNodeMemory = -1;
+         }
+-        if (maxNodeVCores == node.getAvailableResource().getVirtualCores()) {
++        if (maxNodeVCores == node.getTotalResource().getVirtualCores()) {
+           maxNodeVCores = -1;
+         }
+         // We only have to iterate through the nodes if the current max memory
+@@ -600,12 +600,12 @@ protected void updateMaximumAllocation(SchedulerNode node, boolean add) {
+         if (maxNodeMemory == -1 || maxNodeVCores == -1) {
+           for (Map.Entry<NodeId, N> nodeEntry : nodes.entrySet()) {
+             int nodeMemory =
+-                nodeEntry.getValue().getAvailableResource().getMemory();
++                nodeEntry.getValue().getTotalResource().getMemory();
+             if (nodeMemory > maxNodeMemory) {
+               maxNodeMemory = nodeMemory;
+             }
+             int nodeVCores =
+-                nodeEntry.getValue().getAvailableResource().getVirtualCores();
++                nodeEntry.getValue().getTotalResource().getVirtualCores();
+             if (nodeVCores > maxNodeVCores) {
+               maxNodeVCores = nodeVCores;
+             }
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/TestAbstractYarnScheduler.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/TestAbstractYarnScheduler.java
+index 67bdae2..27b20d4 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/TestAbstractYarnScheduler.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-resourcemanager/src/test/java/org/apache/hadoop/yarn/server/resourcemanager/scheduler/TestAbstractYarnScheduler.java
+@@ -18,6 +18,8 @@
+ 
+ package org.apache.hadoop.yarn.server.resourcemanager.scheduler;
+ 
++import org.apache.hadoop.yarn.api.records.NodeId;
++import org.apache.hadoop.yarn.api.records.Resource;
+ import org.apache.hadoop.yarn.conf.YarnConfiguration;
+ import org.apache.hadoop.yarn.server.resourcemanager.MockNodes;
+ import org.apache.hadoop.yarn.server.resourcemanager.MockRM;
+@@ -25,11 +27,17 @@
+ import org.apache.hadoop.yarn.server.resourcemanager.rmnode.RMNode;
+ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.event.NodeAddedSchedulerEvent;
+ import org.apache.hadoop.yarn.server.resourcemanager.scheduler.event.NodeRemovedSchedulerEvent;
+-
+ import org.apache.hadoop.yarn.util.resource.Resources;
+ import org.junit.Assert;
+ import org.junit.Test;
+ 
++import java.io.IOException;
++import java.util.HashMap;
++
++import static org.mockito.Mockito.mock;
++import static org.mockito.Mockito.when;
++
++@SuppressWarnings("unchecked")
+ public class TestAbstractYarnScheduler extends ParameterizedSchedulerTestBase {
+ 
+   public TestAbstractYarnScheduler(SchedulerType type) {
+@@ -210,4 +218,75 @@ private void testMaximumAllocationVCoresHelper(
+     Assert.assertEquals(0, scheduler.getNumClusterNodes());
+   }
+ 
++  @Test
++  public void testUpdateMaxAllocationUsesTotal() throws IOException {
++    final int configuredMaxVCores = 20;
++    final int configuredMaxMemory = 10 * 1024;
++    Resource configuredMaximumResource = Resource.newInstance
++        (configuredMaxMemory, configuredMaxVCores);
++
++    configureScheduler();
++    YarnConfiguration conf = getConf();
++    conf.setInt(YarnConfiguration.RM_SCHEDULER_MAXIMUM_ALLOCATION_VCORES,
++        configuredMaxVCores);
++    conf.setInt(YarnConfiguration.RM_SCHEDULER_MAXIMUM_ALLOCATION_MB,
++        configuredMaxMemory);
++    conf.setLong(
++        YarnConfiguration.RM_WORK_PRESERVING_RECOVERY_SCHEDULING_WAIT_MS,
++        0);
++
++    MockRM rm = new MockRM(conf);
++    try {
++      rm.start();
++      AbstractYarnScheduler scheduler = (AbstractYarnScheduler) rm
++          .getResourceScheduler();
++
++      Resource emptyResource = Resource.newInstance(0, 0);
++      Resource fullResource1 = Resource.newInstance(1024, 5);
++      Resource fullResource2 = Resource.newInstance(2048, 10);
++
++      SchedulerNode mockNode1 = mock(SchedulerNode.class);
++      when(mockNode1.getNodeID()).thenReturn(NodeId.newInstance("foo", 8080));
++      when(mockNode1.getAvailableResource()).thenReturn(emptyResource);
++      when(mockNode1.getTotalResource()).thenReturn(fullResource1);
++
++      SchedulerNode mockNode2 = mock(SchedulerNode.class);
++      when(mockNode1.getNodeID()).thenReturn(NodeId.newInstance("bar", 8081));
++      when(mockNode2.getAvailableResource()).thenReturn(emptyResource);
++      when(mockNode2.getTotalResource()).thenReturn(fullResource2);
++
++      verifyMaximumResourceCapability(configuredMaximumResource, scheduler);
++
++      scheduler.nodes = new HashMap<NodeId, SchedulerNode>();
++
++      scheduler.nodes.put(mockNode1.getNodeID(), mockNode1);
++      scheduler.updateMaximumAllocation(mockNode1, true);
++      verifyMaximumResourceCapability(fullResource1, scheduler);
++
++      scheduler.nodes.put(mockNode2.getNodeID(), mockNode2);
++      scheduler.updateMaximumAllocation(mockNode2, true);
++      verifyMaximumResourceCapability(fullResource2, scheduler);
++
++      scheduler.nodes.remove(mockNode2.getNodeID());
++      scheduler.updateMaximumAllocation(mockNode2, false);
++      verifyMaximumResourceCapability(fullResource1, scheduler);
++
++      scheduler.nodes.remove(mockNode1.getNodeID());
++      scheduler.updateMaximumAllocation(mockNode1, false);
++      verifyMaximumResourceCapability(configuredMaximumResource, scheduler);
++    } finally {
++      rm.stop();
++    }
++  }
++
++  private void verifyMaximumResourceCapability(
++      Resource expectedMaximumResource, AbstractYarnScheduler scheduler) {
++
++    final Resource schedulerMaximumResourceCapability = scheduler
++        .getMaximumResourceCapability();
++    Assert.assertEquals(expectedMaximumResource.getMemory(),
++        schedulerMaximumResourceCapability.getMemory());
++    Assert.assertEquals(expectedMaximumResource.getVirtualCores(),
++        schedulerMaximumResourceCapability.getVirtualCores());
++  }
+ }
+-- 
+1.7.9.5
+

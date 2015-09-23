@@ -1,0 +1,153 @@
+From 1c08533bc7e2bfab3a648c8bd2dfba62959553c1 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Wed, 29 Apr 2015 17:37:56 -0700
+Subject: [PATCH 552/596] HDFS-8214. Secondary NN Web UI shows wrong date for
+ Last Checkpoint. Contributed by Charles Lamb.
+
+(cherry picked from commit aa22450442ebe39916a6fd460fe97e347945526d)
+(cherry picked from commit 9f8412ac6ee0d0fa7c16f61939b9116061336910)
+
+Conflicts:
+	hadoop-hdfs-project/hadoop-hdfs/CHANGES.txt
+---
+ .../hdfs/server/namenode/SecondaryNameNode.java    |   35 ++++++++++++++------
+ .../namenode/SecondaryNameNodeInfoMXBean.java      |    6 ++++
+ .../src/main/webapps/secondary/status.html         |    2 +-
+ .../src/main/webapps/static/dfs-dust.js            |    3 ++
+ 4 files changed, 34 insertions(+), 12 deletions(-)
+
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/SecondaryNameNode.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/SecondaryNameNode.java
+index 10f1720..706c155 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/SecondaryNameNode.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/SecondaryNameNode.java
+@@ -108,6 +108,7 @@
+ 
+   private final long starttime = Time.now();
+   private volatile long lastCheckpointTime = 0;
++  private volatile long lastCheckpointWallclockTime = 0;
+ 
+   private URL fsName;
+   private CheckpointStorage checkpointImage;
+@@ -134,8 +135,9 @@ public String toString() {
+       + "\nName Node Address      : " + nameNodeAddr
+       + "\nStart Time             : " + new Date(starttime)
+       + "\nLast Checkpoint        : " + (lastCheckpointTime == 0? "--":
+-				       ((Time.monotonicNow() - lastCheckpointTime) / 1000))
+-	                            + " seconds ago"
++        new Date(lastCheckpointWallclockTime))
++      + " (" + ((Time.monotonicNow() - lastCheckpointTime) / 1000)
++      + " seconds ago)"
+       + "\nCheckpoint Period      : " + checkpointConf.getPeriod() + " seconds"
+       + "\nCheckpoint Transactions: " + checkpointConf.getTxnCount()
+       + "\nCheckpoint Dirs        : " + checkpointDirs
+@@ -388,12 +390,14 @@ public void doWork() {
+         if(UserGroupInformation.isSecurityEnabled())
+           UserGroupInformation.getCurrentUser().checkTGTAndReloginFromKeytab();
+         
+-        final long now = Time.monotonicNow();
++        final long monotonicNow = Time.monotonicNow();
++        final long now = Time.now();
+ 
+         if (shouldCheckpointBasedOnCount() ||
+-            now >= lastCheckpointTime + 1000 * checkpointConf.getPeriod()) {
++            monotonicNow >= lastCheckpointTime + 1000 * checkpointConf.getPeriod()) {
+           doCheckpoint();
+-          lastCheckpointTime = now;
++          lastCheckpointTime = monotonicNow;
++          lastCheckpointWallclockTime = now;
+         }
+       } catch (IOException e) {
+         LOG.error("Exception in doCheckpoint", e);
+@@ -695,22 +699,31 @@ public void startCheckpointThread() {
+     checkpointThread.start();
+   }
+ 
+-  @Override // SecondaryNameNodeInfoMXXBean
++  @Override // SecondaryNameNodeInfoMXBean
+   public String getHostAndPort() {
+     return NetUtils.getHostPortString(nameNodeAddr);
+   }
+ 
+-  @Override // SecondaryNameNodeInfoMXXBean
++  @Override // SecondaryNameNodeInfoMXBean
+   public long getStartTime() {
+     return starttime;
+   }
+ 
+-  @Override // SecondaryNameNodeInfoMXXBean
++  @Override // SecondaryNameNodeInfoMXBean
+   public long getLastCheckpointTime() {
+-    return lastCheckpointTime;
++    return lastCheckpointWallclockTime;
+   }
+ 
+-  @Override // SecondaryNameNodeInfoMXXBean
++  @Override // SecondaryNameNodeInfoMXBean
++  public long getLastCheckpointDeltaMs() {
++    if (lastCheckpointTime == 0) {
++      return -1;
++    } else {
++      return (Time.monotonicNow() - lastCheckpointTime);
++    }
++  }
++
++  @Override // SecondaryNameNodeInfoMXBean
+   public String[] getCheckpointDirectories() {
+     ArrayList<String> r = Lists.newArrayListWithCapacity(checkpointDirs.size());
+     for (URI d : checkpointDirs) {
+@@ -719,7 +732,7 @@ public long getLastCheckpointTime() {
+     return r.toArray(new String[r.size()]);
+   }
+ 
+-  @Override // SecondaryNameNodeInfoMXXBean
++  @Override // SecondaryNameNodeInfoMXBean
+   public String[] getCheckpointEditlogDirectories() {
+     ArrayList<String> r = Lists.newArrayListWithCapacity(checkpointEditsDirs.size());
+     for (URI d : checkpointEditsDirs) {
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/SecondaryNameNodeInfoMXBean.java b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/SecondaryNameNodeInfoMXBean.java
+index 01f6fac..785c5ee 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/SecondaryNameNodeInfoMXBean.java
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/java/org/apache/hadoop/hdfs/server/namenode/SecondaryNameNodeInfoMXBean.java
+@@ -42,6 +42,12 @@
+   public long getLastCheckpointTime();
+ 
+   /**
++   * @return the number of msec since the last checkpoint, or -1 if no
++   * checkpoint has been done yet.
++   */
++  public long getLastCheckpointDeltaMs();
++
++  /**
+    * @return the directories that store the checkpoint images
+    */
+   public String[] getCheckpointDirectories();
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/webapps/secondary/status.html b/hadoop-hdfs-project/hadoop-hdfs/src/main/webapps/secondary/status.html
+index d7d3cd4..0a19026 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/webapps/secondary/status.html
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/webapps/secondary/status.html
+@@ -65,7 +65,7 @@
+   <tr><th>Compiled</th><td>{CompileInfo}</td></tr>
+   <tr><th>NameNode Address</th><td>{HostAndPort}</td></tr>
+   <tr><th>Started</th><td>{StartTime|date_tostring}</td></tr>
+-  <tr><th>Last Checkpoint</th><td>{@if cond="{LastCheckpointTime} === 0"}Never{:else}{LastCheckpointTime|date_tostring}{/if}</td></tr>
++  <tr><th>Last Checkpoint</th><td>{@if cond="{LastCheckpointTime} === 0"}Never{:else}{LastCheckpointTime|date_tostring} ({LastCheckpointDeltaMs|fmt_time} ago){/if}</td></tr>
+   <tr><th>Checkpoint Period</th><td>{CheckpointPeriod} seconds</td></tr>
+   <tr><th>Checkpoint Transactions</th><td>{TxnCount}</td></tr>
+ </table>
+diff --git a/hadoop-hdfs-project/hadoop-hdfs/src/main/webapps/static/dfs-dust.js b/hadoop-hdfs-project/hadoop-hdfs/src/main/webapps/static/dfs-dust.js
+index 3c8efd9..f483d23 100644
+--- a/hadoop-hdfs-project/hadoop-hdfs/src/main/webapps/static/dfs-dust.js
++++ b/hadoop-hdfs-project/hadoop-hdfs/src/main/webapps/static/dfs-dust.js
+@@ -40,6 +40,9 @@
+     },
+ 
+     'fmt_time': function (v) {
++      if (v < 0) {
++        return "unknown";
++      }
+       var s = Math.floor(v / 1000), h = Math.floor(s / 3600);
+       s -= h * 3600;
+       var m = Math.floor(s / 60);
+-- 
+1.7.9.5
+

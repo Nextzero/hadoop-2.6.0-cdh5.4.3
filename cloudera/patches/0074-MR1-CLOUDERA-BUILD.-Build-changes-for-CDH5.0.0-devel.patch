@@ -1,0 +1,278 @@
+From ff584097ff0269e555e07471c1edc3f37df29b4f Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Wed, 12 Jun 2013 15:47:29 -0700
+Subject: [PATCH 074/596] MR1: CLOUDERA-BUILD. Build changes for CDH5.0.0
+ development (cherry picked from commit
+ b1f1bcd8c51c5fbe7f59f5a0291a651bcb0b7297)
+
+(cherry picked from commit 49ea039c409ea7dd942a10eb34f3039333ca25e5)
+(cherry picked from commit b3541b59cb8550a26de618b6a095fb683d05a262)
+(cherry picked from commit 7962ff54c07b43799ae1882b4ce5ae10f2a10245)
+---
+ hadoop-mapreduce1-project/build.xml                |    2 +-
+ hadoop-mapreduce1-project/cloudera-pom.xml         |    4 ++--
+ .../cloudera/maven-packaging/hadoop-client/pom.xml |    4 ++--
+ .../cloudera/maven-packaging/hadoop-core/pom.xml   |    4 ++--
+ .../maven-packaging/hadoop-examples/pom.xml        |    4 ++--
+ .../maven-packaging/hadoop-minicluster/pom.xml     |    4 ++--
+ .../cloudera/maven-packaging/hadoop-mrunit/pom.xml |    4 ++--
+ .../maven-packaging/hadoop-streaming/pom.xml       |    4 ++--
+ .../maven-packaging/hadoop-tarball/pom.xml         |    4 ++--
+ .../cloudera/maven-packaging/hadoop-test/pom.xml   |    4 ++--
+ .../cloudera/maven-packaging/hadoop-tools/pom.xml  |    4 ++--
+ .../cloudera/maven-packaging/pom.xml               |    4 ++--
+ hadoop-mapreduce1-project/ivy/libraries.properties |    4 ++--
+ 13 files changed, 25 insertions(+), 25 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/build.xml b/hadoop-mapreduce1-project/build.xml
+index 4db5d11..bb8cf54 100644
+--- a/hadoop-mapreduce1-project/build.xml
++++ b/hadoop-mapreduce1-project/build.xml
+@@ -54,7 +54,7 @@
+  
+   <property name="Name" value="Hadoop"/>
+   <property name="name" value="hadoop"/>
+-  <property name="version" value="2.0.0-mr1-cdh4.3.0-SNAPSHOT"/>
++  <property name="version" value="2.1.0-mr1-cdh5.0.0-SNAPSHOT"/>
+   <property name="final.name" value="${name}-${version}"/>
+   <property name="test.final.name" value="${name}-test-${version}"/>
+   <property name="year" value="2009"/>
+diff --git a/hadoop-mapreduce1-project/cloudera-pom.xml b/hadoop-mapreduce1-project/cloudera-pom.xml
+index 267594e..52b19f1 100644
+--- a/hadoop-mapreduce1-project/cloudera-pom.xml
++++ b/hadoop-mapreduce1-project/cloudera-pom.xml
+@@ -26,13 +26,13 @@ NOTE - This POM is used for Cloudera's build and packaging process.
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>cloudera/maven-packaging/pom.xml</relativePath>
+   </parent>
+   
+   <groupId>com.cloudera.cdh</groupId>
+   <artifactId>hadoop-ant</artifactId>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   <packaging>pom</packaging>
+   
+   <description>Maven wrapper for Ant Hadoop build</description>
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-client/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-client/pom.xml
+index b783abc..0219085 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-client/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-client/pom.xml
+@@ -20,12 +20,12 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>../pom.xml</relativePath>
+   </parent>
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-client</artifactId>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   <packaging>jar</packaging>
+ 
+   <description>Apache Hadoop Client</description>
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-core/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-core/pom.xml
+index 42929cc..df7ed92 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-core/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-core/pom.xml
+@@ -23,13 +23,13 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>../pom.xml</relativePath>
+   </parent>
+   
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-core</artifactId>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   <packaging>pom</packaging>
+   
+   <name>hadoop-core</name>
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-examples/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-examples/pom.xml
+index b3ace57..320c904 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-examples/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-examples/pom.xml
+@@ -24,13 +24,13 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>../pom.xml</relativePath>
+   </parent>
+   
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-examples</artifactId>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   <packaging>pom</packaging>
+   
+   <name>hadoop-examples</name>
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-minicluster/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-minicluster/pom.xml
+index 971935a..bb9aaaf 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-minicluster/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-minicluster/pom.xml
+@@ -20,12 +20,12 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>../pom.xml</relativePath>
+   </parent>
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-minicluster</artifactId>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   <packaging>jar</packaging>
+ 
+   <description>Apache Hadoop Mini-Cluster</description>
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-mrunit/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-mrunit/pom.xml
+index 8c74686..9366e79 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-mrunit/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-mrunit/pom.xml
+@@ -24,13 +24,13 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>0.23.1-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>../pom.xml</relativePath>
+   </parent>
+   
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-mrunit</artifactId>
+-  <version>0.23.1-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   <packaging>pom</packaging>
+   
+   <name>hadoop-mrunit</name>
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-streaming/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-streaming/pom.xml
+index 908f57b..eeb9eb0 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-streaming/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-streaming/pom.xml
+@@ -24,13 +24,13 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>../pom.xml</relativePath>
+   </parent>
+   
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-streaming</artifactId>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   <packaging>pom</packaging>
+   
+   <name>hadoop-streaming</name>
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-tarball/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-tarball/pom.xml
+index aee4146..7df4635 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-tarball/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-tarball/pom.xml
+@@ -24,14 +24,14 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>../pom.xml</relativePath>
+   </parent>
+   
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-tarball</artifactId>
+   <packaging>pom</packaging>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   
+   <name>hadoop-tarball</name>
+   
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-test/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-test/pom.xml
+index 8e7202c..848d578 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-test/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-test/pom.xml
+@@ -24,14 +24,14 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>../pom.xml</relativePath>
+   </parent>
+   
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-test</artifactId>
+   <packaging>pom</packaging>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   
+   <name>hadoop-test</name>
+   
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-tools/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-tools/pom.xml
+index 19f9083..bce2c9c 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-tools/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/hadoop-tools/pom.xml
+@@ -24,14 +24,14 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>hadoop-root</artifactId>
+-    <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++    <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+     <relativePath>../pom.xml</relativePath>
+   </parent>
+   
+   <groupId>org.apache.hadoop</groupId>
+   <artifactId>hadoop-tools</artifactId>
+   <packaging>pom</packaging>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   
+   <name>hadoop-tools</name>
+   
+diff --git a/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml b/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml
+index fde040d..69f8007 100644
+--- a/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml
++++ b/hadoop-mapreduce1-project/cloudera/maven-packaging/pom.xml
+@@ -21,13 +21,13 @@
+   <parent>
+     <groupId>com.cloudera.cdh</groupId>
+     <artifactId>cdh-root</artifactId>
+-    <version>4.3.0-SNAPSHOT</version>
++    <version>5.0.0-SNAPSHOT</version>
+     <relativePath>../../../../../pom.xml</relativePath>
+   </parent>
+   
+   <groupId>com.cloudera.cdh</groupId>
+   <artifactId>hadoop-root</artifactId>
+-  <version>2.0.0-mr1-cdh4.3.0-SNAPSHOT</version>
++  <version>2.1.0-mr1-cdh5.0.0-SNAPSHOT</version>
+   <packaging>pom</packaging>
+   
+   <description>Hadoop root</description>
+diff --git a/hadoop-mapreduce1-project/ivy/libraries.properties b/hadoop-mapreduce1-project/ivy/libraries.properties
+index ccff693..9ac1762 100644
+--- a/hadoop-mapreduce1-project/ivy/libraries.properties
++++ b/hadoop-mapreduce1-project/ivy/libraries.properties
+@@ -42,8 +42,8 @@ ftplet-api.version=1.0.0
+ ftpserver-core.version=1.0.0
+ ftpserver-deprecated.version=1.0.0-M2
+ 
+-hadoop-common.version=2.0.0-cdh4.3.0-SNAPSHOT
+-hadoop-hdfs.version=2.0.0-cdh4.3.0-SNAPSHOT
++hadoop-common.version=2.0.0-cdh5.0.0-SNAPSHOT
++hadoop-hdfs.version=2.0.0-cdh5.0.0-SNAPSHOT
+ 
+ hsqldb.version=1.8.0.10
+ 
+-- 
+1.7.9.5
+

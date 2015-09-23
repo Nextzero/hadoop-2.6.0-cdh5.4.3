@@ -1,0 +1,46 @@
+From d683088236598587025e75bc310686effa71af1d Mon Sep 17 00:00:00 2001
+From: Robert Kanter <rkanter@cloudera.com>
+Date: Wed, 28 Aug 2013 10:17:13 -0700
+Subject: [PATCH 081/596] MR1: CLOUDERA-BUILD: Bug:4337918 (MAPREDUCE-2359) 
+ default name node is viewfs:/// if we pass
+ hdfs://path giving error - fix in
+ DistributedCache(ramach)
+
+Author: Krishna Ramachandran <ramach@yahoo-inc.com>
+
+git-svn-id: https://svn.apache.org/repos/asf/hadoop/common/branches/branch-0.20-security-patches@1077793 13f79535-47bb-0310-9956-ffa450edef68
+(cherry-picked from commit 1f775395ae5dd060de0303f221f15fd985f025da)
+
+Ref: CDH-13780
+(cherry picked from commit 88c3afc2c9ec8df7658ae1edf3ce78f8a4c9c9ea)
+(cherry picked from commit d45c18551cc92849d2ff9bb7a3305a5d95ab1317)
+(cherry picked from commit 9c77441953c4aa9b3b60ba3486608f7a454f3cbe)
+---
+ .../apache/hadoop/filecache/DistributedCache.java  |    4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/filecache/DistributedCache.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/filecache/DistributedCache.java
+index 9aa8f3c..8232e61 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/filecache/DistributedCache.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/filecache/DistributedCache.java
+@@ -428,7 +428,7 @@ public static void addCacheFile(URI uri, Configuration conf) {
+    */
+   public static void addFileToClassPath(Path file, Configuration conf)
+         throws IOException {
+-    addFileToClassPath(file, conf, FileSystem.get(conf));
++    addFileToClassPath(file, conf, file.getFileSystem(conf));
+   }
+ 
+   /**
+@@ -481,7 +481,7 @@ public static void addFileToClassPath(Path file, Configuration conf)
+   public static void addArchiveToClassPath
+          (Path archive, Configuration conf)
+       throws IOException {
+-    addArchiveToClassPath(archive, conf, FileSystem.get(conf));
++    addArchiveToClassPath(archive, conf, archive.getFileSystem(conf));
+   }
+ 
+   /**
+-- 
+1.7.9.5
+

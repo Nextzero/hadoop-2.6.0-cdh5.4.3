@@ -1,0 +1,40 @@
+From 36c10058bd9ed0e2923f9bb62bb11dbad3a877cf Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@apache.org>
+Date: Thu, 9 Apr 2015 00:07:49 -0700
+Subject: [PATCH 533/596] YARN-3465. Use LinkedHashMap to preserve order of
+ resource requests. (Zhihai Xu via kasha)
+
+(cherry picked from commit 6495940eae09418a939882a8955845f9241a6485)
+
+Conflicts:
+	hadoop-yarn-project/CHANGES.txt
+
+(cherry picked from commit b97e2ccf02490935184b18f57575e449d003c831)
+---
+ .../containermanager/container/ContainerImpl.java  |    3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+index f3894c3..c962143 100644
+--- a/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
++++ b/hadoop-yarn-project/hadoop-yarn/hadoop-yarn-server/hadoop-yarn-server-nodemanager/src/main/java/org/apache/hadoop/yarn/server/nodemanager/containermanager/container/ContainerImpl.java
+@@ -25,6 +25,7 @@
+ import java.util.Collection;
+ import java.util.EnumSet;
+ import java.util.HashMap;
++import java.util.LinkedHashMap;
+ import java.util.List;
+ import java.util.Map;
+ import java.util.concurrent.locks.Lock;
+@@ -634,7 +635,7 @@ public ContainerState transition(ContainerImpl container,
+           return ContainerState.LOCALIZATION_FAILED;
+         }
+         Map<LocalResourceVisibility, Collection<LocalResourceRequest>> req =
+-            new HashMap<LocalResourceVisibility, 
++            new LinkedHashMap<LocalResourceVisibility,
+                         Collection<LocalResourceRequest>>();
+         if (!container.publicRsrcs.isEmpty()) {
+           req.put(LocalResourceVisibility.PUBLIC, container.publicRsrcs);
+-- 
+1.7.9.5
+

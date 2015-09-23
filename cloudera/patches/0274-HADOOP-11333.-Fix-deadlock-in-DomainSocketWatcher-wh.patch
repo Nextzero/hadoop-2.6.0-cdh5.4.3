@@ -1,0 +1,62 @@
+From 876eba943eaccbcf240bb65e17b2816cbb192088 Mon Sep 17 00:00:00 2001
+From: Colin Patrick Mccabe <cmccabe@cloudera.com>
+Date: Mon, 1 Dec 2014 11:42:10 -0800
+Subject: [PATCH 274/596] HADOOP-11333. Fix deadlock in DomainSocketWatcher
+ when the notification pipe is full (zhaoyunjiong
+ via cmccabe) (cherry picked from commit
+ 86e3993def01223f92b8d1dd35f6c1f8ab6033f5) (cherry
+ picked from commit
+ f6d1bf5ed1cf647d82e676df15587de42b1faa42) (cherry
+ picked from commit
+ b86bf7bb86a3bfb74fac2f0baf7b6d671b4e00c8)
+
+(cherry picked from commit a0831e613e8ab653aae4ed782935568179fe5bdb)
+---
+ .../hadoop/net/unix/DomainSocketWatcher.java       |   15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/net/unix/DomainSocketWatcher.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/net/unix/DomainSocketWatcher.java
+index 95ef30d..0172f6b 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/net/unix/DomainSocketWatcher.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/net/unix/DomainSocketWatcher.java
+@@ -103,6 +103,7 @@ public static String getLoadingFailureReason() {
+     public boolean handle(DomainSocket sock) {
+       assert(lock.isHeldByCurrentThread());
+       try {
++        kicked = false;
+         if (LOG.isTraceEnabled()) {
+           LOG.trace(this + ": NotificationHandler: doing a read on " +
+             sock.fd);
+@@ -228,6 +229,14 @@ Handler getHandler() {
+    * Whether or not this DomainSocketWatcher is closed.
+    */
+   private boolean closed = false;
++  
++  /**
++   * True if we have written a byte to the notification socket. We should not
++   * write anything else to the socket until the notification handler has had a
++   * chance to run. Otherwise, our thread might block, causing deadlock. 
++   * See HADOOP-11333 for details.
++   */
++  private boolean kicked = false;
+ 
+   public DomainSocketWatcher(int interruptCheckPeriodMs) throws IOException {
+     if (loadingFailureReason != null) {
+@@ -348,8 +357,14 @@ public void remove(DomainSocket sock) {
+    */
+   private void kick() {
+     assert(lock.isHeldByCurrentThread());
++    
++    if (kicked) {
++      return;
++    }
++    
+     try {
+       notificationSockets[0].getOutputStream().write(0);
++      kicked = true;
+     } catch (IOException e) {
+       if (!closed) {
+         LOG.error(this + ": error writing to notificationSockets[0]", e);
+-- 
+1.7.9.5
+

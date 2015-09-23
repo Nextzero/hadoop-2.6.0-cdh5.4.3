@@ -1,0 +1,110 @@
+From 7313a447041f628db98ef4454087beddb391a7e3 Mon Sep 17 00:00:00 2001
+From: Karthik Kambatla <kasha@cloudera.com>
+Date: Fri, 13 Sep 2013 11:48:22 -0700
+Subject: [PATCH 082/596] MR1: CLOUDERA-BUILD. CDH MR1 equivalent of
+ MAPREDUCE-5379 (cherry picked from commit
+ 9f092c04cfc3290b31dab5126d93dd3255a3fbee)
+
+(cherry picked from commit 505887491ed978c53c5614211f1e736d9bc08505)
+(cherry picked from commit 84c3d022df7653b924152b374bf411db3b2633a5)
+(cherry picked from commit 77f82f90a5b46063424e7a1f90069a518c14478e)
+---
+ .../src/mapred/mapred-default.xml                  |   16 ++++++++++++++++
+ .../mapred/org/apache/hadoop/mapred/JobClient.java |   16 ++++++++++++++++
+ .../org/apache/hadoop/mapreduce/MRJobConfig.java   |    7 +++++++
+ 3 files changed, 39 insertions(+)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/mapred-default.xml b/hadoop-mapreduce1-project/src/mapred/mapred-default.xml
+index 37c7a4d..b4f61dc 100644
+--- a/hadoop-mapreduce1-project/src/mapred/mapred-default.xml
++++ b/hadoop-mapreduce1-project/src/mapred/mapred-default.xml
+@@ -908,6 +908,22 @@
+   </property>
+ 
+   <property>
++    <name>mapreduce.job.token.tracking.ids.enabled</name>
++    <value>false</value>
++    <description>Whether to write tracking ids of tokens to job-conf. When true,
++      the configuration property "mapreduce.job.token.tracking.ids" is set to
++      the token-tracking-ids of the job</description>
++  </property>
++
++  <property>
++    <name>mapreduce.job.token.tracking.ids</name>
++    <value></value>
++    <description>When mapreduce.job.token.tracking.ids.enabled is set to true,
++      this is set by the framework to the token-tracking-ids used by the job.
++    </description>
++  </property>
++
++  <property>
+     <name>mapred.task.profile</name>
+     <value>false</value>
+     <description>To set whether the system should collect profiler
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+index 06fd369..240dcfd 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/JobClient.java
+@@ -36,6 +36,7 @@
+ import java.net.URL;
+ import java.net.URLConnection;
+ import java.net.UnknownHostException;
++import java.util.ArrayList;
+ import java.util.Arrays;
+ import java.util.Collection;
+ import java.util.Comparator;
+@@ -57,6 +58,7 @@
+ import org.apache.hadoop.fs.FileUtil;
+ import org.apache.hadoop.fs.Path;
+ import org.apache.hadoop.fs.permission.FsPermission;
++import org.apache.hadoop.mapreduce.MRJobConfig;
+ import org.apache.hadoop.mapreduce.security.token.delegation.DelegationTokenIdentifier;
+ import org.apache.hadoop.hdfs.DFSClient;
+ import org.apache.hadoop.io.IOUtils;
+@@ -78,6 +80,7 @@
+ import org.apache.hadoop.security.UserGroupInformation;
+ import org.apache.hadoop.security.authorize.AccessControlList;
+ import org.apache.hadoop.security.token.Token;
++import org.apache.hadoop.security.token.TokenIdentifier;
+ import org.apache.hadoop.security.token.SecretManager.InvalidToken;
+ import org.apache.hadoop.security.token.TokenRenewer;
+ import org.apache.hadoop.util.ReflectionUtils;
+@@ -1010,6 +1013,19 @@ public RunningJob run() throws FileNotFoundException,
+           // different job.
+           TokenCache.cleanUpTokenReferral(jobCopy);
+ 
++          if (jobCopy.getBoolean(
++              MRJobConfig.JOB_TOKEN_TRACKING_IDS_ENABLED,
++              MRJobConfig.DEFAULT_JOB_TOKEN_TRACKING_IDS_ENABLED)) {
++            // Add HDFS tracking ids
++            ArrayList<String> trackingIds = new ArrayList<String>();
++            for (Token<? extends TokenIdentifier> t :
++                job.getCredentials().getAllTokens()) {
++              trackingIds.add(t.decodeIdentifier().getTrackingId());
++            }
++            jobCopy.setStrings(MRJobConfig.JOB_TOKEN_TRACKING_IDS,
++                trackingIds.toArray(new String[trackingIds.size()]));
++          }
++
+           try {
+             jobCopy.writeXml(out);
+           } finally {
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/MRJobConfig.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/MRJobConfig.java
+index 97b39a9..57c392e 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/MRJobConfig.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapreduce/MRJobConfig.java
+@@ -35,4 +35,11 @@
+ 
+   public static final String COUNTER_GROUPS_MAX_KEY = "mapreduce.job.counters.groups.max";
+   public static final int COUNTER_GROUPS_MAX_DEFAULT = 50;
++
++  /* Configs for tracking ids of tokens used by a job */
++  public static final String JOB_TOKEN_TRACKING_IDS_ENABLED =
++      "mapreduce.job.token.tracking.ids.enabled";
++  public static final boolean DEFAULT_JOB_TOKEN_TRACKING_IDS_ENABLED = false;
++  public static final String JOB_TOKEN_TRACKING_IDS =
++      "mapreduce.job.token.tracking.ids";
+ }
+-- 
+1.7.9.5
+

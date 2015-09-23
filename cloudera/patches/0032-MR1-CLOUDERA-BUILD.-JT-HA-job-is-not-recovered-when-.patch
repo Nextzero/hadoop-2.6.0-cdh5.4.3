@@ -1,0 +1,35 @@
+From 6d04aa402c59a6fa2dfd5eebf380878a0c581d09 Mon Sep 17 00:00:00 2001
+From: Alejandro Abdelnur <tucu@cloudera.com>
+Date: Mon, 11 Feb 2013 10:40:22 -0800
+Subject: [PATCH 032/596] MR1: CLOUDERA-BUILD. JT HA:  job is not recovered
+ when jt transitions to active then to standby and
+ then to active
+
+  Reason: bug
+  Author: Tom White
+  Ref: CDH-10365
+(cherry picked from commit 78ceddb42ffbf61ea4bea63130a534d4a28fd741)
+
+(cherry picked from commit 20934700c75539c1f9967613cbe898c8981ef9da)
+(cherry picked from commit e2d7108c4f57b157f2a9652fc31e78aa51bdd93e)
+(cherry picked from commit 85eb8718f76ca8a689b86bf2f5c01e4c4d83a52e)
+---
+ .../mapred/EagerTaskInitializationListener.java    |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/EagerTaskInitializationListener.java b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/EagerTaskInitializationListener.java
+index 2ea4fa1..00ce9d9 100644
+--- a/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/EagerTaskInitializationListener.java
++++ b/hadoop-mapreduce1-project/src/mapred/org/apache/hadoop/mapred/EagerTaskInitializationListener.java
+@@ -63,7 +63,7 @@ public void run() {
+         } 
+       }
+       LOG.info("Shutting down thread pool");
+-      threadPool.shutdownNow();
++      threadPool.shutdown();
+     }
+   }
+   
+-- 
+1.7.9.5
+

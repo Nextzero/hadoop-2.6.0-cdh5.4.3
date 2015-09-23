@@ -1,0 +1,36 @@
+From 856b63e63c83d5d01d882290a2fbd048fa7b0072 Mon Sep 17 00:00:00 2001
+From: Andrew Wang <wang@apache.org>
+Date: Tue, 30 Sep 2014 16:39:44 -0700
+Subject: [PATCH 203/596] HADOOP-11156. DelegateToFileSystem should implement
+ getFsStatus(final Path f). Contributed by Zhihai
+ Xu.
+
+(cherry picked from commit d7075ada5d3019a8c520d34bfddb0cd73a449343)
+
+Conflicts:
+	hadoop-common-project/hadoop-common/CHANGES.txt
+
+(cherry picked from commit f70c20bea43392982523e0c1f5728092e06cca7a)
+---
+ .../org/apache/hadoop/fs/DelegateToFileSystem.java |    5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/DelegateToFileSystem.java b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/DelegateToFileSystem.java
+index 708ca4a..1cdcb27 100644
+--- a/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/DelegateToFileSystem.java
++++ b/hadoop-common-project/hadoop-common/src/main/java/org/apache/hadoop/fs/DelegateToFileSystem.java
+@@ -129,6 +129,11 @@ public FsStatus getFsStatus() throws IOException {
+   }
+ 
+   @Override
++  public FsStatus getFsStatus(final Path f) throws IOException {
++    return fsImpl.getStatus(f);
++  }
++
++  @Override
+   public FsServerDefaults getServerDefaults() throws IOException {
+     return fsImpl.getServerDefaults();
+   }
+-- 
+1.7.9.5
+
