@@ -317,7 +317,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
    * @param maxNodesPerRack max nodes allowed per rack
    * @param results the target nodes already chosen
    * @param avoidStaleNodes avoid stale nodes in replica choosing
-   * @return local node of writer (not chosen node)  //czhc: 返回值是什么意思？
+   * @return local node of writer (not chosen node)
    */
   private Node chooseTarget(int numOfReplicas,
                             Node writer,
@@ -328,19 +328,27 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
                             final boolean avoidStaleNodes,
                             final BlockStoragePolicy storagePolicy,
                             final EnumSet<StorageType> unavailableStorages,
-                            final boolean newBlock) {
-    if (numOfReplicas == 0 || clusterMap.getNumOfLeaves()==0) { //czhc:叶子节点是指什么？
-      return (writer instanceof DatanodeDescriptor) ? writer : null;
+                            final boolean newBlock /*该参数为：results.isEmpty()*/ ) {
+    if (numOfReplicas == 0 || clusterMap.getNumOfLeaves()==0) {
+        return (writer instanceof DatanodeDescriptor) ? writer : null;
     }
-    final int numOfResults = results.size(); //czhc : 当前已存在副本数
-    final int totalReplicasExpected = numOfReplicas + numOfResults; //czhc: numOfReplicas 请求增加的副本数, totalReplicasExpected预计增加之后的副本总数
+
       /**
-       * （客户端节点不在集群内）
-       * 或者
-       * 不是DN，且不是新块？
+       * results.size()表示的是当前已存在的副本数
+       * numOfReplicas表示请求增加的副本数
+       * totalReplicasExpected预计增加之后的副本总数
        */
+    final int numOfResults = results.size();
+    final int totalReplicasExpected = numOfReplicas + numOfResults;
+
+      /**
+       * 1.当writer==null时，表示客户端不在集群内。此时用"已拥有该副本"的节点列表的第一个代替客户端。
+       * 2.当writer是一个DataNode，且不是新块。
+       *
+       * 当writer==null,且为新块时，results列表为空，那岂不是会下标溢出？
+      */
     if ((writer == null || !(writer instanceof DatanodeDescriptor)) && !newBlock) {
-      writer = results.get(0).getDatanodeDescriptor();//czhc: 拿已存在副本的节点列表的第1个？
+      writer = results.get(0).getDatanodeDescriptor();
     }
 
     // Keep a copy of original excludedNodes
@@ -350,7 +358,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     final List<StorageType> requiredStorageTypes = storagePolicy
         .chooseStorageTypes((short) totalReplicasExpected,
             DatanodeStorageInfo.toStorageTypes(results),
-            unavailableStorages, newBlock); //czhc:  存储类型？
+            unavailableStorages, newBlock);
     final EnumMap<StorageType, Integer> storageTypes =
         getRequiredStorageTypes(requiredStorageTypes);
     if (LOG.isTraceEnabled()) {
@@ -366,16 +374,29 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
       }
 
         /**
-         *  分别处理第1块，第2块。。。副本的位置
+         *  以下分别处理第1块，第2块。。。副本的位置
          */
-      if (numOfResults == 0) { //czhc: numOfResults表示当前已存在的副本数
+
+        /**
+         * numOfResults表示当前已存在的副本数
+         * numOfReplicas表示请求增加的副本数
+         * 当numOfResults==0，即表示这个第一个块，第一块选择本地存储（关于本地存储后面细说）
+         * numOfReplicas递减后，若为0则返回。
+         */
+      if (numOfResults == 0) {
         writer = chooseLocalStorage(writer, excludedNodes, blocksize,
             maxNodesPerRack, results, avoidStaleNodes, storageTypes, true)
                 .getDatanodeDescriptor();
         if (--numOfReplicas == 0) {
-          return writer;//czhc:完成第1块副本位置后，需要增加的副本数减1，
+          return writer;
         }
       }
+
+        /**
+         * 经过上面if(numOfResults==0)的判断，运行到此一定有：results.size()>=1，所以get(0)不会有问题。
+         * if (numOfResults <= 1) 则表示这是第2个块。第2个块选择的是与第1个块不同机架的节点。
+         * 同样numOfReplicas递减后，若为0则返回。
+         */
       final DatanodeDescriptor dn0 = results.get(0).getDatanodeDescriptor();
       if (numOfResults <= 1) {
         chooseRemoteRack(1, dn0, excludedNodes, blocksize, maxNodesPerRack,
@@ -384,6 +405,15 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
           return writer;
         }
       }
+
+        /**
+         * if (numOfResults <= 2) 则表示这是第3个块。
+         * 1.当第1个块和第2个块在同一机架时，则第3块选择一个不同机架的节点。
+         * 2.当第1个块和第2个块不在同一机架上，且这是个新块（新上传到HDFS的文件块，一次性请求3个以上副本）
+         * 则第3块选择与第2块dn1相同机架但不同节点的位置
+         * 3.当第1个块和第2个块不在同一机架上，且副本之前已存在集群内，则第3个块选择与writer相同机架但不同节点的位置。
+         * 同样numOfReplicas递减后，若为0则返回。
+         */
       if (numOfResults <= 2) {
         final DatanodeDescriptor dn1 = results.get(1).getDatanodeDescriptor();
         if (clusterMap.isOnSameRack(dn0, dn1)) {
@@ -400,6 +430,10 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
           return writer;
         }
       }
+
+        /**
+         * 当已存在的副本数超过3的时候，剩下的副本则采用随机方式选择节点位置。
+         */
       chooseRandom(numOfReplicas, NodeBase.ROOT, excludedNodes, blocksize,
           maxNodesPerRack, results, avoidStaleNodes, storageTypes);
     } catch (NotEnoughReplicasException e) {
@@ -463,19 +497,34 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
    * choose a node on the same rack
    * @return the chosen storage
    */
-  protected DatanodeStorageInfo chooseLocalStorage(Node localMachine,
-      Set<Node> excludedNodes, long blocksize, int maxNodesPerRack,
-      List<DatanodeStorageInfo> results, boolean avoidStaleNodes,
-      EnumMap<StorageType, Integer> storageTypes, boolean fallbackToLocalRack)
+  protected DatanodeStorageInfo chooseLocalStorage( Node localMachine,
+                                                    Set<Node> excludedNodes,
+                                                    long blocksize,
+                                                    int maxNodesPerRack,
+                                                    List<DatanodeStorageInfo> results,
+                                                    boolean avoidStaleNodes,
+                                                    EnumMap<StorageType, Integer> storageTypes,
+                                                    boolean fallbackToLocalRack)
       throws NotEnoughReplicasException {
+      /**
+       * 前面if ((writer == null || ...) { writer = results.get(0).getDatanodeDescriptor(); }
+       * 将writer传递给localMachine，怎么会为null呢 ???
+       */
     // if no local machine, randomly choose one node
     if (localMachine == null) {
       return chooseRandom(NodeBase.ROOT, excludedNodes, blocksize,
           maxNodesPerRack, results, avoidStaleNodes, storageTypes);
     }
+
+      /**
+       * localMachine为DataNode
+       */
     if (preferLocalNode && localMachine instanceof DatanodeDescriptor) {
       DatanodeDescriptor localDatanode = (DatanodeDescriptor) localMachine;
       // otherwise try local machine first
+        /**
+         * excludedNodes里面是包含了results列表的（已拥有该副本的节点）
+         */
       if (excludedNodes.add(localMachine)) { // was not in the excluded list
         for (Iterator<Map.Entry<StorageType, Integer>> iter = storageTypes
             .entrySet().iterator(); iter.hasNext(); ) {
@@ -501,6 +550,10 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
     if (!fallbackToLocalRack) {
       return null;
     }
+
+      /**
+       * 若前面不满足，则返回相同机架的另一个节点
+       */
     // try a node on local rack
     return chooseLocalRack(localMachine, excludedNodes, blocksize,
         maxNodesPerRack, results, avoidStaleNodes, storageTypes);
@@ -597,7 +650,6 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
    * if not enough nodes are available, choose the remaining ones 
    * from the local rack
    */
-    
   protected void chooseRemoteRack(int numOfReplicas,
                                 DatanodeDescriptor localMachine,
                                 Set<Node> excludedNodes,
