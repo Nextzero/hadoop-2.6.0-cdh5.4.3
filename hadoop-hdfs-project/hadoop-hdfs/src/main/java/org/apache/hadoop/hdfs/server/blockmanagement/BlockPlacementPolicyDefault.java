@@ -506,10 +506,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
                                                     EnumMap<StorageType, Integer> storageTypes,
                                                     boolean fallbackToLocalRack)
       throws NotEnoughReplicasException {
-      /**
-       * 前面if ((writer == null || ...) { writer = results.get(0).getDatanodeDescriptor(); }
-       * 将writer传递给localMachine，怎么会为null呢 ???
-       */
+
     // if no local machine, randomly choose one node
     if (localMachine == null) {
       return chooseRandom(NodeBase.ROOT, excludedNodes, blocksize,
@@ -551,9 +548,6 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
       return null;
     }
 
-      /**
-       * 若前面不满足，则返回相同机架的另一个节点
-       */
     // try a node on local rack
     return chooseLocalRack(localMachine, excludedNodes, blocksize,
         maxNodesPerRack, results, avoidStaleNodes, storageTypes);
@@ -591,7 +585,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
       return chooseRandom(NodeBase.ROOT, excludedNodes, blocksize,
           maxNodesPerRack, results, avoidStaleNodes, storageTypes);
     }
-    final String localRack = localMachine.getNetworkLocation();
+    final String localRack = localMachine.getNetworkLocation();//czhc:/defailt-rack/
       
     try {
       // choose one from the local rack
@@ -697,7 +691,7 @@ public class BlockPlacementPolicyDefault extends BlockPlacementPolicy {
    * @return the first chosen node, if there is any.
    */
   protected DatanodeStorageInfo chooseRandom(int numOfReplicas,
-                            String scope,
+                            String scope,   /* HDFS机架表示  /root/rack1/node1...., 由此表示选择范围*/
                             Set<Node> excludedNodes,
                             long blocksize,
                             int maxNodesPerRack,
